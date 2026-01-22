@@ -1,0 +1,8 @@
+[package]
+name = "ferrum_cli"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+ferrum_core = { path = "../ferrum_core" }
+clap = { version = "4.4", features = ["derive"] }
