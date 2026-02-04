@@ -9,9 +9,11 @@ pub mod atom_count;
 pub mod bond_count;
 pub mod aromatic_ring_count;
 pub mod formal_charge;
+pub mod hbond;
+pub mod logp;
+pub mod batch;
 
 // Private modules
-mod batch;
 mod wiener_numbers;
 
 /// Generic interface for all descriptors.

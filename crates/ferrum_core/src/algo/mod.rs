@@ -1,7 +1,7 @@
 pub mod rings;
 pub mod aromaticity;
 mod canon;
-mod iso;
+pub mod iso;
 mod components;
 pub mod valency;
 pub mod standardize;

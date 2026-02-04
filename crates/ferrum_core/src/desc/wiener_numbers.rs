@@ -6,7 +6,7 @@ use crate::types::Real;
 pub struct WienerNumbers;
 
 impl Descriptor for WienerNumbers {
-    fn name(&self) -> String { "MW".to_string() }
+    fn name(&self) -> String { "Wiener Numbers".to_string() }
     fn size(&self) -> usize { 1 }
 
     fn calculate(&self, mol: &Molecule, output: &mut [Real]) {

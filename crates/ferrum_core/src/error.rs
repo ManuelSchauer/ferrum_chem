@@ -13,6 +13,9 @@ pub enum FerrumError {
 
     #[error("Feature not implemented: {0}")]
     NotImplemented(String),
+    
+    #[error("JSON Error: {0}")]
+    Json(#[from] serde_json::Error),
 }
 
 pub type Result<T> = std::result::Result<T, FerrumError>;

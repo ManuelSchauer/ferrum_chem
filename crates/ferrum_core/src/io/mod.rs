@@ -1,4 +1,5 @@
 mod builder;
 pub mod smiles;
 mod sdf;
-pub(crate) mod smarts;
+pub mod smarts;
+pub mod csv_reader;

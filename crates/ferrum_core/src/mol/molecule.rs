@@ -8,7 +8,7 @@ use crate::types::{AtomIdx, BondIdx};
 /// `Molecule` is `Send + Sync`, making it safe to share across threads.
 /// This is critical for parallel batch processing with Rayon.
 /// All internal data structures (Vec, SmallVec) are thread-safe.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct Molecule {
     pub atoms: Vec<Atom>,
     pub bonds: Vec<Bond>,
