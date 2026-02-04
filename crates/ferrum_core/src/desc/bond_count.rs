@@ -247,4 +247,31 @@ mod tests {
         desc.calculate(&mol, &mut result);
         assert_eq!(result[0], 0.0); // Methyl is terminal, C-Ph bond not rotatable
     }
+    
+    #[test]
+    fn test_rotatable_bond_count_pentane() {
+        let mol = parse_smiles("CCCCC").unwrap(); // Pentane
+        let desc = RotatableBondCount;
+        let mut result = vec![0.0; 1];
+        desc.calculate(&mol, &mut result);
+        assert_eq!(result[0], 2.0); // Two internal C-C bonds are rotatable
+    }
+    
+    #[test]
+    fn test_rotatable_bond_count_ethanol() {
+        let mol = parse_smiles("CCO").unwrap(); // Ethanol
+        let desc = RotatableBondCount;
+        let mut result = vec![0.0; 1];
+        desc.calculate(&mol, &mut result);
+        assert_eq!(result[0], 0.0); // Both bonds are terminal (Lipinski definition)
+    }
+    
+    #[test]
+    fn test_rotatable_bond_count_propanol() {
+        let mol = parse_smiles("CCCO").unwrap(); // 1-Propanol
+        let desc = RotatableBondCount;
+        let mut result = vec![0.0; 1];
+        desc.calculate(&mol, &mut result);
+        assert_eq!(result[0], 1.0); // Central C-C bond is rotatable (C2-C3)
+    }
 }

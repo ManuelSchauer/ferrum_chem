@@ -3,7 +3,7 @@ use crate::mol::molecule::Molecule;
 use crate::types::Real;
 
 /// Counts the total number of atoms in the molecule.
-/// Includes all atoms (heavy atoms and hydrogens).
+/// Includes all heavy atoms plus all hydrogens (explicit and implicit).
 pub struct AtomCount;
 
 impl Descriptor for AtomCount {
@@ -11,7 +11,13 @@ impl Descriptor for AtomCount {
     fn size(&self) -> usize { 1 }
 
     fn calculate(&self, mol: &Molecule, output: &mut [Real]) {
-        output[0] = mol.num_atoms() as Real;
+        // Count heavy atoms + all hydrogens (explicit and implicit)
+        let heavy_count = mol.num_atoms();
+        let hydrogen_count: u32 = mol.atoms.iter()
+            .map(|atom| atom.total_h() as u32)
+            .sum();
+        
+        output[0] = (heavy_count as u32 + hydrogen_count) as Real;
     }
 }
 
@@ -107,7 +113,25 @@ mod tests {
         let desc = AtomCount;
         let mut result = vec![0.0; 1];
         desc.calculate(&mol, &mut result);
-        assert_eq!(result[0], 3.0); // C, C, O
+        assert_eq!(result[0], 9.0); // 2 C + 1 O + 6 H (implicit)
+    }
+    
+    #[test]
+    fn test_atom_count_methane() {
+        let mol = parse_smiles("C").unwrap(); // Methane: CH4
+        let desc = AtomCount;
+        let mut result = vec![0.0; 1];
+        desc.calculate(&mol, &mut result);
+        assert_eq!(result[0], 5.0); // 1 C + 4 H
+    }
+    
+    #[test]
+    fn test_atom_count_benzene() {
+        let mol = parse_smiles("c1ccccc1").unwrap(); // Benzene: C6H6
+        let desc = AtomCount;
+        let mut result = vec![0.0; 1];
+        desc.calculate(&mol, &mut result);
+        assert_eq!(result[0], 12.0); // 6 C + 6 H
     }
 
     #[test]
