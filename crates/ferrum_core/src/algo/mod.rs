@@ -1,7 +1,8 @@
-mod rings;
-mod aromaticity;
+pub mod rings;
+pub mod aromaticity;
 mod canon;
 mod iso;
 mod components;
-mod valency;
-mod standardize;
+pub mod valency;
+pub mod standardize;
+pub mod electronic;

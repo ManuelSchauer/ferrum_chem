@@ -1,0 +1,186 @@
+use ferrum_core::io::smiles::parse_smiles;
+use ferrum_core::desc::molecular_weight::MolecularWeight;
+use ferrum_core::desc::Descriptor;
+use ferrum_core::algo::rings::find_sssr;
+use ferrum_core::algo::aromaticity::perceive_aromaticity;
+
+fn main() {
+    println!("=== FerrumChem Example Usage ===\n");
+
+    // Example 1: Parse simple molecules
+    println!("Example 1: Parsing SMILES");
+    println!("{}", "-".repeat(40));
+
+    let molecules = vec![
+        ("Water", "O"),
+        ("Methane", "C"),
+        ("Ethanol", "CCO"),
+        ("Benzene", "c1ccccc1"),
+        ("Aspirin", "CC(=O)Oc1ccccc1C(=O)O"),
+    ];
+
+    for (name, smiles) in &molecules {
+        match parse_smiles(smiles) {
+            Ok(mol) => {
+                println!("{:12} '{}' → {} atoms, {} bonds",
+                    name, smiles, mol.num_atoms(), mol.num_bonds());
+            }
+            Err(e) => println!("{:12} ERROR: {}", name, e),
+        }
+    }
+
+    println!("\n");
+
+    // Example 2: Calculate molecular weights
+    println!("Example 2: Molecular Weight Calculation");
+    println!("{}", "-".repeat(40));
+
+    let mw_descriptor = MolecularWeight;
+    let mut result = vec![0.0; 1];
+
+    for (name, smiles) in &molecules {
+        if let Ok(mol) = parse_smiles(smiles) {
+            mw_descriptor.calculate(&mol, &mut result);
+            println!("{:12} MW = {:7.2} Da", name, result[0]);
+        }
+    }
+
+    println!("\n");
+
+    // Example 3: Advanced SMILES features
+    println!("Example 3: Advanced SMILES Features");
+    println!("{}", "-".repeat(40));
+
+    // Charged molecules
+    let sodium_ion = parse_smiles("[Na+]").unwrap();
+    println!("Sodium ion [Na+]:");
+    println!("  Atoms: {}, Charge: {}",
+        sodium_ion.num_atoms(),
+        sodium_ion.atoms[0].formal_charge);
+
+    // Isotopes
+    let heavy_water = parse_smiles("[2H]O[2H]").unwrap();
+    println!("\nHeavy water [2H]O[2H]:");
+    println!("  Atoms: {}", heavy_water.num_atoms());
+    println!("  Isotopes: {} and {}",
+        heavy_water.atoms[0].isotope,
+        heavy_water.atoms[2].isotope);
+
+    mw_descriptor.calculate(&heavy_water, &mut result);
+    println!("  MW: {:.2} Da (vs 18.01 for normal water)", result[0]);
+
+    // Explicit hydrogens
+    let methane = parse_smiles("[CH4]").unwrap();
+    println!("\nMethane with explicit H [CH4]:");
+    println!("  Atoms: {}, Explicit H: {}",
+        methane.num_atoms(),
+        methane.atoms[0].num_explicit_h);
+
+    mw_descriptor.calculate(&methane, &mut result);
+    println!("  MW: {:.2} Da", result[0]);
+
+    // Aromatic systems
+    let benzene = parse_smiles("c1ccccc1").unwrap();
+    println!("\nBenzene c1ccccc1:");
+    println!("  Atoms: {}, Bonds: {}", benzene.num_atoms(), benzene.num_bonds());
+    let aromatic_count = benzene.atoms.iter().filter(|a| a.is_aromatic()).count();
+    println!("  Aromatic atoms: {}", aromatic_count);
+    let implicit_h: u8 = benzene.atoms.iter().map(|a| a.num_implicit_h).sum();
+    println!("  Implicit H: {} (automatically calculated)", implicit_h);
+    mw_descriptor.calculate(&benzene, &mut result);
+    println!("  MW: {:.2} Da", result[0]);
+
+    println!("\n");
+
+    // Example 4: Branches and complex structures
+    println!("Example 4: Complex Structures");
+    println!("{}", "-".repeat(40));
+
+    let complex_molecules = vec![
+        ("Isobutane", "CC(C)C"),
+        ("Caffeine", "CN1C=NC2=C1C(=O)N(C(=O)N2C)C"),
+        ("Penicillin G", "CC1(C)SC2C(NC(=O)Cc3ccccc3)C(=O)N2C1C(=O)O"),
+    ];
+
+    for (name, smiles) in &complex_molecules {
+        if let Ok(mol) = parse_smiles(smiles) {
+            mw_descriptor.calculate(&mol, &mut result);
+            println!("{:15} → {} atoms, MW = {:.2} Da",
+                name, mol.num_atoms(), result[0]);
+        }
+    }
+
+    println!("\n");
+
+    // Example 5: Ring Detection
+    println!("Example 5: Ring Detection");
+    println!("{}", "-".repeat(40));
+
+    let ring_molecules = vec![
+        ("Ethane (no ring)", "CC"),
+        ("Benzene (1 ring)", "c1ccccc1"),
+        ("Cyclohexane (1 ring)", "C1CCCCC1"),
+        ("Toluene (1 ring)", "Cc1ccccc1"),
+        ("Naphthalene (2 rings)", "c1ccc2ccccc2c1"),
+    ];
+
+    for (name, smiles) in &ring_molecules {
+        if let Ok(mut mol) = parse_smiles(smiles) {
+            find_sssr(&mut mol);
+
+            let ring_atoms = mol.atoms.iter().filter(|a| a.is_in_ring()).count();
+            let ring_bonds = mol.bonds.iter().filter(|b| b.is_in_ring()).count();
+
+            println!("{:20} → {} atoms in rings, {} bonds in rings",
+                name, ring_atoms, ring_bonds);
+        }
+    }
+
+    println!("\n");
+
+    // Example 6: Aromaticity Perception
+    println!("Example 6: Aromaticity Perception");
+    println!("{}", "-".repeat(40));
+
+    let aromatic_molecules = vec![
+        ("Benzene", "c1ccccc1"),
+        ("Pyridine", "c1ccncc1"),
+        ("Toluene", "Cc1ccccc1"),
+        ("Cyclohexane (not aromatic)", "C1CCCCC1"),
+        ("Naphthalene", "c1ccc2ccccc2c1"),
+    ];
+
+    for (name, smiles) in &aromatic_molecules {
+        if let Ok(mut mol) = parse_smiles(smiles) {
+            perceive_aromaticity(&mut mol);
+
+            let aromatic_atoms = mol.atoms.iter().filter(|a| a.is_aromatic()).count();
+            let total_atoms = mol.num_atoms();
+
+            println!("{:30} → {}/{} atoms aromatic",
+                name, aromatic_atoms, total_atoms);
+        }
+    }
+
+    println!("\n");
+
+    // Example 7: Error handling
+    println!("Example 7: Error Handling");
+    println!("{}", "-".repeat(40));
+
+    let invalid_smiles = vec![
+        "C(((C",  // Unmatched parenthesis
+        "C1CC",   // Unclosed ring
+        "C-",     // Dangling bond
+    ];
+
+    for smiles in &invalid_smiles {
+        match parse_smiles(smiles) {
+            Ok(_) => println!("'{}' → Unexpectedly parsed OK", smiles),
+            Err(e) => println!("'{}' → Error: {}", smiles, e),
+        }
+    }
+
+    println!("\n=== Example Complete ===");
+}
+
