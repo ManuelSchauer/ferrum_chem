@@ -1,13 +1,18 @@
 use crate::mol::molecule::Molecule;
 use crate::types::Real;
 
+// Public modules
 pub mod molecular_weight;
 pub mod fingerprint;
 pub mod topo;
+pub mod atom_count;
+pub mod bond_count;
+pub mod aromatic_ring_count;
+pub mod formal_charge;
+
+// Private modules
 mod batch;
 mod wiener_numbers;
-mod atom_count;
-mod bond_count;
 
 /// Generic interface for all descriptors.
 ///
