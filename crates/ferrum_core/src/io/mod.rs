@@ -1,4 +1,4 @@
 mod builder;
-mod smiles;
+pub mod smiles;
 mod sdf;
-mod smarts;
+pub(crate) mod smarts;
