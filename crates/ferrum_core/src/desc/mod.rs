@@ -11,10 +11,13 @@ pub mod aromatic_ring_count;
 pub mod formal_charge;
 pub mod hbond;
 pub mod logp;
+pub mod lipinski;
+pub mod chains;
+pub mod pi_system;
+pub mod maccs;
+pub mod small_ring;
+pub mod wiener_numbers;
 pub mod batch;
-
-// Private modules
-mod wiener_numbers;
 
 /// Generic interface for all descriptors.
 ///

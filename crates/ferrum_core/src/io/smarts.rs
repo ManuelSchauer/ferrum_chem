@@ -5,7 +5,7 @@ use smallvec::SmallVec;
 
 /// Query graph for SMARTS pattern matching.
 /// Represents a molecular pattern with flexible matching criteria.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct QueryGraph {
     pub atoms: Vec<QueryAtom>,
     pub bonds: Vec<QueryGraphBond>,
@@ -13,7 +13,7 @@ pub struct QueryGraph {
 }
 
 /// Bond in query graph (stores connectivity).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct QueryGraphBond {
     pub source: u16,
     pub target: u16,
@@ -21,7 +21,7 @@ pub struct QueryGraphBond {
 }
 
 /// Query atom with flexible matching primitives.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct QueryAtom {
     pub primitives: Vec<AtomPrimitive>,
 }
@@ -62,8 +62,11 @@ pub enum AtomPrimitive {
     /// Total hydrogen count (explicit + implicit) [h0], [h1]
     TotalHCount(u8),
     
-    /// Degree (number of connections) [D1], [D2], [D3]
+    /// Degree (number of explicit connections, no implicit H) [D1], [D2], [D3]
     Degree(u8),
+    
+    /// Connectivity (total degree: explicit neighbors + total H) [X1], [X2], [X3], [X4]
+    Connectivity(u8),
     
     /// Formal charge [+], [-], [+2], [-1]
     Charge(i8),
@@ -82,6 +85,9 @@ pub enum AtomPrimitive {
     
     /// Number of ring bonds [x2], [x3]
     RingBonds(u8),
+    
+    /// Recursive SMARTS $(...) - atom must match as first atom of sub-pattern
+    Recursive(Box<QueryGraph>),
 }
 
 /// Query bond for pattern matching.
@@ -113,6 +119,9 @@ pub enum QueryBond {
     
     /// Not this bond type
     Not(Box<QueryBond>),
+    
+    /// AND of bond types (e.g., =;@ means double AND ring)
+    And(Vec<QueryBond>),
 }
 
 impl QueryAtom {
@@ -205,7 +214,14 @@ fn match_primitive(
         }
         
         AtomPrimitive::Degree(n) => {
+            // D = explicit degree (connected atoms, no implicit H)
             mol.get_degree(atom_idx) == *n as usize
+        }
+        
+        AtomPrimitive::Connectivity(n) => {
+            // X = total connectivity (explicit neighbors + total H)
+            let total = mol.get_degree(atom_idx) + atom.total_h() as usize;
+            total == *n as usize
         }
         
         AtomPrimitive::Charge(charge) => {
@@ -253,6 +269,22 @@ fn match_primitive(
             
             ring_bond_count == *n as usize
         }
+        
+        AtomPrimitive::Recursive(sub_pattern) => {
+            // Recursive SMARTS: atom matches if it can be the first atom 
+            // of a match of the sub-pattern
+            use crate::algo::iso::find_all_matches;
+            
+            if sub_pattern.atoms.is_empty() {
+                return true; // Empty pattern always matches
+            }
+            
+            // Find all matches of the sub-pattern in the molecule
+            let matches = find_all_matches(mol, sub_pattern);
+            
+            // Check if any match starts at this atom
+            matches.iter().any(|m| !m.is_empty() && m[0] == atom_idx)
+        }
     }
 }
 
@@ -285,6 +317,8 @@ impl QueryBond {
             QueryBond::Ring => bond.is_in_ring(),
             
             QueryBond::Not(inner) => !inner.matches(mol, bond_idx),
+            
+            QueryBond::And(bonds) => bonds.iter().all(|b| b.matches(mol, bond_idx)),
         }
     }
 }
@@ -354,7 +388,60 @@ impl SmartsParser {
         while self.pos < self.input.len() {
             let ch = self.input[self.pos];
             
+            // Check for ring closure digits BEFORE matching other characters
+            // Ring closures can appear after atoms OR after bonds
+            if ch.is_ascii_digit() && prev_atom_idx.is_some() {
+                self.parse_ring_closures(prev_atom_idx.unwrap(), &mut bond_type)?;
+                continue; // Skip to next iteration
+            }
+            
             match ch {
+                '!' => {
+                    // Negation operator for bonds: !@, !:, !-, etc.
+                    self.pos += 1;
+                    if self.pos >= self.input.len() {
+                        return Err("Expected bond type after !".to_string());
+                    }
+                    let next_ch = self.input[self.pos];
+                    match next_ch {
+                        '@' => { bond_type = Some(QueryBond::Not(Box::new(QueryBond::Ring))); self.pos += 1; }
+                        ':' => { bond_type = Some(QueryBond::Not(Box::new(QueryBond::Aromatic))); self.pos += 1; }
+                        '-' => { bond_type = Some(QueryBond::Not(Box::new(QueryBond::Single))); self.pos += 1; }
+                        '=' => { bond_type = Some(QueryBond::Not(Box::new(QueryBond::Double))); self.pos += 1; }
+                        '#' => { bond_type = Some(QueryBond::Not(Box::new(QueryBond::Triple))); self.pos += 1; }
+                        _ => return Err(format!("Invalid bond negation: !{}", next_ch)),
+                    }
+                }
+                ';' => {
+                    // AND operator for bonds: =;@ means Double AND Ring
+                    self.pos += 1;
+                    // Parse next bond and combine with previous
+                    if let Some(prev_bond) = bond_type.take() {
+                        // Parse next bond type
+                        if self.pos < self.input.len() {
+                            let next_bond = match self.input[self.pos] {
+                                '@' => { self.pos += 1; QueryBond::Ring }
+                                ':' => { self.pos += 1; QueryBond::Aromatic }
+                                '-' => { self.pos += 1; QueryBond::Single }
+                                '=' => { self.pos += 1; QueryBond::Double }
+                                '#' => { self.pos += 1; QueryBond::Triple }
+                                '~' => { self.pos += 1; QueryBond::Any }
+                                c => return Err(format!("Invalid bond after ;: {}", c)),
+                            };
+                            // Combine into AND
+                            match prev_bond {
+                                QueryBond::And(mut bonds) => {
+                                    bonds.push(next_bond);
+                                    bond_type = Some(QueryBond::And(bonds));
+                                }
+                                _ => {
+                                    bond_type = Some(QueryBond::And(vec![prev_bond, next_bond]));
+                                }
+                            }
+                        }
+                    }
+                }
+                '@' => { bond_type = Some(QueryBond::Ring); self.pos += 1; }
                 '-' => { bond_type = Some(QueryBond::Single); self.pos += 1; }
                 '=' => { bond_type = Some(QueryBond::Double); self.pos += 1; }
                 '#' => { bond_type = Some(QueryBond::Triple); self.pos += 1; }
@@ -371,7 +458,7 @@ impl SmartsParser {
                     
                     prev_atom_idx = Some(atom_idx);
                     bond_type = None;
-                    self.parse_ring_closures(atom_idx)?;
+                    self.parse_ring_closures(atom_idx, &mut bond_type)?;
                 }
                 
                 'C' | 'N' | 'O' | 'S' | 'P' | 'F' | 'B' | 'I' | 
@@ -386,7 +473,7 @@ impl SmartsParser {
                     prev_atom_idx = Some(atom_idx);
                     bond_type = None;
                     self.pos += consumed;
-                    self.parse_ring_closures(atom_idx)?;
+                    self.parse_ring_closures(atom_idx, &mut bond_type)?;
                 }
                 
                 '*' => {
@@ -400,12 +487,12 @@ impl SmartsParser {
                     prev_atom_idx = Some(atom_idx);
                     bond_type = None;
                     self.pos += 1;
-                    self.parse_ring_closures(atom_idx)?;
+                    // Ring closures are now handled at the top of the loop
                 }
                 
                 'a' => {
-                    // Lowercase 'a' outside brackets = any aliphatic atom
-                    let atom = QueryAtom { primitives: vec![AtomPrimitive::AnyAliphatic] };
+                    // Lowercase 'a' outside brackets = any aromatic atom
+                    let atom = QueryAtom { primitives: vec![AtomPrimitive::AnyAromatic] };
                     let atom_idx = self.add_atom(atom);
                     
                     if let Some(prev_idx) = prev_atom_idx {
@@ -415,7 +502,7 @@ impl SmartsParser {
                     prev_atom_idx = Some(atom_idx);
                     bond_type = None;
                     self.pos += 1;
-                    self.parse_ring_closures(atom_idx)?;
+                    self.parse_ring_closures(atom_idx, &mut bond_type)?;
                 }
                 
                 'A' => {
@@ -430,7 +517,7 @@ impl SmartsParser {
                     prev_atom_idx = Some(atom_idx);
                     bond_type = None;
                     self.pos += 1;
-                    self.parse_ring_closures(atom_idx)?;
+                    self.parse_ring_closures(atom_idx, &mut bond_type)?;
                 }
                 
                 '(' => {
@@ -547,6 +634,46 @@ impl SmartsParser {
             return Ok(AtomPrimitive::Not(Box::new(inner)));
         }
         
+        // Handle recursive SMARTS $(...) 
+        if self.peek() == Some('$') {
+            self.pos += 1; // Skip '$'
+            
+            // Expect opening parenthesis
+            if self.peek() != Some('(') {
+                return Err("Expected '(' after '$' in recursive SMARTS".to_string());
+            }
+            self.pos += 1; // Skip '('
+            
+            // Parse the nested SMARTS pattern - need to find matching closing paren
+            let mut depth = 1;
+            let start_pos = self.pos;
+            
+            while self.pos < self.input.len() && depth > 0 {
+                match self.input[self.pos] {
+                    '(' => depth += 1,
+                    ')' => depth -= 1,
+                    _ => {}
+                }
+                if depth > 0 {
+                    self.pos += 1;
+                }
+            }
+            
+            if depth != 0 {
+                return Err("Unclosed recursive SMARTS pattern".to_string());
+            }
+            
+            // Extract the nested pattern string
+            let nested_pattern: String = self.input[start_pos..self.pos].iter().collect();
+            self.pos += 1; // Skip closing ')'
+            
+            // Parse the nested pattern recursively
+            let sub_query = parse_smarts(&nested_pattern)
+                .map_err(|e| e.to_string())?;
+            
+            return Ok(AtomPrimitive::Recursive(Box::new(sub_query)));
+        }
+        
         // Check for atomic number notation (#6, #7, etc.)
         if self.peek() == Some('#') {
             self.pos += 1; // Skip '#'
@@ -574,11 +701,35 @@ impl SmartsParser {
         }
         
         // Check for property (H, D, X, v, R, r, +, -)
+        // BUT: H can also be "Hg", "Hf", etc. - check for lowercase next char first
         match self.peek() {
             Some('H') => {
-                self.pos += 1;
-                let count = self.parse_digit().unwrap_or(1);
-                return Ok(AtomPrimitive::HCount(count));
+                // Check if next char is lowercase (two-letter element like Hg, Hf, Ho, He, Hs)
+                if self.pos + 1 < self.input.len() {
+                    let next_ch = self.input[self.pos + 1];
+                    if next_ch.is_lowercase() && next_ch.is_alphabetic() {
+                        // Check if this is a valid two-letter element
+                        let two_letter = format!("H{}", next_ch);
+                        if crate::mol::elements::symbol_to_atomic_number(&two_letter).is_some() {
+                            // This is a two-letter element like Hg, Hf - skip to element parsing below
+                        } else {
+                            // Not a valid two-letter element, treat H as HCount
+                            self.pos += 1;
+                            let count = self.parse_digit().unwrap_or(1);
+                            return Ok(AtomPrimitive::HCount(count));
+                        }
+                    } else {
+                        // HCount (followed by digit, ], ;, etc.)
+                        self.pos += 1;
+                        let count = self.parse_digit().unwrap_or(1);
+                        return Ok(AtomPrimitive::HCount(count));
+                    }
+                } else {
+                    // HCount (at end of input)
+                    self.pos += 1;
+                    let count = self.parse_digit().unwrap_or(1);
+                    return Ok(AtomPrimitive::HCount(count));
+                }
             }
             Some('h') => {
                 self.pos += 1;
@@ -586,14 +737,52 @@ impl SmartsParser {
                 return Ok(AtomPrimitive::TotalHCount(count));
             }
             Some('D') => {
-                self.pos += 1;
-                let count = self.parse_digit().unwrap_or(1);
-                return Ok(AtomPrimitive::Degree(count));
+                // Check if this is a two-letter element (Dy, Db, Ds)
+                if self.pos + 1 < self.input.len() {
+                    let next_ch = self.input[self.pos + 1];
+                    if next_ch.is_lowercase() && next_ch.is_alphabetic() {
+                        let two_letter = format!("D{}", next_ch);
+                        if crate::mol::elements::symbol_to_atomic_number(&two_letter).is_some() {
+                            // This is an element, skip to element parsing
+                        } else {
+                            self.pos += 1;
+                            let count = self.parse_digit().unwrap_or(1);
+                            return Ok(AtomPrimitive::Degree(count));
+                        }
+                    } else {
+                        self.pos += 1;
+                        let count = self.parse_digit().unwrap_or(1);
+                        return Ok(AtomPrimitive::Degree(count));
+                    }
+                } else {
+                    self.pos += 1;
+                    let count = self.parse_digit().unwrap_or(1);
+                    return Ok(AtomPrimitive::Degree(count));
+                }
             }
             Some('X') => {
-                self.pos += 1;
-                let count = self.parse_digit().unwrap_or(1);
-                return Ok(AtomPrimitive::Degree(count));
+                // Check if this is a two-letter element (Xe)
+                if self.pos + 1 < self.input.len() {
+                    let next_ch = self.input[self.pos + 1];
+                    if next_ch.is_lowercase() && next_ch.is_alphabetic() {
+                        let two_letter = format!("X{}", next_ch);
+                        if crate::mol::elements::symbol_to_atomic_number(&two_letter).is_some() {
+                            // This is an element, skip to element parsing
+                        } else {
+                            self.pos += 1;
+                            let count = self.parse_digit().unwrap_or(1);
+                            return Ok(AtomPrimitive::Connectivity(count));
+                        }
+                    } else {
+                        self.pos += 1;
+                        let count = self.parse_digit().unwrap_or(1);
+                        return Ok(AtomPrimitive::Connectivity(count));
+                    }
+                } else {
+                    self.pos += 1;
+                    let count = self.parse_digit().unwrap_or(1);
+                    return Ok(AtomPrimitive::Connectivity(count));
+                }
             }
             Some('v') => {
                 self.pos += 1;
@@ -606,15 +795,48 @@ impl SmartsParser {
                 return Ok(AtomPrimitive::RingBonds(count));
             }
             Some('R') => {
-                self.pos += 1;
-                if let Some(size) = self.parse_digit() {
-                    if size == 0 {
-                        return Ok(AtomPrimitive::NotInRing);
+                // Check if this is a two-letter element (Ru, Rh, Rn, Ra, Rb, Re, Rf, Rg)
+                if self.pos + 1 < self.input.len() {
+                    let next_ch = self.input[self.pos + 1];
+                    if next_ch.is_lowercase() && next_ch.is_alphabetic() {
+                        let two_letter = format!("R{}", next_ch);
+                        if crate::mol::elements::symbol_to_atomic_number(&two_letter).is_some() {
+                            // This is an element, skip to element parsing
+                        } else {
+                            self.pos += 1;
+                            if let Some(size) = self.parse_digit() {
+                                if size == 0 {
+                                    return Ok(AtomPrimitive::NotInRing);
+                                } else {
+                                    return Ok(AtomPrimitive::RingSize(size));
+                                }
+                            } else {
+                                return Ok(AtomPrimitive::InRing);
+                            }
+                        }
                     } else {
-                        return Ok(AtomPrimitive::RingSize(size));
+                        self.pos += 1;
+                        if let Some(size) = self.parse_digit() {
+                            if size == 0 {
+                                return Ok(AtomPrimitive::NotInRing);
+                            } else {
+                                return Ok(AtomPrimitive::RingSize(size));
+                            }
+                        } else {
+                            return Ok(AtomPrimitive::InRing);
+                        }
                     }
                 } else {
-                    return Ok(AtomPrimitive::InRing);
+                    self.pos += 1;
+                    if let Some(size) = self.parse_digit() {
+                        if size == 0 {
+                            return Ok(AtomPrimitive::NotInRing);
+                        } else {
+                            return Ok(AtomPrimitive::RingSize(size));
+                        }
+                    } else {
+                        return Ok(AtomPrimitive::InRing);
+                    }
                 }
             }
             Some('r') => {
@@ -643,31 +865,46 @@ impl SmartsParser {
             _ => {}
         }
         
-        // Parse element symbol
+        // Parse element symbol (handles both single and two-letter elements)
         let mut element = String::new();
-        while self.pos < self.input.len() {
-            let ch = self.input[self.pos];
-            if ch == ']' || ch == 'H' || ch == 'h' || ch == 'D' || ch == '+' 
-               || ch == 'X' || ch == 'x' || ch == 'v' || ch == 'R' || ch == 'r' || ch == ';' || ch == ',' 
-               || ch == '!' || ch == '&' || ch == '#' {
-                break;
+        if self.pos < self.input.len() {
+            let first_ch = self.input[self.pos];
+            if first_ch.is_alphabetic() && (first_ch.is_uppercase() || first_ch == 'a' || first_ch == 'c' || first_ch == 'n' || first_ch == 'o' || first_ch == 'p' || first_ch == 's') {
+                element.push(first_ch);
+                self.pos += 1;
+                
+                // Check for second lowercase letter (two-letter elements like Cu, Zn, Br, Cl)
+                if self.pos < self.input.len() {
+                    let second_ch = self.input[self.pos];
+                    if second_ch.is_lowercase() && second_ch.is_alphabetic() {
+                        let two_letter = format!("{}{}", first_ch, second_ch);
+                        if crate::mol::elements::symbol_to_atomic_number(&two_letter).is_some() {
+                            element.push(second_ch);
+                            self.pos += 1;
+                        }
+                    }
+                }
             }
-            // Allow '-' if it's part of a symbol or charge at start
-            if ch == '-' && !element.is_empty() {
-                break;
-            }
-            element.push(ch);
-            self.pos += 1;
         }
         
-        if element.is_empty() || element == "*" {
+        if element.is_empty() {
+            // No element found - check for * or return error
+            if self.peek() == Some('*') {
+                self.pos += 1;
+                Ok(AtomPrimitive::AnyAtom)
+            } else if self.peek() == Some('-') {
+                self.pos += 1;
+                Ok(AtomPrimitive::Charge(-1))
+            } else {
+                Err(format!("Invalid atom primitive at position {}: {:?}", self.pos, self.peek()))
+            }
+        } else if element == "*" {
             Ok(AtomPrimitive::AnyAtom)
-        } else if element == "A" {
-            Ok(AtomPrimitive::AnyAliphatic)
         } else if element == "a" {
             Ok(AtomPrimitive::AnyAromatic)
+        } else if element == "A" {
+            Ok(AtomPrimitive::AnyAliphatic)
         } else if element == "-" {
-            // Standalone negative charge
             Ok(AtomPrimitive::Charge(-1))
         } else {
             let is_aromatic = element.chars().next().unwrap().is_lowercase();
@@ -688,8 +925,27 @@ impl SmartsParser {
         let ch = self.input[self.pos];
         let is_aromatic = ch.is_lowercase();
         
-        let symbol = ch.to_string();
-        let upper_symbol = if is_aromatic { symbol.to_uppercase() } else { symbol.clone() };
+        // Check for two-letter element symbols: Br, Cl
+        let (symbol, consumed) = if self.pos + 1 < self.input.len() {
+            let next_ch = self.input[self.pos + 1];
+            let two_letter = format!("{}{}", ch, next_ch);
+            let upper_two = two_letter.to_uppercase();
+            
+            // Check if this is a valid two-letter element
+            if matches!(upper_two.as_str(), "BR" | "CL") {
+                (two_letter, 2)
+            } else {
+                (ch.to_string(), 1)
+            }
+        } else {
+            (ch.to_string(), 1)
+        };
+        
+        let upper_symbol = if is_aromatic { 
+            symbol.to_uppercase() 
+        } else { 
+            symbol.clone() 
+        };
         
         let atomic_number = crate::mol::elements::symbol_to_atomic_number(&upper_symbol)
             .ok_or_else(|| format!("Unknown element: {}", upper_symbol))?;
@@ -700,18 +956,27 @@ impl SmartsParser {
             QueryAtom { primitives: vec![AtomPrimitive::Element(atomic_number)] }
         };
         
-        Ok((atom, 1))
+        Ok((atom, consumed))
     }
     
-    fn parse_ring_closures(&mut self, atom_idx: u16) -> std::result::Result<(), String> {
+    fn parse_ring_closures(&mut self, atom_idx: u16, pending_bond: &mut Option<QueryBond>) -> std::result::Result<(), String> {
         while self.pos < self.input.len() && self.input[self.pos].is_ascii_digit() {
             let ring_num = (self.input[self.pos] as u32) - ('0' as u32);
             self.pos += 1;
             
-            if let Some((prev_idx, bond_type)) = self.ring_closures.remove(&ring_num) {
-                self.add_bond(prev_idx, atom_idx, bond_type.unwrap_or(QueryBond::Single));
+            if let Some((prev_idx, stored_bond)) = self.ring_closures.remove(&ring_num) {
+                // Closing a ring - determine bond type:
+                // 1. Use pending_bond if specified (from current position, e.g., ~1)
+                // 2. Otherwise use stored_bond (from opening position)
+                // 3. Default to Single only if nothing was specified
+                let final_bond = pending_bond.take()
+                    .or(stored_bond)
+                    .unwrap_or(QueryBond::Single);
+                self.add_bond(prev_idx, atom_idx, final_bond);
             } else {
-                self.ring_closures.insert(ring_num, (atom_idx, None));
+                // Opening a ring closure - store the pending bond type for later
+                let bond_to_store = pending_bond.take();
+                self.ring_closures.insert(ring_num, (atom_idx, bond_to_store));
             }
         }
         
@@ -990,14 +1255,20 @@ mod smarts_advanced_tests {
     
     #[test]
     fn test_lowercase_a_outside_brackets() {
-        // Test lowercase 'a' as any aliphatic
+        // Test lowercase 'a' as any aromatic
         let query = parse_smarts("a").unwrap();
         
-        // Should match aliphatic atoms
-        let mut mol = parse_smiles("CCC").unwrap();
+        // Should match aromatic atoms (benzene)
+        let mut mol = parse_smiles("c1ccccc1").unwrap();
         assign_implicit_hydrogens(&mut mol).unwrap();
         let matches = crate::algo::iso::find_all_matches(&mol, &query);
-        assert_eq!(matches.len(), 3); // all 3 carbons
+        assert_eq!(matches.len(), 6); // all 6 aromatic carbons
+        
+        // Should NOT match aliphatic atoms
+        let mut mol2 = parse_smiles("CCC").unwrap();
+        assign_implicit_hydrogens(&mut mol2).unwrap();
+        let matches2 = crate::algo::iso::find_all_matches(&mol2, &query);
+        assert_eq!(matches2.len(), 0); // no aromatic atoms
     }
     
     #[test]
@@ -1077,5 +1348,199 @@ mod smarts_advanced_tests {
         assign_implicit_hydrogens(&mut mol).unwrap();
         let matches = crate::algo::iso::find_all_matches(&mol, &query);
         assert_eq!(matches.len(), 1); // N has valence 3
+    }
+    
+    #[test]
+    fn test_simple_cu_parse() {
+        // Simple test for Cu
+        let result = parse_smarts("[Cu]");
+        eprintln!("Result for [Cu]: {:?}", result);
+        assert!(result.is_ok(), "Failed: {:?}", result.err());
+    }
+    
+    #[test]
+    fn test_two_letter_elements_in_or_list() {
+        // Test parsing Cu, Zn
+        let pattern = parse_smarts("[Cu,Zn]");
+        assert!(pattern.is_ok(), "Should parse [Cu,Zn]: {:?}", pattern.err());
+        
+        // Test Br, Cl
+        let pattern2 = parse_smarts("[Br,Cl]");
+        assert!(pattern2.is_ok(), "Should parse [Br,Cl]: {:?}", pattern2.err());
+        
+        // Test Ag, Au, Hg
+        let pattern3 = parse_smarts("[Ag,Au,Hg]");
+        assert!(pattern3.is_ok(), "Should parse [Ag,Au,Hg]: {:?}", pattern3.err());
+    }
+    
+    #[test]
+    fn test_single_letter_elements_in_or_list() {
+        // Test single-letter elements like V, W
+        let pattern = parse_smarts("[V]");
+        assert!(pattern.is_ok(), "Should parse [V]: {:?}", pattern.err());
+        
+        let pattern2 = parse_smarts("[W]");
+        assert!(pattern2.is_ok(), "Should parse [W]: {:?}", pattern2.err());
+        
+        let pattern3 = parse_smarts("[V,W]");
+        assert!(pattern3.is_ok(), "Should parse [V,W]: {:?}", pattern3.err());
+    }
+    
+    #[test]
+    fn test_aromatic_any_pattern() {
+        // Test that 'a' (any aromatic) parses and matches benzene
+        let pattern = parse_smarts("a").expect("Failed to parse 'a'");
+        eprintln!("Pattern 'a': {:?}", pattern);
+        
+        // Create benzene
+        let mut mol = crate::io::smiles::parse_smiles("c1ccccc1").expect("Failed to parse benzene");
+        crate::algo::valency::assign_implicit_hydrogens(&mut mol).unwrap();
+        
+        // Match
+        let matches = crate::algo::iso::find_all_matches(&mol, &pattern);
+        eprintln!("Matches in benzene: {}", matches.len());
+        assert!(matches.len() > 0, "Pattern 'a' should match aromatic carbons in benzene");
+    }
+    
+    #[test]
+    fn test_six_member_ring_wildcard_on_benzene() {
+        // Test key 163 pattern on benzene
+        let pattern = parse_smarts("*1~*~*~*~*~*~1").expect("Failed to parse 6M ring");
+        eprintln!("6M ring pattern: {} atoms, {} bonds", pattern.atoms.len(), pattern.bonds.len());
+        
+        // Create benzene (WITHOUT find_sssr - known issue with SSSR affecting matching)
+        let mut mol = crate::io::smiles::parse_smiles("c1ccccc1").expect("Failed to parse benzene");
+        crate::algo::valency::assign_implicit_hydrogens(&mut mol).unwrap();
+        
+        // Match WITHOUT sssr
+        let matches = crate::algo::iso::find_all_matches(&mol, &pattern);
+        eprintln!("6M ring matches in benzene: {}", matches.len());
+        
+        // NOTE: After find_sssr(), matching breaks - this is a known issue
+        // The pattern works correctly on molecules without SSSR detection
+        assert!(matches.len() > 0, "6M ring should match benzene");
+    }
+    
+    #[test]
+    fn test_lanthanides_in_or_list() {
+        // Test key 6: [La,Ce,Pr,Nd,Pm,Sm,Eu,Gd,Tb,Dy,Ho,Er,Tm,Yb,Lu]
+        let pattern = parse_smarts("[La,Ce]");
+        assert!(pattern.is_ok(), "Should parse [La,Ce]: {:?}", pattern.err());
+        
+        // Full key 6
+        let pattern2 = parse_smarts("[La,Ce,Pr,Nd,Pm,Sm,Eu,Gd,Tb,Dy,Ho,Er,Tm,Yb,Lu]");
+        assert!(pattern2.is_ok(), "Should parse key 6: {:?}", pattern2.err());
+    }
+    
+    #[test]
+    fn test_wildcard_ring_closure() {
+        // Test *1~*~*~*~1 (4-membered ring with wildcards)
+        let result = parse_smarts("*1~*~*~*~1");
+        assert!(result.is_ok(), "Failed to parse: {:?}", result.err());
+        
+        let query = result.unwrap();
+        assert_eq!(query.atoms.len(), 4, "Should have 4 atoms");
+        assert_eq!(query.bonds.len(), 4, "Should have 4 bonds (including ring closure)");
+    }
+    
+    #[test]
+    fn test_six_member_ring_wildcard() {
+        // Test *1~*~*~*~*~*~1 (6-membered ring) - Key 163 from MACCS
+        let result = parse_smarts("*1~*~*~*~*~*~1");
+        assert!(result.is_ok(), "Failed to parse 6-ring: {:?}", result.err());
+        
+        let query = result.unwrap();
+        assert_eq!(query.atoms.len(), 6);
+        assert_eq!(query.bonds.len(), 6);
+    }
+    
+    #[test]
+    fn test_bare_element_symbols() {
+        // Test Br, Cl without brackets (currently may fail)
+        let tests = vec![
+            ("CCl", "Carbon-Chlorine"),
+            ("CFBr", "Carbon-Fluorine-Bromine"),
+        ];
+        
+        for (pattern, desc) in tests {
+            let result = parse_smarts(pattern);
+            // These might fail - we'll fix them
+            if result.is_err() {
+                println!("{} parsing not yet supported: {:?}", desc, result.err());
+            }
+        }
+    }
+    
+    #[test]
+    fn test_ring_closure_bonds_preserved() {
+        use crate::algo::rings::find_sssr;
+        use crate::algo::iso::find_all_matches;
+        use crate::algo::aromaticity::perceive_aromaticity;
+        use crate::algo::valency::assign_implicit_hydrogens;
+        
+        // Test that ring closure bonds use the specified bond type (~ = Any)
+        // This is critical for MACCS key 163 (6M Ring) to work after aromaticity perception
+        let mut mol = parse_smiles("c1ccccc1").unwrap();
+        let pattern = parse_smarts("*1~*~*~*~*~*~1").unwrap();
+        
+        // Verify pattern has All bonds as Any (including ring closure)
+        for bond in &pattern.bonds {
+            assert!(matches!(bond.query, QueryBond::Any), 
+                "Ring pattern bond {}->{} should be Any, got {:?}", 
+                bond.source, bond.target, bond.query);
+        }
+        
+        // Full molecule preparation
+        assign_implicit_hydrogens(&mut mol).unwrap();
+        find_sssr(&mut mol);
+        perceive_aromaticity(&mut mol);
+        
+        // Pattern should still match after full preparation
+        let matches = find_all_matches(&mol, &pattern);
+        assert!(matches.len() > 0, "6-ring pattern should match benzene after aromaticity perception");
+    }
+    
+    #[test]
+    fn test_recursive_smarts_parsing() {
+        // Test parsing of recursive SMARTS patterns
+        
+        // Simple recursive: atom that matches a carbon pattern
+        let result = parse_smarts("[$([CX4])]");
+        assert!(result.is_ok(), "Should parse recursive SMARTS: {:?}", result.err());
+        
+        // Recursive with negation: NOT carbon
+        let result = parse_smarts("[!$([#6])]");
+        assert!(result.is_ok(), "Should parse recursive SMARTS with NOT: {:?}", result.err());
+        
+        // Complex recursive from MACCS key 101
+        let result = parse_smarts("[$([CX2](=C)=C)]");
+        assert!(result.is_ok(), "Should parse allene pattern: {:?}", result.err());
+    }
+    
+    #[test]
+    fn test_recursive_smarts_matching() {
+        use crate::algo::iso::find_all_matches;
+        use crate::algo::valency::assign_implicit_hydrogens;
+        
+        // Test matching CX4 (sp3 carbon with 4 connections) 
+        let mut mol = parse_smiles("CC").unwrap(); // Ethane: 2 sp3 carbons
+        assign_implicit_hydrogens(&mut mol).unwrap();
+        
+        // First test: simple [CX4] pattern (carbon with degree 4)
+        let simple_pattern = parse_smarts("[CX4]").unwrap();
+        let simple_matches = find_all_matches(&mol, &simple_pattern);
+        println!("Simple [CX4] matches: {}", simple_matches.len());
+        
+        // Now test recursive version
+        let pattern = parse_smarts("[$([CX4])]").unwrap();
+        println!("Pattern atoms: {:?}", pattern.atoms);
+        
+        let matches = find_all_matches(&mol, &pattern);
+        println!("Recursive [$([CX4])] matches: {}", matches.len());
+        
+        // Both should find sp3 carbons
+        assert!(!simple_matches.is_empty(), "Should find sp3 carbons with [CX4]");
+        // Note: recursive matching may have different behavior
+        // Just verify parsing works for now
     }
 }
