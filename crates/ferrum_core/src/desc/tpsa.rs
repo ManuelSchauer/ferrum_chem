@@ -41,7 +41,7 @@ impl Descriptor for Tpsa {
     }
 
     fn calculate(&self, mol: &Molecule, output: &mut [Real]) {
-        output[0] = calculate_tpsa(mol, true) as Real;
+        output[0] = calculate_tpsa(mol, false) as Real;
     }
 }
 
@@ -60,7 +60,7 @@ fn calculate_tpsa(mol: &Molecule, include_sp: bool) -> f64 {
     let mut n_arom = vec![0i32; n_atoms];  // Aromatic bonds
     let mut n_hs = vec![0i32; n_atoms];    // Hydrogen count
     
-    // Count bonds
+    // Count bonds (following RDKit's exact algorithm)
     for bond in &mol.bonds {
         let begin = bond.source as usize;
         let end = bond.target as usize;
@@ -74,25 +74,34 @@ fn calculate_tpsa(mol: &Molecule, include_sp: bool) -> f64 {
         } else if end_is_h && !begin_is_h {
             n_hs[begin] += 1;
         } else if !begin_is_h && !end_is_h {
-            // Count bond type for non-hydrogen bonds
-            match bond.bond_type {
-                BondType::Aromatic => {
-                    n_arom[begin] += 1;
-                    n_arom[end] += 1;
+            // RDKit counts by aromatic FLAG first, then bond type
+            // This is key for correct TPSA after kekulization
+            if bond.is_aromatic() {
+                n_arom[begin] += 1;
+                n_arom[end] += 1;
+            } else {
+                // Count bond type for non-aromatic bonds
+                match bond.bond_type {
+                    BondType::Single => {
+                        n_sing[begin] += 1;
+                        n_sing[end] += 1;
+                    }
+                    BondType::Double => {
+                        n_doub[begin] += 1;
+                        n_doub[end] += 1;
+                    }
+                    BondType::Triple => {
+                        n_trip[begin] += 1;
+                        n_trip[end] += 1;
+                    }
+                    BondType::Aromatic => {
+                        // Fallback: treat Aromatic bond type as aromatic
+                        // This happens before kekulization
+                        n_arom[begin] += 1;
+                        n_arom[end] += 1;
+                    }
+                    _ => {} // Skip Dative, Unknown
                 }
-                BondType::Single => {
-                    n_sing[begin] += 1;
-                    n_sing[end] += 1;
-                }
-                BondType::Double => {
-                    n_doub[begin] += 1;
-                    n_doub[end] += 1;
-                }
-                BondType::Triple => {
-                    n_trip[begin] += 1;
-                    n_trip[end] += 1;
-                }
-                _ => {} // Skip Dative, Unknown
             }
             // Count degree (exclude hydrogens)
             n_nbrs[begin] += 1;
@@ -100,10 +109,10 @@ fn calculate_tpsa(mol: &Molecule, include_sp: bool) -> f64 {
         }
     }
     
-    // Add implicit hydrogens
+    // Add hydrogens (both implicit and explicit from bracket notation)
     for i in 0..n_atoms {
         let atom = &mol.atoms[i];
-        n_hs[i] += atom.num_implicit_h as i32;
+        n_hs[i] += atom.total_h() as i32;
     }
     
     let mut tpsa = 0.0;
@@ -341,7 +350,7 @@ mod tests {
     use crate::io::smiles::parse_smiles;
 
     fn tpsa(smiles: &str) -> f64 {
-        let mut mol = parse_smiles(smiles).unwrap();
+        let mol = parse_smiles(smiles).unwrap();
         let desc = Tpsa;
         let mut output = vec![0.0];
         desc.calculate(&mol, &mut output);
@@ -349,101 +358,159 @@ mod tests {
     }
 
     #[test]
+    fn test_tpsa_comprehensive_rdkit_validation() {
+        // Comprehensive validation against RDKit TPSA(includeSandP=False) defaults
+        let cases: Vec<(&str, &str, f64)> = vec![
+            ("CCCC", "Butane", 0.00),
+            ("CCO", "Ethanol", 20.23),
+            ("COC", "DimethylEther", 9.23),
+            ("CC(=O)C", "Acetone", 17.07),
+            ("CC(=O)O", "AceticAcid", 37.30),
+            ("CC(=O)OC", "MethylAcetate", 26.30),
+            ("CN", "Methylamine", 26.02),
+            ("CNC", "Dimethylamine", 12.03),
+            ("CN(C)C", "Trimethylamine", 3.24),
+            ("c1cccnc1", "Pyridine", 12.89),
+            ("c1cc[nH]c1", "Pyrrole", 15.79),
+            ("c1ccoc1", "Furan", 13.14),
+            ("c1ccsc1", "Thiophene", 0.00),
+            ("CC(=O)Oc1ccccc1C(=O)O", "Aspirin", 63.60),
+            ("CN1C=NC2=C1C(=O)N(C(=O)N2C)C", "Caffeine", 61.82),
+            ("CC(C)Cc1ccc(cc1)C(C)C(=O)O", "Ibuprofen", 37.30),
+            ("CC(=O)N", "Acetamide", 43.09),
+            ("c1ccccc1", "Benzene", 0.00),
+            ("CC(=O)Nc1ccc(O)cc1", "Paracetamol", 49.33),
+            ("CC(O)=O", "AceticAcid2", 37.30),
+            ("C(=O)O", "FormicAcid", 37.30),
+            ("c1ccc(cc1)O", "Phenol", 20.23),
+            ("c1ccc(cc1)N", "Aniline", 26.02),
+            ("C#N", "HCN", 23.79),
+            ("CC#N", "Acetonitrile", 23.79),
+            ("C=O", "Formaldehyde", 17.07),
+            ("[NH3+]CC([O-])=O", "Glycine_zwitter", 67.77),
+            ("OC(=O)c1ccccc1", "BenzoicAcid", 37.30),
+            ("c1cnc2ccccc2n1", "Quinazoline", 25.78),
+            ("Nc1ncnc2[nH]cnc12", "Adenine", 80.48),
+            ("c1ccc2[nH]ccc2c1", "Indole", 15.79),
+            ("O=C(O)CC(O)(CC(=O)O)C(=O)O", "CitricAcid", 132.13),
+            ("CC12CCC3C(C1CCC2O)CCC4=CC(=O)CCC34C", "Testosterone", 37.30),
+            ("O=c1[nH]c(=O)c2[nH]cnc2[nH]1", "UricAcid", 94.40),
+            ("c1cc2ccccc2[nH]1", "Indole2", 15.79),
+            ("O=S(=O)(c1ccc(cc1)N)N", "Sulfanilamide", 86.18),
+            ("c1ccc(cc1)S", "Thiophenol", 0.00),
+            ("CS(=O)C", "DMSO", 17.07),
+            ("CS(=O)(=O)C", "DMSO2", 34.14),
+            ("c1ccncc1", "Pyridine2", 12.89),
+            ("O=[N+]([O-])c1ccccc1", "Nitrobenzene", 43.14),
+            // Extended validation
+            ("CC(C)NCC(O)c1ccc(O)c(O)c1", "Isoprenaline", 72.72),
+            ("c1ccc2c(c1)[nH]c3ccccc23", "Carbazole", 15.79),
+            ("O=C1NC(=O)c2ccccc21", "Isatin-like", 46.17),
+            ("CC(C)(C)NCC(O)c1ccccc1", "Phenylethanolamine", 32.26),
+            ("c1ccnnc1", "Pyridazine", 25.78),
+            ("c1cnccn1", "Pyrimidine", 25.78),
+            ("c1cnncn1", "Triazine", 38.67),
+            ("NC(=O)c1ccccc1", "Benzamide", 43.09),
+            ("Oc1ccccc1O", "Catechol", 40.46),
+        ];
+        
+        let mut failures = Vec::new();
+        let mut count = 0;
+        
+        for (smi, name, expected) in &cases {
+            match parse_smiles(smi) {
+                Ok(mol) => {
+                    let got = calculate_tpsa(&mol, false);
+                    let err = (got - expected).abs();
+                    count += 1;
+                    if err > 0.01 {
+                        failures.push(format!("{name}: got {got:.2}, expected {expected:.2}, err {err:.2}"));
+                    }
+                }
+                Err(e) => {
+                    failures.push(format!("{name}: PARSE FAILED ({smi}): {e}"));
+                }
+            }
+        }
+        
+        if !failures.is_empty() {
+            println!("\nTPSA Failures ({}/{count}):", failures.len());
+            for f in &failures {
+                println!("  {f}");
+            }
+        }
+        
+        assert!(failures.is_empty(), 
+                "TPSA mismatches ({}/{count}):\n{}", failures.len(), failures.join("\n"));
+    }
+
+    #[test]
     fn test_tpsa_alkane() {
-        // Butane: no polar atoms
         assert!((tpsa("CCCC") - 0.0).abs() < 0.01);
     }
 
     #[test]
     fn test_tpsa_alcohol() {
-        // Ethanol: OH = 20.23 Ų
-        assert!((tpsa("CCO") - 20.23).abs() < 0.5);
+        assert!((tpsa("CCO") - 20.23).abs() < 0.01);
     }
 
     #[test]
     fn test_tpsa_ether() {
-        // Dimethyl ether: O(-)(-)= 9.23 Ų
-        assert!((tpsa("COC") - 9.23).abs() < 0.5);
+        assert!((tpsa("COC") - 9.23).abs() < 0.01);
     }
 
     #[test]
     fn test_tpsa_ketone() {
-        // Acetone: C=O = 17.07 Ų
-        assert!((tpsa("CC(=O)C") - 17.07).abs() < 0.5);
+        assert!((tpsa("CC(=O)C") - 17.07).abs() < 0.01);
     }
 
     #[test]
     fn test_tpsa_carboxylic_acid() {
-        // Acetic acid: OH (20.23) + C=O (17.07) = 37.30 Ų
-        // Note: one O might be carbonyl, one OH
-        let result = tpsa("CC(=O)O");
-        assert!(result > 35.0 && result < 40.0, "Got {}", result);
+        assert!((tpsa("CC(=O)O") - 37.30).abs() < 0.01);
     }
 
     #[test]
     fn test_tpsa_ester() {
-        // Methyl acetate: C=O (17.07) + O-C (9.23) = 26.30 Ų
-        let result = tpsa("CC(=O)OC");
-        assert!(result > 24.0 && result < 28.0, "Got {}", result);
+        assert!((tpsa("CC(=O)OC") - 26.30).abs() < 0.01);
     }
 
     #[test]
     fn test_tpsa_primary_amine() {
-        // Methylamine: NH2 = 26.02 Ų
-        assert!((tpsa("CN") - 26.02).abs() < 0.5);
+        assert!((tpsa("CN") - 26.02).abs() < 0.01);
     }
 
     #[test]
     fn test_tpsa_secondary_amine() {
-        // Dimethylamine: NH = 12.03 Ų
-        let result = tpsa("CNC");
-        assert!((result - 12.03).abs() < 1.0, "Got {}", result);
+        assert!((tpsa("CNC") - 12.03).abs() < 0.01);
     }
 
     #[test]
     fn test_tpsa_tertiary_amine() {
-        // Trimethylamine: N = 3.24 Ų
-        let result = tpsa("CN(C)C");
-        assert!((result - 3.24).abs() < 1.0, "Got {}", result);
+        assert!((tpsa("CN(C)C") - 3.24).abs() < 0.01);
     }
 
     #[test]
     fn test_tpsa_pyridine() {
-        // Pyridine: aromatic N = 12.89 Ų
-        let result = tpsa("c1cccnc1");
-        assert!((result - 12.89).abs() < 1.0, "Got {}", result);
+        assert!((tpsa("c1cccnc1") - 12.89).abs() < 0.01);
     }
 
     #[test]
     fn test_tpsa_aspirin() {
-        // Aspirin: carboxylic acid + ester
-        // COOH: ~37.3, ester O: ~26.3, aromatic: 0
-        // Total: ~63.6 Ų
-        let result = tpsa("CC(=O)Oc1ccccc1C(=O)O");
-        assert!(result > 60.0 && result < 70.0, "Aspirin TPSA = {}", result);
+        assert!((tpsa("CC(=O)Oc1ccccc1C(=O)O") - 63.60).abs() < 0.01);
     }
 
     #[test]
     fn test_tpsa_caffeine() {
-        // Caffeine: complex fused ring heterocycle with 4 nitrogens + 2 carbonyls
-        // RDKit TPSA: 61.82 Ų (exact match!)
-        let result = tpsa("CN1C=NC2=C1C(=O)N(C(=O)N2C)C");
-        assert!((result - 61.82).abs() < 0.5, "Caffeine TPSA = {}, expected 61.82", result);
+        assert!((tpsa("CN1C=NC2=C1C(=O)N(C(=O)N2C)C") - 61.82).abs() < 0.01);
     }
 
     #[test]
     fn test_tpsa_ibuprofen() {
-        // Ibuprofen: carboxylic acid COOH
-        // Expected: ~37.3 Ų
-        let result = tpsa("CC(C)Cc1ccc(cc1)C(C)C(=O)O");
-        assert!(result > 35.0 && result < 40.0, "Ibuprofen TPSA = {}", result);
+        assert!((tpsa("CC(C)Cc1ccc(cc1)C(C)C(=O)O") - 37.30).abs() < 0.01);
     }
 
     #[test]
     fn test_tpsa_amide() {
-        // Acetamide: C=O + NH2
-        // Expected: 17.07 + 26.02 = 43.09 Ų
-        let result = tpsa("CC(=O)N");
-        assert!(result > 40.0 && result < 46.0, "Amide TPSA = {}", result);
+        assert!((tpsa("CC(=O)N") - 43.09).abs() < 0.01);
     }
 }

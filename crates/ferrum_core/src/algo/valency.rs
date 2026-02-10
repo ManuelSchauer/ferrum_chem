@@ -35,7 +35,8 @@ pub fn assign_implicit_hydrogens(mol: &mut Molecule) -> Result<()> {
         let atom = &mol.atoms[atom_idx];
 
         // Skip if explicit hydrogens are already specified
-        if atom.num_explicit_h > 0 {
+        // or if atom was in bracket notation (explicit H specification, even if 0)
+        if atom.num_explicit_h > 0 || atom.no_implicit_h() {
             mol.atoms[atom_idx].num_implicit_h = 0;
             continue;
         }

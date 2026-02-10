@@ -46,6 +46,12 @@ impl Atom {
         if val { self.flags |= 0b10; } else { self.flags &= !0b10; }
     }
     
+    /// Whether this atom has no implicit H (bracket atom with explicit specification)
+    pub fn no_implicit_h(&self) -> bool { self.flags & 0b100 != 0 }
+    pub fn set_no_implicit_h(&mut self, val: bool) {
+        if val { self.flags |= 0b100; } else { self.flags &= !0b100; }
+    }
+    
     /// Total hydrogen count (explicit + implicit)
     pub fn total_h(&self) -> u8 {
         self.num_explicit_h + self.num_implicit_h

@@ -11,37 +11,55 @@ ferrum_chem/
 │   ├── ferrum_core/          # Core algorithms and data structures
 │   │   ├── src/
 │   │   │   ├── mol/          # Molecular data structures
-│   │   │   │   ├── atom.rs         # Atom representation (8 bytes, cache-optimized)
-│   │   │   │   ├── bond.rs         # Bond representation
-│   │   │   │   ├── molecule.rs     # Molecule graph with SmallVec adjacency
-│   │   │   │   └── elements.rs     # ✅ DONE: Atomic data lookup tables
+│   │   │   │   ├── atom.rs         # ✅ Atom representation (12 bytes, cache-optimized)
+│   │   │   │   ├── bond.rs         # ✅ Bond representation with aromatic flags
+│   │   │   │   ├── molecule.rs     # ✅ Molecule graph with SmallVec adjacency
+│   │   │   │   └── elements.rs     # ✅ Atomic data lookup tables
 │   │   │   ├── io/           # Input/Output parsers
-│   │   │   │   ├── builder.rs      # ✅ DONE: MoleculeBuilder trait
-│   │   │   │   ├── smiles.rs       # ✅ DONE: SMILES parser (state machine)
-│   │   │   │   ├── smarts.rs       # ✅ DONE: SMARTS parser with VF2 matching
-│   │   │   │   ├── csv_reader.rs   # ✅ DONE: CSV SMILES batch reader
+│   │   │   │   ├── builder.rs      # ✅ MoleculeBuilder trait
+│   │   │   │   ├── smiles.rs       # ✅ SMILES parser (bracket atoms, fused rings, auto-aromaticity)
+│   │   │   │   ├── smarts.rs       # ✅ SMARTS parser with VF2 matching + recursive SMARTS
+│   │   │   │   ├── csv_reader.rs   # ✅ CSV SMILES batch reader
 │   │   │   │   └── sdf.rs          # TODO: SDF/MOL file parser
 │   │   │   ├── algo/         # Algorithms
-│   │   │   │   ├── aromaticity.rs  # ✅ DONE: Hückel 4n+2 rule
-│   │   │   │   ├── rings.rs        # ✅ DONE: SSSR algorithm
-│   │   │   │   ├── iso.rs          # ✅ DONE: VF2 subgraph isomorphism
-│   │   │   │   ├── valency.rs      # ✅ DONE: Implicit hydrogen calculation
+│   │   │   │   ├── aromaticity.rs  # ✅ Hückel 4n+2 rule (enhanced for fused heterocycles)
+│   │   │   │   ├── rings.rs        # ✅ SSSR algorithm
+│   │   │   │   ├── iso.rs          # ✅ VF2 subgraph isomorphism
+│   │   │   │   ├── valency.rs      # ✅ Implicit hydrogen calculation (bracket-aware)
+│   │   │   │   ├── kekulize.rs     # ✅ Optional kekulization module
 │   │   │   │   ├── canon.rs        # TODO: Morgan canonicalization
 │   │   │   │   ├── electronic.rs   # TODO: Gasteiger partial charges
 │   │   │   │   └── standardize.rs  # TODO: Standardization pipeline
-│   │   │   └── desc/         # Descriptor calculations
-│   │   │       ├── molecular_weight.rs  # ✅ DONE: Molecular weight
-│   │   │       ├── atom_count.rs        # ✅ DONE: Element counting
-│   │   │       ├── bond_count.rs        # ✅ DONE: Bond type counting
-│   │   │       ├── aromatic_atom_count.rs # ✅ DONE: Aromatic atoms
-│   │   │       ├── aromatic_ring_count.rs # ✅ DONE: Ring counting
-│   │   │       ├── hbond.rs            # ✅ DONE: H-bond donors/acceptors
-│   │   │       ├── logp.rs             # ✅ DONE: LogP (Wildman-Crippen)
-│   │   │       ├── rotatable_bonds.rs  # ✅ DONE: Rotatable bond count
-│   │   │       ├── formal_charge.rs    # ✅ DONE: Net charge
-│   │   │       ├── batch.rs            # ✅ DONE: Rayon parallel processing
-│   │   │       ├── fingerprint.rs      # TODO: ECFP4, Morgan, etc.
-│   │   │       └── topo.rs             # TODO: TPSA, Wiener index, etc.
+│   │   │   └── desc/         # Descriptor calculations (~30 modules)
+│   │   │       ├── molecular_weight.rs  # ✅ Molecular weight
+│   │   │       ├── atom_count.rs        # ✅ Element counting
+│   │   │       ├── bond_count.rs        # ✅ Bond type counting
+│   │   │       ├── aromatic_ring_count.rs # ✅ Ring counting
+│   │   │       ├── hbond.rs            # ✅ H-bond donors/acceptors
+│   │   │       ├── logp.rs             # ✅ LogP (Wildman-Crippen)
+│   │   │       ├── formal_charge.rs    # ✅ Net charge
+│   │   │       ├── lipinski.rs         # ✅ Lipinski Rule of Five
+│   │   │       ├── chains.rs           # ✅ Aliphatic/largest chain
+│   │   │       ├── pi_system.rs        # ✅ Largest π system
+│   │   │       ├── maccs.rs            # ✅ MACCS 166-bit fingerprint
+│   │   │       ├── small_ring.rs       # ✅ Small ring counts (3-9 membered)
+│   │   │       ├── tpsa.rs             # ✅ TPSA (RDKit-exact, 50/50 validation)
+│   │   │       ├── kappa.rs            # ✅ Kier-Hall Kappa shape indices
+│   │   │       ├── functional_groups.rs # ✅ Functional/Acidic/Basic group counts
+│   │   │       ├── qed.rs              # ✅ QED drug-likeness score
+│   │   │       ├── wiener_numbers.rs   # ✅ Wiener index + distance matrix
+│   │   │       ├── zagreb.rs           # ✅ Zagreb indices M1, M2
+│   │   │       ├── balaban.rs          # ✅ Balaban J index
+│   │   │       ├── eccentric.rs        # ✅ Eccentric connectivity index
+│   │   │       ├── simple_counts.rs    # ✅ Valence/radical/heteroatom counts
+│   │   │       ├── carbon_types.rs     # ✅ C1SP1..C4SP3 classification
+│   │   │       ├── ring_types.rs       # ✅ Saturated/aliphatic ring counts
+│   │   │       ├── spiro.rs            # ✅ Spiro atom count
+│   │   │       ├── petitjean.rs        # ✅ Petitjean indices
+│   │   │       ├── gravitational.rs    # ✅ Gravitational index
+│   │   │       ├── batch.rs            # ✅ Rayon parallel processing
+│   │   │       ├── fingerprint.rs      # ✅ ECFP/FCFP circular fingerprints + Tanimoto
+│   │   │       └── topo.rs             # TODO: Additional topological
 │   │   └── Cargo.toml
 │   └── ferrum_cli/           # Command-line interface
 │       ├── src/
@@ -50,21 +68,22 @@ ferrum_chem/
 └── Cargo.toml                # Workspace definition
 ```
 
-## ✅ Completed (Phase 1-7: Core Functionality)
+## ✅ Completed (Phase 1-8: Core Functionality + MACCS Keys)
 
 ### Phase 1: SMILES Parser & Molecular Weight
 - **Status**: ✅ Complete
 - Element data lookup tables
-- SMILES parser (organic subset, rings, branches, aromatics)
+- SMILES parser (organic subset, rings, branches, aromatics, bracket atoms)
 - MoleculeBuilder trait
 - Molecular weight descriptor
 - Unit tests (13 tests)
 
 ### Phase 2-6: Core Algorithms & Descriptors
-- **Status**: ✅ Complete (Phases 3, 4, 5, 6)
-- Implicit hydrogen calculation (valence-based)
+- **Status**: ✅ Complete (Phases 2, 3, 4, 5, 6)
+- Implicit hydrogen calculation (valence-based, bracket atom aware)
 - Ring detection (SSSR algorithm)
-- Aromaticity perception (Hückel 4n+2 rule)
+- Aromaticity perception (Hückel 4n+2 rule, enhanced for fused heterocycles)
+- Kekulization module (optional, available but not used by default)
 - CSV reader for batch SMILES processing
 - 14 molecular descriptors:
   - Molecular weight
@@ -130,49 +149,54 @@ ferrum_chem/
 **Strategy**: "Easy wins first, hard problems last"
 Before tackling Gasteiger charges (2 weeks) or 3D conformers (3 weeks), we have **40-50 descriptors** ready to implement with 1-3 days effort each.
 
-### Phase 9A: Easy Topological Descriptors (2-3 weeks) 🟢
+### Phase 9A: Easy Topological Descriptors 🟢
 **Goal**: Maximum value with minimum effort (+35 descriptors)
+**Status**: ✅ Complete (35/35 descriptors implemented)
 
-#### Distance-Based (Foundation for others)
-- Wiener Index (1 day) - sum of shortest paths
-- Zagreb Indices M1, M2 (1 day) - degree-based
-- Balaban J Index (2 days) - distance matrix based
-- Eccentric Connectivity Index (2 days)
-- Kier-Hall Kappa Indices (2 days) - shape descriptors
+#### Distance-Based (Foundation for others) ✅ COMPLETE
+- ✅ Wiener Index (10 tests) - sum of shortest paths, reusable distance matrix
+- ✅ Zagreb Indices M1, M2 (9 tests) - degree-based
+- ✅ Balaban J Index (8 tests) - distance matrix based
+- ✅ Eccentric Connectivity Index (9 tests)
+- ✅ Kier-Hall Kappa Indices (8 tests) - shape descriptors κ₁, κ₂, κ₃
 
-#### Simple Counting
-- Valence Electrons (0.5 day) - periodic table lookup
-- Radical Electrons (0.5 day) - already in Atom struct
-- Heteroatom Count (0.5 day) - non-C/H atoms
-- Spiro Atom Count (1 day) - ring membership
-- Carbon Types (1 day) - sp1/sp2/sp3 classification
-- Ring Type Counts (0.5 day) - saturated/aliphatic
+#### Simple Counting ✅ COMPLETE
+- ✅ Valence Electrons Count (12 tests)
+- ✅ Radical Electrons Count (in simple_counts.rs)
+- ✅ Heteroatom Count (in simple_counts.rs)
+- ✅ Spiro Atom Count (7 tests)
+- ✅ Carbon Types (9 tests) - C1SP1..C4SP3
+- ✅ Ring Type Counts (7 tests) - saturated/aliphatic
 
 #### High-Value Physicochemical
-- **TPSA** ⭐⭐⭐ (3 days) - Topological Polar Surface Area (critical for drug-likeness!)
-- **Molar Refractivity** (2 days) - similar to LogP implementation
-- **Functional Groups** (2 days) - 20-30 SMARTS patterns (alcohol, amine, ketone, etc.)
-- Acidic/Basic Group Counts (1 day each)
-- **QED** (1 day) - Quantitative Estimate of Drug-likeness
+- ✅ **TPSA** ⭐⭐⭐ (15 tests) - RDKit-exact algorithm, 50/50 molecules validated
+- ✅ **Molar Refractivity** (5 tests) - Crippen method, reuses LogP patterns
 
-#### Additional Useful
-- Petitjean Indices (1 day)
-- Gravitational Index (1 day)
-- Hybridization Ratio (0.5 day) - sp3/sp2
-- VAdjMa (0.5 day) - vertex adjacency magnitude
+#### Fragment-Based Pattern Matching (SMARTS Ready!)
+- ✅ **Functional Group Counts** (6 tests) - 16 SMARTS patterns
+- ✅ **Acidic Group Count** (3 tests)
+- ✅ **Basic Group Count** (3 tests)
+- ✅ **QED (Drug-likeness)** (6 tests) - combines existing descriptors
 
-**Output**: ~35 descriptors, all validated against RDKit/CDK
+#### Additional Useful ✅ COMPLETE
+- ✅ Petitjean Indices (8 tests)
+- ✅ Gravitational Index (7 tests)
+- ✅ Hybridization Ratio - sp³/sp² carbon ratio
+- ✅ VAdjMa - 1 + log₂(m)
 
-### Phase 9B: Morgan/ECFP Fingerprints (1 week) 🟡
+**Completed**: 35 descriptors, 345 tests passing ✅
+
+### Phase 9B: Morgan/ECFP Fingerprints ✅ COMPLETE
 **Goal**: Core ML fingerprint ⭐⭐⭐
+**Status**: ✅ Complete (15 tests, ECFP2/4/6 + Tanimoto similarity)
 
-- Morgan Algorithm Core (3 days) - iterative atom environment hashing
-- Hashing Infrastructure (1 day) - FNV-1a or xxHash
-- Bit Folding (0.5 day) - map to 1024/2048/4096 bits
-- Variants (0.5 day) - ECFP2, ECFP4, ECFP6
-- Tests & Validation (1 day) - compare to RDKit
-
-**Why Priority**: Most important fingerprint for ML/similarity search, widely used in industry
+- ✅ Morgan Algorithm Core - iterative atom environment hashing with configurable radius
+- ✅ Hashing Infrastructure - std DefaultHasher, no external crate needed
+- ✅ Bit Folding - 1024/2048/4096 bit sizes, Vec<f32> with 0.0/1.0
+- ✅ ECFP Variants - ECFP2 (radius=1), ECFP4 (radius=2), ECFP6 (radius=3)
+- ✅ FCFP Variants - FCFP2/4/6 with pharmacophoric atom invariants
+- ✅ Tanimoto Similarity function
+- ✅ Tests & Validation - 25 tests (ECFP + FCFP: symmetry, similarity, drug-like molecules)
 
 ### Phase 9C: Additional Fingerprints (2 weeks) 🟡
 - Atom Pair Fingerprints (4 days) - distance-based encoding
@@ -221,8 +245,8 @@ Before tackling Gasteiger charges (2 weeks) or 3D conformers (3 weeks), we have 
 ### Mega-Vector Target (~5000+ dimensions)
 - Binary fingerprints: ~4500 bits (MACCS 166 + Morgan 2048 + AtomPair 2048 + PubChem 881)
 - Continuous descriptors: ~500 floats (85+ individual descriptors)
-- **Current**: 20 descriptors + 166 bits = excellent foundation
-- **After Phase 9**: 55 descriptors + ~3000 bits = production-ready
+- **Current**: 28 descriptors + 166 bits = excellent foundation
+- **After Phase 9A**: 35 descriptors + ~3000 bits = production-ready
 - **After Phase 10**: 85 descriptors + ~5000 bits = comprehensive 2D suite
 
 ### Phase 4: SMARTS Pattern Matching
@@ -488,29 +512,29 @@ impl MolecularFeatures {
 
 ## Release Milestones
 
-### v0.1.0 - MVP (Current Goal)
+### v0.1.0 - MVP ✅ Complete
 - [x] SMILES parser (organic subset)
 - [x] Molecular weight
-- [ ] Implicit hydrogens
-- [ ] Basic CLI (calc subcommand)
+- [x] Implicit hydrogens
+- [x] Basic CLI (calc subcommand)
 
-### v0.2.0 - Core Algorithms
-- [ ] Ring detection (SSSR)
-- [ ] Aromaticity perception
-- [ ] 10+ topological descriptors
-- [ ] Parallel batch processing
+### v0.2.0 - Core Algorithms ✅ Complete
+- [x] Ring detection (SSSR)
+- [x] Aromaticity perception
+- [x] 10+ topological descriptors
+- [x] Parallel batch processing
 
-### v0.3.0 - Pattern Matching
-- [ ] SMARTS parser
-- [ ] Substructure search
-- [ ] MACCS fingerprints
+### v0.3.0 - Pattern Matching ✅ Complete
+- [x] SMARTS parser
+- [x] Substructure search
+- [x] MACCS fingerprints
 - [ ] Functional group detection
 
-### v0.4.0 - ML Ready
-- [ ] 50+ descriptors
+### v0.4.0 - ML Ready (In Progress)
+- [x] 30+ descriptors (28 implemented + MACCS 166-bit)
 - [ ] Morgan/ECFP fingerprints
 - [ ] Linfa integration examples
-- [ ] CSV/JSON export
+- [x] CSV export
 
 ### v0.5.0 - Advanced Features
 - [ ] SDF parser
@@ -568,13 +592,12 @@ impl MolecularFeatures {
 
 ---
 
-**Last Updated**: February 10, 2026 12:30 UTC  
-**Status**: Phase 8 Complete - MACCS Keys + Recursive SMARTS + SmallRing Descriptor  
-**Performance**: 10-50x speedup with pre-parsed patterns  
-**Tests**: 212/212 passing ✅  
-**Descriptors**: 20 molecular descriptors (+ MACCS Keys 166-bit fingerprint)  
-**SMARTS Parser**: Extended with recursive SMARTS, ring closures, bond operators  
-**Next Priority**: Phase 9A - Easy topological descriptors (~35 descriptors in 2-3 weeks)  
-**Roadmap**: 40-50 easy/medium descriptors before Gasteiger charges (hard)
+**Last Updated**: February 2026  
+**Status**: Phase 9B ✅ Complete - 35 descriptors + MACCS + Morgan/ECFP  
+**Tests**: 360/360 passing ✅  
+**Descriptors**: 35 molecular descriptors + MACCS 166-bit + Morgan/ECFP fingerprints  
+**TPSA**: RDKit-exact validation (50/50 molecules, ±0.01 Ų)  
+**Next Priority**: Phase 9C - Additional Fingerprints  
+**Roadmap**: Atom Pair, Topological Torsion, PubChem fingerprints
 
 

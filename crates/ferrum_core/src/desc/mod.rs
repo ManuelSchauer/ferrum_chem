@@ -28,6 +28,19 @@ pub mod gravitational;
 pub mod petitjean;
 pub mod tpsa;
 pub mod batch;
+pub mod kappa;
+pub mod functional_groups;
+pub mod qed;
+pub mod path_fingerprints;
+pub mod pubchem;
+pub mod chi;
+pub mod estate;
+pub mod autocorrelation;
+pub mod bcut;
+pub mod weighted_path;
+pub mod mde;
+pub mod extra_counts;
+pub mod vsa;
 
 /// Generic interface for all descriptors.
 ///
