@@ -17,6 +17,8 @@ pub mod pi_system;
 pub mod maccs;
 pub mod small_ring;
 pub mod wiener_numbers;
+pub mod simple_counts;
+pub mod zagreb;
 pub mod batch;
 
 /// Generic interface for all descriptors.

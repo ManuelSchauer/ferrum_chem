@@ -163,6 +163,62 @@ pub const fn get_valences(atomic_number: u8) -> &'static [u8] {
     }
 }
 
+/// Number of valence (outer shell) electrons for an element.
+/// Used for calculating total valence electron count in molecules.
+///
+/// # Examples
+/// - H (1): 1 valence electron
+/// - C (6): 4 valence electrons
+/// - N (7): 5 valence electrons
+/// - O (8): 6 valence electrons
+#[inline]
+pub const fn outer_electrons(atomic_number: u8) -> u8 {
+    match atomic_number {
+        1 => 1,   // H
+        2 => 2,   // He
+        3 => 1,   // Li
+        4 => 2,   // Be
+        5 => 3,   // B
+        6 => 4,   // C
+        7 => 5,   // N
+        8 => 6,   // O
+        9 => 7,   // F
+        10 => 8,  // Ne
+        11 => 1,  // Na
+        12 => 2,  // Mg
+        13 => 3,  // Al
+        14 => 4,  // Si
+        15 => 5,  // P
+        16 => 6,  // S
+        17 => 7,  // Cl
+        18 => 8,  // Ar
+        19 => 1,  // K
+        20 => 2,  // Ca
+        // Transition metals (Sc-Zn)
+        21 => 3, 22 => 4, 23 => 5, 24 => 6, 25 => 7,
+        26 => 8, 27 => 9, 28 => 10, 29 => 2, 30 => 2,
+        31 => 3,  // Ga
+        32 => 4,  // Ge
+        33 => 5,  // As
+        34 => 6,  // Se
+        35 => 7,  // Br
+        36 => 8,  // Kr
+        37 => 1,  // Rb
+        38 => 2,  // Sr
+        // Transition metals (Y-Cd)
+        39 => 3, 40 => 4, 41 => 5, 42 => 6, 43 => 7,
+        44 => 8, 45 => 9, 46 => 10, 47 => 2, 48 => 2,
+        49 => 3,  // In
+        50 => 4,  // Sn
+        51 => 5,  // Sb
+        52 => 6,  // Te
+        53 => 7,  // I
+        54 => 8,  // Xe
+        // For other elements, use simplified model
+        _ => if atomic_number % 10 < 8 { atomic_number % 10 } else { 8 },
+    }
+}
+
 /// Parse element symbol (1 or 2 characters) to atomic number.
 /// Returns None if not recognized.
 pub fn symbol_to_atomic_number(symbol: &str) -> Option<u8> {
