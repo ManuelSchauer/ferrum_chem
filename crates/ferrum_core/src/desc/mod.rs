@@ -24,6 +24,8 @@ pub mod eccentric;
 pub mod ring_types;
 pub mod carbon_types;
 pub mod spiro;
+pub mod gravitational;
+pub mod petitjean;
 pub mod batch;
 
 /// Generic interface for all descriptors.
