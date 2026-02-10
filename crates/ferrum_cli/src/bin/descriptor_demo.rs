@@ -6,6 +6,8 @@ use ferrum_core::desc::aromatic_ring_count::AromaticRingCount;
 use ferrum_core::desc::formal_charge::FormalCharge;
 use ferrum_core::desc::hbond::{HBondDonor, HBondAcceptor};
 use ferrum_core::desc::logp::LogP;
+use ferrum_core::desc::lipinski::LipinskiRuleOfFive;
+use ferrum_core::desc::maccs::MaccsKeys;
 use ferrum_core::io::smiles::parse_smiles;
 use ferrum_core::algo::valency::assign_implicit_hydrogens;
 use ferrum_core::algo::aromaticity::perceive_aromaticity;
@@ -50,6 +52,8 @@ fn main() {
                     (Box::new(HBondDonor), 1),
                     (Box::new(HBondAcceptor), 1),
                     (Box::new(LogP), 1),
+                    (Box::new(LipinskiRuleOfFive), 9),
+                    (Box::new(MaccsKeys), 166),
                     (Box::new(BondCountDescriptor::new(false)), 1),
                     (Box::new(BondCountDescriptor::new(true)), 4),
                     (Box::new(RotatableBondCount), 1),
@@ -68,6 +72,15 @@ fn main() {
                         // Detailed bond count: [total, single, double, triple]
                         println!("[Total: {:.0}, Single: {:.0}, Double: {:.0}, Triple: {:.0}]",
                                  result[0], result[1], result[2], result[3]);
+                    } else if size == 9 {
+                        // Lipinski Rule of Five
+                        println!("MW:{:.1} LogP:{:.2} HBD:{:.0} HBA:{:.0} | Pass: {}",
+                                 result[0], result[1], result[2], result[3],
+                                 if result[8] == 1.0 { "✓" } else { "✗" });
+                    } else if size == 60 || size == 166 {
+                        // MACCS Keys - show count of set bits
+                        let set_count = result.iter().filter(|&&x| x == 1.0).count();
+                        println!("{} / {} keys set", set_count, size);
                     } else {
                         println!("{:?}", result);
                     }
@@ -82,16 +95,19 @@ fn main() {
     }
 
     println!("═══════════════════════════════════════════════════════════════");
-    println!("\n✅ Demo complete! All {} descriptors tested.", 14);
+    println!("\n✅ Demo complete! All {} descriptors tested.", 15);
     println!("\nDescriptor Summary:");
     println!("  • Molecular Weight - Accurate mass calculation");
     println!("  • Atom Counts - Total, heavy, specific elements");
     println!("  • Aromatic Atoms - Counts atoms in aromatic systems");
     println!("  • H-Bond Donors - N-H and O-H groups (Lipinski)");
     println!("  • H-Bond Acceptors - N and O atoms (Lipinski)");
+    println!("  • LogP - Lipophilicity estimation (RDKit patterns)");
+    println!("  • Lipinski Rule of Five - Drug-likeness assessment");
+    println!("  • MACCS Keys - 166 structural fingerprint keys");
     println!("  • Bond Counts - Total and detailed (single/double/triple)");
     println!("  • Rotatable Bonds - Conformational flexibility metric");
     println!("  • Aromatic Rings - Aromatic ring detection");
     println!("  • Formal Charge - Net molecular charge");
-    println!("\n🚀 Phase 7.1 Complete: H-Bond descriptors added!");
+    println!("\n🚀 Phase 8 Complete: MACCS Keys implementation (all 166 keys)!");
 }
