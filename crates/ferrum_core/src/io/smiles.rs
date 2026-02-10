@@ -12,13 +12,16 @@ use crate::io::builder::MoleculeBuilder;
 /// The returned `Molecule` is `Send + Sync` for use in parallel processing.
 ///
 /// # Automatic Processing
-/// This function automatically calculates implicit hydrogens after parsing.
+/// This function automatically:
+/// 1. Calculates implicit hydrogens after parsing
+/// 2. Perceives aromaticity (Hückel 4n+2 rule)
+///
 /// The returned molecule is complete and ready for descriptor calculations.
 /// This ensures consistency across all molecules and prevents bugs from
-/// forgetting to calculate implicit H.
+/// forgetting to calculate implicit H or aromaticity.
 ///
 /// # Performance
-/// Single-pass parsing with automatic implicit H calculation.
+/// Single-pass parsing with automatic implicit H calculation and aromaticity perception.
 /// Typical performance: 1-6M molecules/sec (full pipeline).
 ///
 /// # Example
@@ -27,6 +30,7 @@ use crate::io::builder::MoleculeBuilder;
 /// let mol = parse_smiles("c1ccccc1").unwrap();
 /// assert_eq!(mol.num_atoms(), 6); // benzene
 /// assert_eq!(mol.atoms[0].num_implicit_h, 1); // each C has 1 H
+/// assert!(mol.atoms[0].is_aromatic()); // aromatic carbon
 /// ```
 pub fn parse_smiles(smiles: &str) -> Result<Molecule> {
     let mut parser = SmilesParser::new(smiles);
@@ -35,6 +39,10 @@ pub fn parse_smiles(smiles: &str) -> Result<Molecule> {
     // ✅ Automatically calculate implicit hydrogens
     // This ensures molecules are always complete and ready to use
     crate::algo::valency::assign_implicit_hydrogens(&mut mol)?;
+
+    // ✅ Automatically perceive aromaticity
+    // Required for correct SMARTS matching and descriptors (TPSA, LogP, etc.)
+    crate::algo::aromaticity::perceive_aromaticity(&mut mol);
 
     Ok(mol)
 }
