@@ -22,6 +22,8 @@ pub mod zagreb;
 pub mod balaban;
 pub mod eccentric;
 pub mod ring_types;
+pub mod carbon_types;
+pub mod spiro;
 pub mod batch;
 
 /// Generic interface for all descriptors.
