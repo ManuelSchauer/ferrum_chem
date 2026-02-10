@@ -117,6 +117,48 @@ See [`THREAD_SAFETY.md`](THREAD_SAFETY.md) for guidelines.
 
 **Phase 10 Status**: 6 descriptor groups, 138 new values, 70 tests. Total: 465 tests passing ✅
 
+## 🧬 Phase 10.5: Missing 2D Descriptors ✅ COMPLETE
+
+### Additional Descriptors from RDKit/CDK Survey ✅
+**Goal**: Fill gaps before Phase 11 architecture refactor
+
+#### Batch 1 - Simple counts + fractions ✅ COMPLETE
+- [x] **FractionCSP3** - fraction of sp³ carbons (drug-likeness metric)
+- [x] **RingTypeCounts** - 5 values (aromatic, aliphatic, saturated, heteroaromatic, heterocyclic)
+- [x] **NumAmideBonds** - via SMARTS `[NX3][CX3](=[OX1])`
+- [x] **NumHeavyAtoms** - heavy atom count
+- [x] **AromaticAtomFraction** - fraction of aromatic atoms
+
+#### Batch 2 - Complexity metrics ✅ COMPLETE
+- [x] **HallKierAlpha** - molecular flexibility descriptor (covalent radius deviations)
+- [x] **BertzCT** - graph complexity index (Shannon entropy-based)
+- [x] **Ipc** - information content (Bonchev-Trinajstić)
+- [x] **FragmentComplexity** - elemental diversity (Shannon entropy)
+
+#### Batch 3 - VSA descriptors ✅ COMPLETE
+- [x] **SlogP_VSA** - 12 bins of VSA by Crippen logP contribution ranges ⭐⭐⭐
+- [x] **SMR_VSA** - 10 bins of VSA by Crippen MR contribution ranges ⭐⭐⭐
+- [x] **LabuteASA** - Labute's approximate surface area (1 value)
+
+**Phase 10.5 Output**: 
+- 3 new descriptor modules (extra_counts.rs, vsa.rs)
+- 12 new descriptors, 35 new values (9+23+3)
+- 38 new tests (27+11)
+- Total: **503 tests passing** ✅
+
+**Files Created**:
+- `crates/ferrum_core/src/desc/extra_counts.rs` - 9 descriptors, 27 tests
+- `crates/ferrum_core/src/desc/vsa.rs` - 3 descriptors, 11 tests
+
+**Files Modified**:
+- `crates/ferrum_core/src/desc/logp.rs` - Added `pub fn crippen_atom_contributions()` for per-atom logP/MR
+- `crates/ferrum_core/src/desc/mod.rs` - Registered extra_counts and vsa modules
+
+**Summary**:
+- **62 descriptor implementations** across 41 modules
+- **17,696 total feature dimensions** (17,431 fingerprint bits + 265 continuous)
+- **Production-ready 2D QSAR library** with essential RDKit/CDK features
+
 ## 🧬 Phase 11: Architecture Refactor - Typed Descriptors (2-3 weeks) 🟡
 
 ### Goal: Replace f32 outputs with proper types for QSAR + memory efficiency
@@ -245,7 +287,7 @@ impl DescriptorValue {
 
 ---
 
-## 🧬 Future Work
+## 🐛 Known Issues / Improvements
 
 ### Phase 9B: Morgan/ECFP Fingerprints 🟡
 - [ ] Morgan algorithm core (circular fingerprints)
@@ -298,15 +340,16 @@ impl DescriptorValue {
 
 ## 📊 Performance
 
-### Current (Phase 9A)
+### Current (Phase 10.5 Complete)
 - ✅ SMILES parsing: 1-6M mol/sec
 - ✅ MW calculation: 1B calc/sec
 - ✅ Memory: ~22 bytes/atom
 - ✅ SMARTS matching: ~50k mol/sec (VF2 algorithm)
 - ✅ LogP: ~500k-5M mol/sec (pre-parsed patterns)
 - ✅ TPSA: RDKit-exact (50/50 molecules ±0.01 Ų)
-- ✅ Total tests: 314/314 passing
-- ✅ Total descriptors: 28 (+ MACCS 166-bit)
+- ✅ Total tests: 503/503 passing
+- ✅ Total descriptors: 62 implementations, 17,696 dimensions
+- ✅ Fingerprints: MACCS (166), PubChem (881), ECFP (6144), FCFP (6144), AtomPair (2048), Torsion (2048)
 
 ## 🎯 Milestones
 
@@ -335,12 +378,12 @@ impl DescriptorValue {
 
 ---
 
-**Last Updated**: February 2026  
-**Status**: Phase 9B ✅ Complete  
-**Tests**: 370/370 passing ✅  
-**Descriptors**: 35 molecular descriptors + MACCS 166-bit + ECFP/FCFP fingerprints  
+**Last Updated**: February 10, 2026  
+**Status**: Phase 10.5 ✅ Complete  
+**Tests**: 503/503 passing ✅  
+**Descriptors**: 62 implementations, 17,696 dimensions (17,431 FP bits + 265 continuous)  
 **TPSA**: RDKit-exact (50/50 molecules, ±0.01 Ų)  
-**Next Priority**: Phase 9C - Additional Fingerprints (Atom Pair, Torsion, PubChem)  
-**Strategy**: Complete 2D descriptors before Gasteiger charges or 3D
+**Next Priority**: Phase 11 - Typed Descriptors (2-3 weeks)  
+**Strategy**: Architecture refactor for 4x memory reduction + type safety
 
 

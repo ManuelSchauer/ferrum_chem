@@ -151,7 +151,7 @@ Before tackling Gasteiger charges (2 weeks) or 3D conformers (3 weeks), we have 
 
 ### Phase 9A: Easy Topological Descriptors 🟢
 **Goal**: Maximum value with minimum effort (+35 descriptors)
-**Status**: ✅ Complete (35/35 descriptors implemented)
+**Status**: ✅ Complete (35/35 descriptors implemented, 395 tests)
 
 #### Distance-Based (Foundation for others) ✅ COMPLETE
 - ✅ Wiener Index (10 tests) - sum of shortest paths, reusable distance matrix
@@ -188,7 +188,7 @@ Before tackling Gasteiger charges (2 weeks) or 3D conformers (3 weeks), we have 
 
 ### Phase 9B: Morgan/ECFP Fingerprints ✅ COMPLETE
 **Goal**: Core ML fingerprint ⭐⭐⭐
-**Status**: ✅ Complete (15 tests, ECFP2/4/6 + Tanimoto similarity)
+**Status**: ✅ Complete (25 tests, ECFP2/4/6 + FCFP2/4/6 + Tanimoto similarity)
 
 - ✅ Morgan Algorithm Core - iterative atom environment hashing with configurable radius
 - ✅ Hashing Infrastructure - std DefaultHasher, no external crate needed
@@ -197,6 +197,50 @@ Before tackling Gasteiger charges (2 weeks) or 3D conformers (3 weeks), we have 
 - ✅ FCFP Variants - FCFP2/4/6 with pharmacophoric atom invariants
 - ✅ Tanimoto Similarity function
 - ✅ Tests & Validation - 25 tests (ECFP + FCFP: symmetry, similarity, drug-like molecules)
+
+### Phase 9C: Additional Fingerprints ✅ COMPLETE
+**Status**: ✅ Complete (25 tests)
+
+- ✅ **Atom Pair Fingerprints** - distance-based encoding (7 tests)
+- ✅ **Topological Torsion** - 4-atom path encoding (8 tests)
+- ✅ **PubChem Fingerprints** - 881 structural keys, all SMARTS parse successfully (10 tests)
+- ✅ **SMARTS Parser Enhancement** - added bond OR (`,`) support for `=,:` syntax
+
+### Phase 10: Medium Complexity Descriptors ✅ COMPLETE
+**Status**: ✅ Complete (70 tests, 138 values)
+
+- ✅ **Chi Indices** (chi.rs) - 5 descriptors: ChiPath(8), ChiValencePath(8), ChiCluster(2), ChiChain(5), ChiPathCluster(3) = 26 values, 25 tests
+- ✅ **MDE (Molecular Distance Edge)** (mde.rs) - 15 atom-pair type values, 8 tests
+- ✅ **Weighted Path** (weighted_path.rs) - 10 values (mass + EN weighted, paths 1-5), 6 tests
+- ✅ **EState Indices** (estate.rs) - EStateSummary(3) + EStateAtomTypes(44) = 47 values, 13 tests
+- ✅ **Autocorrelation ATS** (autocorrelation.rs) - 32 values (4 weights × 8 lags), 9 tests
+- ✅ **BCUT Descriptors** (bcut.rs) - 8 eigenvalues (4 weights × hi/lo), Jacobi eigendecomposition (no nalgebra), 9 tests
+
+### Phase 10.5: Missing 2D Descriptors ✅ COMPLETE
+**Goal**: Fill gaps before Phase 11 architecture refactor
+**Status**: ✅ Complete (38 tests, 35 values)
+
+#### Batch 1 - Simple counts + fractions ✅
+- ✅ **FractionCSP3** - fraction of sp³ carbons (drug-likeness)
+- ✅ **RingTypeCounts** - 5 values (aromatic, aliphatic, saturated, heteroaromatic, heterocyclic)
+- ✅ **NumAmideBonds** - SMARTS pattern matching
+- ✅ **NumHeavyAtoms** - heavy atom count
+- ✅ **AromaticAtomFraction** - fraction aromatic
+
+#### Batch 2 - Complexity metrics ✅
+- ✅ **HallKierAlpha** - molecular flexibility (covalent radius deviations)
+- ✅ **BertzCT** - graph complexity (Shannon entropy)
+- ✅ **Ipc** - information content (Bonchev-Trinajstić)
+- ✅ **FragmentComplexity** - elemental diversity
+
+#### Batch 3 - VSA descriptors ✅
+- ✅ **SlogP_VSA** - 12 bins (logP-weighted surface area) ⭐⭐⭐
+- ✅ **SMR_VSA** - 10 bins (MR-weighted surface area) ⭐⭐⭐
+- ✅ **LabuteASA** - approximate surface area
+
+**Output**: 3 new modules (extra_counts.rs, vsa.rs), 12 new descriptors, 38 tests
+
+---
 
 ### Phase 9C: Additional Fingerprints (2 weeks) 🟡
 - Atom Pair Fingerprints (4 days) - distance-based encoding
@@ -238,16 +282,16 @@ Before tackling Gasteiger charges (2 weeks) or 3D conformers (3 weeks), we have 
 **Note**: Many QSAR models work excellently with 2D descriptors only. Defer Phase 12 until 2D suite is rock-solid.
 
 ### Total Achievable Before Hard Problems:
-- **By end of Phase 9** (4-5 weeks): 55+ descriptors, Morgan/ECFP, 3-4 fingerprint types
-- **By end of Phase 10** (8-9 weeks): 85+ descriptors, all topological features
-- **By end of Phase 11** (11-13 weeks): Complete 2D cheminformatics library with electronic properties
+- **By end of Phase 9** (4-5 weeks): 55+ descriptors, Morgan/ECFP, 3-4 fingerprint types ✅ **DONE**
+- **By end of Phase 10** (8-9 weeks): 85+ descriptors, all topological features ✅ **DONE**
+- **By end of Phase 10.5**: 62 descriptors, 17,696 dimensions (complete 2D suite) ✅ **DONE**
+- **By end of Phase 11** (11-13 weeks): Typed descriptors + 4x memory reduction (2-3 weeks from now) 🟡
 
-### Mega-Vector Target (~5000+ dimensions)
-- Binary fingerprints: ~4500 bits (MACCS 166 + Morgan 2048 + AtomPair 2048 + PubChem 881)
-- Continuous descriptors: ~500 floats (85+ individual descriptors)
-- **Current**: 28 descriptors + 166 bits = excellent foundation
-- **After Phase 9A**: 35 descriptors + ~3000 bits = production-ready
-- **After Phase 10**: 85 descriptors + ~5000 bits = comprehensive 2D suite
+### Mega-Vector Target (~5000+ dimensions) ✅ EXCEEDED
+- Binary fingerprints: **17,431 bits** (MACCS 166 + Morgan 12288 + AtomPair 2048 + Torsion 2048 + PubChem 881)
+- Continuous descriptors: **265 floats** (62 implementations)
+- **Total: 17,696 dimensions** 🎉
+- **Status**: Comprehensive 2D QSAR suite complete
 
 ### Phase 4: SMARTS Pattern Matching
 
@@ -592,12 +636,12 @@ impl MolecularFeatures {
 
 ---
 
-**Last Updated**: February 2026  
-**Status**: Phase 9B ✅ Complete - 35 descriptors + MACCS + Morgan/ECFP  
-**Tests**: 360/360 passing ✅  
-**Descriptors**: 35 molecular descriptors + MACCS 166-bit + Morgan/ECFP fingerprints  
+**Last Updated**: February 10, 2026  
+**Status**: Phase 10.5 ✅ Complete - Comprehensive 2D QSAR suite  
+**Tests**: 503/503 passing ✅  
+**Descriptors**: 62 implementations, 17,696 dimensions (17,431 FP bits + 265 continuous)  
 **TPSA**: RDKit-exact validation (50/50 molecules, ±0.01 Ų)  
-**Next Priority**: Phase 9C - Additional Fingerprints  
-**Roadmap**: Atom Pair, Topological Torsion, PubChem fingerprints
+**Next Priority**: Phase 11 - Typed Descriptors (2-3 weeks)  
+**Roadmap**: Architecture refactor for 4x memory reduction + type safety
 
 
