@@ -19,6 +19,8 @@ pub mod small_ring;
 pub mod wiener_numbers;
 pub mod simple_counts;
 pub mod zagreb;
+pub mod balaban;
+pub mod eccentric;
 pub mod batch;
 
 /// Generic interface for all descriptors.
