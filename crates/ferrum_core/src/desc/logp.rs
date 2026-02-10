@@ -101,6 +101,96 @@ impl Descriptor for LogP {
     }
 }
 
+/// Wildman-Crippen Molar Refractivity descriptor.
+///
+/// Uses the same Crippen atom typing as LogP but sums MR contributions instead.
+/// MR is related to molecular volume and polarizability.
+///
+/// Reference: Wildman & Crippen (1999) JCICS 39(5), 868-873.
+pub struct MolarRefractivity;
+
+impl Descriptor for MolarRefractivity {
+    fn name(&self) -> String {
+        "MolarRefractivity".to_string()
+    }
+
+    fn size(&self) -> usize {
+        1
+    }
+
+    fn calculate(&self, mol: &Molecule, output: &mut [Real]) {
+        let mut assigned = vec![false; mol.atoms.len()];
+        let mut mr_sum = 0.0;
+
+        for pattern in PARSED_PATTERNS.iter() {
+            let matches = find_all_matches(mol, &pattern.query);
+            for m in matches {
+                if !m.is_empty() {
+                    let atom_idx = m[0] as usize;
+                    if !assigned[atom_idx] {
+                        assigned[atom_idx] = true;
+                        mr_sum += pattern.mr;
+                    }
+                }
+            }
+        }
+
+        // Add MR contributions from implicit hydrogens
+        // H1 (H on C): MR = 1.057
+        for i in 0..mol.atoms.len() {
+            if assigned[i] {
+                let atom = &mol.atoms[i];
+                let implicit_h = atom.num_implicit_h;
+                if implicit_h > 0 {
+                    mr_sum += 1.057 * (implicit_h as f64);
+                }
+            }
+        }
+
+        output[0] = mr_sum as Real;
+    }
+}
+
+/// Per-atom Crippen contributions (logP, MR) for all heavy atoms.
+///
+/// Returns two vectors: `(logp_contributions, mr_contributions)`,
+/// one entry per heavy atom (indexed by atom index in the molecule).
+/// Unassigned atoms get 0.0. Implicit H contributions are added
+/// to the parent atom.
+pub fn crippen_atom_contributions(mol: &Molecule) -> (Vec<f64>, Vec<f64>) {
+    let n = mol.atoms.len();
+    let mut logp = vec![0.0f64; n];
+    let mut mr = vec![0.0f64; n];
+    let mut assigned = vec![false; n];
+
+    for pattern in PARSED_PATTERNS.iter() {
+        let matches = find_all_matches(mol, &pattern.query);
+        for m in matches {
+            if !m.is_empty() {
+                let idx = m[0] as usize;
+                if !assigned[idx] {
+                    assigned[idx] = true;
+                    logp[idx] = pattern.logp;
+                    mr[idx] = pattern.mr;
+                }
+            }
+        }
+    }
+
+    // Add implicit H contributions to parent atom
+    for i in 0..n {
+        if assigned[i] {
+            let ih = mol.atoms[i].num_implicit_h as f64;
+            if ih > 0.0 {
+                logp[i] += 0.123 * ih;
+                mr[i] += 1.057 * ih;
+            }
+        }
+    }
+
+    (logp, mr)
+}
+
 /// Crippen pattern with LogP and molar refractivity contribution.
 struct CrippenPattern {
     label: &'static str,
@@ -540,5 +630,53 @@ mod tests {
         println!("Acetate LogP: {}", logp);
         // Charged species
         assert!(logp < 2.0);
+    }
+
+    // Molar Refractivity Tests
+    fn calculate_mr(smiles: &str) -> Real {
+        let mol = parse_smiles(smiles).expect("valid SMILES");
+        let mut output = vec![0.0; 1];
+        MolarRefractivity.calculate(&mol, &mut output);
+        output[0]
+    }
+
+    #[test]
+    fn test_mr_methane() {
+        let mr = calculate_mr("C");
+        println!("Methane MR: {}", mr);
+        // RDKit: ~6.73 (C1=2.503 + 4H=4.228)
+        assert!(mr > 5.0 && mr < 8.0);
+    }
+
+    #[test]
+    fn test_mr_ethane() {
+        let mr = calculate_mr("CC");
+        println!("Ethane MR: {}", mr);
+        // Two C1 atoms + 6H
+        assert!(mr > 10.0 && mr < 15.0);
+    }
+
+    #[test]
+    fn test_mr_benzene() {
+        let mr = calculate_mr("c1ccccc1");
+        println!("Benzene MR: {}", mr);
+        // RDKit: ~26.44
+        assert!(mr > 20.0 && mr < 35.0);
+    }
+
+    #[test]
+    fn test_mr_ethanol() {
+        let mr = calculate_mr("CCO");
+        println!("Ethanol MR: {}", mr);
+        // RDKit: ~12.89
+        assert!(mr > 8.0 && mr < 18.0);
+    }
+
+    #[test]
+    fn test_mr_positive() {
+        // MR should always be positive for reasonable molecules
+        let mr = calculate_mr("CC(=O)O");
+        println!("Acetic acid MR: {}", mr);
+        assert!(mr > 0.0);
     }
 }

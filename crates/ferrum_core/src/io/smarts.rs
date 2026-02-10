@@ -122,6 +122,9 @@ pub enum QueryBond {
     
     /// AND of bond types (e.g., =;@ means double AND ring)
     And(Vec<QueryBond>),
+    
+    /// OR of bond types (e.g., =,: means double OR aromatic)
+    Or(Vec<QueryBond>),
 }
 
 impl QueryAtom {
@@ -232,9 +235,20 @@ fn match_primitive(
         
         AtomPrimitive::NotInRing => !atom.is_in_ring(),
         
-        AtomPrimitive::RingSize(_size) => {
-            // Requires ring size calculation - simplified for now
-            atom.is_in_ring()
+        AtomPrimitive::RingSize(size) => {
+            if !atom.is_in_ring() {
+                return false;
+            }
+            // Find SSSR and check if this atom is in a ring of the requested size
+            let mut mol_copy = Molecule {
+                atoms: mol.atoms.clone(),
+                bonds: mol.bonds.clone(),
+                adjacency: mol.adjacency.clone(),
+            };
+            let rings = crate::algo::rings::find_sssr(&mut mol_copy);
+            rings.iter().any(|ring| {
+                ring.len() == *size as usize && ring.contains(&atom_idx)
+            })
         }
         
         AtomPrimitive::Valence(v) => {
@@ -319,6 +333,8 @@ impl QueryBond {
             QueryBond::Not(inner) => !inner.matches(mol, bond_idx),
             
             QueryBond::And(bonds) => bonds.iter().all(|b| b.matches(mol, bond_idx)),
+            
+            QueryBond::Or(bonds) => bonds.iter().any(|b| b.matches(mol, bond_idx)),
         }
     }
 }
@@ -436,6 +452,32 @@ impl SmartsParser {
                                 }
                                 _ => {
                                     bond_type = Some(QueryBond::And(vec![prev_bond, next_bond]));
+                                }
+                            }
+                        }
+                    }
+                }
+                ',' if bond_type.is_some() => {
+                    // OR operator for bonds: =,: means Double OR Aromatic
+                    self.pos += 1;
+                    if let Some(prev_bond) = bond_type.take() {
+                        if self.pos < self.input.len() {
+                            let next_bond = match self.input[self.pos] {
+                                '@' => { self.pos += 1; QueryBond::Ring }
+                                ':' => { self.pos += 1; QueryBond::Aromatic }
+                                '-' => { self.pos += 1; QueryBond::Single }
+                                '=' => { self.pos += 1; QueryBond::Double }
+                                '#' => { self.pos += 1; QueryBond::Triple }
+                                '~' => { self.pos += 1; QueryBond::Any }
+                                c => return Err(format!("Invalid bond after ,: {}", c)),
+                            };
+                            match prev_bond {
+                                QueryBond::Or(mut bonds) => {
+                                    bonds.push(next_bond);
+                                    bond_type = Some(QueryBond::Or(bonds));
+                                }
+                                _ => {
+                                    bond_type = Some(QueryBond::Or(vec![prev_bond, next_bond]));
                                 }
                             }
                         }

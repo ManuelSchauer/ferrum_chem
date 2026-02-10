@@ -20,6 +20,11 @@ use crate::io::builder::MoleculeBuilder;
 /// This ensures consistency across all molecules and prevents bugs from
 /// forgetting to calculate implicit H or aromaticity.
 ///
+/// # Note on Kekulization
+/// This function does NOT kekulize aromatic rings (assign explicit single/double bonds).
+/// Aromatic bonds remain as BondType::Aromatic with the aromatic flag set.
+/// This matches RDKit's default representation and is correct for TPSA and other descriptors.
+///
 /// # Performance
 /// Single-pass parsing with automatic implicit H calculation and aromaticity perception.
 /// Typical performance: 1-6M molecules/sec (full pipeline).
@@ -43,6 +48,11 @@ pub fn parse_smiles(smiles: &str) -> Result<Molecule> {
     // ✅ Automatically perceive aromaticity
     // Required for correct SMARTS matching and descriptors (TPSA, LogP, etc.)
     crate::algo::aromaticity::perceive_aromaticity(&mut mol);
+
+    // ❌ Do NOT kekulize by default
+    // RDKit keeps aromatic bonds as type AROMATIC (bond value = 1.5)
+    // Kekulization is only needed for specific algorithms that require it
+    // TPSA, LogP, and most descriptors work correctly with AROMATIC bond type
 
     Ok(mol)
 }
@@ -140,13 +150,14 @@ impl<'a> SmilesParser<'a> {
             }
             // Ring closures (digits)
             '0'..='9' => {
-                let ring_num = self.parse_ring_number()?;
+                // Single digit ring closure (0-9)
+                let ring_num = self.parse_single_digit_ring()?;
                 self.handle_ring_closure(ring_num)?;
             }
             '%' => {
-                // Two-digit ring number
+                // Multi-digit ring number (10-99)
                 self.pos += 1;
-                let ring_num = self.parse_ring_number()?;
+                let ring_num = self.parse_multi_digit_ring()?;
                 self.handle_ring_closure(ring_num)?;
             }
             // Bracketed atom [...]
@@ -216,7 +227,7 @@ impl<'a> SmilesParser<'a> {
                 format!("Unknown element symbol: {}", symbol)
             ))?;
 
-        self.add_atom(atomic_num, is_aromatic, 0, 0, 0)?;
+        self.add_atom(atomic_num, is_aromatic, 0, 0, 0, false)?;
         Ok(())
     }
 
@@ -309,12 +320,12 @@ impl<'a> SmilesParser<'a> {
         }
         self.pos += 1;
 
-        self.add_atom(atomic_num, is_aromatic, isotope, charge, h_count)?;
+        self.add_atom(atomic_num, is_aromatic, isotope, charge, h_count, true)?;
         Ok(())
     }
 
     fn add_atom(&mut self, atomic_num: u8, is_aromatic: bool, isotope: u16,
-                charge: i8, h_count: u8) -> Result<()> {
+                charge: i8, h_count: u8, is_bracket: bool) -> Result<()> {
         let new_idx = self.mol.add_atom(atomic_num);
 
         if is_aromatic {
@@ -329,12 +340,17 @@ impl<'a> SmilesParser<'a> {
         if h_count > 0 {
             self.mol.set_explicit_h(new_idx, h_count);
         }
+        // Bracket atoms have explicit H specification (even if 0)
+        if is_bracket {
+            self.mol.atoms[new_idx as usize].set_no_implicit_h(true);
+        }
 
         // Connect to previous atom
         if let Some(prev_idx) = self.last_atom {
             let bond_type = self.pending_bond.unwrap_or_else(|| {
-                // Default bond type based on aromaticity
-                if is_aromatic {
+                // Default bond: aromatic only if BOTH atoms are aromatic
+                let prev_aromatic = self.mol.atoms[prev_idx as usize].is_aromatic();
+                if is_aromatic && prev_aromatic {
                     BondType::Aromatic
                 } else {
                     BondType::Single
@@ -349,15 +365,36 @@ impl<'a> SmilesParser<'a> {
         Ok(())
     }
 
-    fn parse_ring_number(&mut self) -> Result<usize> {
+    fn parse_single_digit_ring(&mut self) -> Result<usize> {
+        // SMILES spec: single digit ring closures are 0-9
+        // They must NOT be parsed greedily - '12' is two closures: '1' and '2'
+        let c = self.current_char()?;
+        if !c.is_ascii_digit() {
+            return Err(FerrumError::ParseError(
+                "Expected single digit ring number".to_string()
+            ));
+        }
+        
+        self.pos += 1;
+        Ok((c as u8 - b'0') as usize)
+    }
+
+    fn parse_multi_digit_ring(&mut self) -> Result<usize> {
+        // SMILES spec: multi-digit ring closures use % prefix
+        // After %, read exactly 2 digits for ring numbers 10-99
         let start = self.pos;
-        while self.pos < self.input.len() && self.input.as_bytes()[self.pos].is_ascii_digit() {
+        
+        // Read up to 2 digits
+        let mut count = 0;
+        while count < 2 && self.pos < self.input.len() && 
+              self.input.as_bytes()[self.pos].is_ascii_digit() {
             self.pos += 1;
+            count += 1;
         }
 
-        if start == self.pos {
+        if count == 0 {
             return Err(FerrumError::ParseError(
-                "Expected ring number".to_string()
+                "Expected ring number after %".to_string()
             ));
         }
 
@@ -380,7 +417,16 @@ impl<'a> SmilesParser<'a> {
 
         if let Some(ring_atom) = self.rings[ring_num] {
             // Close the ring
-            let bond_type = self.pending_bond.unwrap_or(BondType::Single);
+            let bond_type = self.pending_bond.unwrap_or_else(|| {
+                // Default: aromatic if both atoms are aromatic
+                let a1_arom = self.mol.atoms[ring_atom as usize].is_aromatic();
+                let a2_arom = self.mol.atoms[current_atom as usize].is_aromatic();
+                if a1_arom && a2_arom {
+                    BondType::Aromatic
+                } else {
+                    BondType::Single
+                }
+            });
             self.mol.add_bond(ring_atom, current_atom, bond_type);
             self.rings[ring_num] = None;
             self.pending_bond = None;

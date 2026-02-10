@@ -1,0 +1,127 @@
+//! Kekulization - assign explicit single/double bonds to aromatic rings.
+//!
+//! Aromatic rings are typically represented with delocalized electrons,
+//! but many algorithms require explicit bond orders. Kekulization finds
+//! a valid alternating single/double bond pattern for aromatic systems.
+//!
+//! ## Algorithm
+//! 1. Find all aromatic rings
+//! 2. For each ring, assign alternating Single/Double bonds
+//! 3. Keep the aromatic flag set on bonds (RDKit style)
+//!
+//! ## Thread Safety
+//! This function modifies the molecule in-place and is not thread-safe.
+//! Call it once per molecule before parallel descriptor calculations.
+
+use crate::mol::molecule::Molecule;
+use crate::types::{AtomIdx, BondType};
+use crate::algo::rings::find_sssr;
+
+/// Kekulize aromatic rings by assigning explicit single/double bond orders.
+///
+/// After kekulization:
+/// - Aromatic bonds will have bond_type Single or Double
+/// - The aromatic FLAG remains set (for TPSA and other descriptors)
+/// - The molecule representation is canonical and consistent
+///
+/// # Example
+/// ```ignore
+/// let mut mol = parse_smiles("c1ccccc1").unwrap(); // benzene
+/// perceive_aromaticity(&mut mol);
+/// kekulize(&mut mol);
+/// // Now bonds have explicit Single/Double types, but aromatic flags are set
+/// ```
+pub fn kekulize(mol: &mut Molecule) {
+    // Find all aromatic rings
+    let rings = find_sssr(mol);
+    
+    for ring in rings {
+        // Check if this ring is aromatic
+        if !is_aromatic_ring(mol, &ring) {
+            continue;
+        }
+        
+        // Assign alternating single/double bonds
+        kekulize_ring(mol, &ring);
+    }
+}
+
+/// Check if all atoms in a ring are aromatic
+fn is_aromatic_ring(mol: &Molecule, ring: &[AtomIdx]) -> bool {
+    ring.iter().all(|&idx| mol.atoms[idx as usize].is_aromatic())
+}
+
+/// Assign alternating single/double bonds to an aromatic ring.
+/// Keeps the aromatic flag set on bonds.
+fn kekulize_ring(mol: &mut Molecule, ring: &[AtomIdx]) {
+    let n = ring.len();
+    
+    // For standard aromatic rings (5, 6, 7 members), use simple alternating pattern
+    // Start with double bond on first edge
+    for i in 0..n {
+        let from = ring[i];
+        let to = ring[(i + 1) % n];
+        
+        if let Some(bond_idx) = find_bond_between(mol, from, to) {
+            let bond = &mut mol.bonds[bond_idx];
+            
+            // Alternate: double on even indices, single on odd
+            bond.bond_type = if i % 2 == 0 {
+                BondType::Double
+            } else {
+                BondType::Single
+            };
+            
+            // IMPORTANT: Keep aromatic flag set (RDKit style)
+            // This allows TPSA and other algorithms to detect aromatic bonds
+            // even after kekulization
+        }
+    }
+}
+
+/// Find bond index between two atoms.
+fn find_bond_between(mol: &Molecule, from: AtomIdx, to: AtomIdx) -> Option<usize> {
+    for (idx, bond) in mol.bonds.iter().enumerate() {
+        if (bond.source == from && bond.target == to) ||
+           (bond.source == to && bond.target == from) {
+            return Some(idx);
+        }
+    }
+    None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::io::smiles::parse_smiles;
+    use crate::algo::aromaticity::perceive_aromaticity;
+    
+    #[test]
+    fn test_kekulize_benzene() {
+        let mut mol = parse_smiles("c1ccccc1").unwrap();
+        perceive_aromaticity(&mut mol);
+        
+        // Before kekulization: all bonds are Aromatic type
+        for bond in &mol.bonds {
+            assert_eq!(bond.bond_type, BondType::Aromatic);
+        }
+        
+        kekulize(&mut mol);
+        
+        // After kekulization: bonds are Single/Double but aromatic flag is set
+        let mut single_count = 0;
+        let mut double_count = 0;
+        
+        for bond in &mol.bonds {
+            assert!(bond.is_aromatic(), "Aromatic flag should remain set");
+            match bond.bond_type {
+                BondType::Single => single_count += 1,
+                BondType::Double => double_count += 1,
+                _ => panic!("Unexpected bond type after kekulization"),
+            }
+        }
+        
+        assert_eq!(single_count, 3, "Benzene should have 3 single bonds");
+        assert_eq!(double_count, 3, "Benzene should have 3 double bonds");
+    }
+}

@@ -245,12 +245,13 @@ fn mark_ring_aromatic(mol: &mut Molecule, ring: &[AtomIdx]) {
         mol.atoms[atom_idx as usize].set_aromatic(true);
     }
 
-    // Mark bonds
+    // Mark bonds - set aromatic flag AND bond type
     for i in 0..ring.len() {
         let from = ring[i];
         let to = ring[(i + 1) % ring.len()];
 
         if let Some(bond_idx) = find_bond_between(mol, from, to) {
+            mol.bonds[bond_idx].set_aromatic(true);
             mol.bonds[bond_idx].bond_type = BondType::Aromatic;
         }
     }
