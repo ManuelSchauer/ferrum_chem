@@ -7,12 +7,11 @@
 //! parameters by atomic contributions. Journal of chemical information and computer 
 //! sciences, 39(5), 868-873.
 
-use super::Descriptor;
 use crate::mol::molecule::Molecule;
-use crate::types::Real;
 use crate::io::smarts::{parse_smarts, QueryGraph};
 use crate::algo::iso::find_all_matches;
 use once_cell::sync::Lazy;
+use super::typed::Descriptor;
 
 /// Pre-parsed Crippen patterns for fast LogP calculation.
 /// Patterns are parsed once at startup and reused for all calculations.
@@ -37,118 +36,6 @@ struct ParsedPattern {
     query: QueryGraph,
     logp: f64,
     mr: f64,
-}
-
-/// Wildman-Crippen LogP descriptor using SMARTS pattern matching.
-/// 
-/// Returns a single value: the predicted octanol-water partition coefficient (LogP).
-/// Higher values indicate more lipophilic (hydrophobic) compounds.
-/// 
-/// This implementation uses SMARTS patterns from RDKit's Crippen parameters,
-/// matching each atom against patterns in order (first match wins).
-/// 
-/// ## Performance
-/// Patterns are pre-parsed at startup using `once_cell::Lazy`, providing ~10x speedup
-/// compared to parsing patterns on every calculation.
-pub struct LogP;
-
-impl Descriptor for LogP {
-    fn name(&self) -> String {
-        "LogP".to_string()
-    }
-    
-    fn size(&self) -> usize {
-        1
-    }
-    
-    fn calculate(&self, mol: &Molecule, output: &mut [Real]) {
-        // Track which atoms have been assigned
-        let mut assigned = vec![false; mol.atoms.len()];
-        let mut logp_sum = 0.0;
-        
-        // Try to match each pattern against the molecule
-        for pattern in PARSED_PATTERNS.iter() {
-            // Find all matches using pre-parsed query
-            let matches = find_all_matches(mol, &pattern.query);
-            
-            // For each match, assign the first unassigned atom
-            // The pattern may match multiple atoms (branching), but we only
-            // assign the contribution to the FIRST (root) atom
-            for m in matches {
-                if !m.is_empty() {
-                    let atom_idx = m[0] as usize;
-                    if !assigned[atom_idx] {
-                        assigned[atom_idx] = true;
-                        logp_sum += pattern.logp;
-                    }
-                }
-            }
-        }
-        
-        // Add contributions from implicit hydrogens on ALL assigned atoms
-        for i in 0..mol.atoms.len() {
-            if assigned[i] {
-                let atom = &mol.atoms[i];
-                let implicit_h = atom.num_implicit_h;
-                if implicit_h > 0 {
-                    // Use H1 contribution: [#1][#6,#1] = 0.123
-                    logp_sum += 0.123 * (implicit_h as f64);
-                }
-            }
-        }
-        
-        output[0] = logp_sum as Real;
-    }
-}
-
-/// Wildman-Crippen Molar Refractivity descriptor.
-///
-/// Uses the same Crippen atom typing as LogP but sums MR contributions instead.
-/// MR is related to molecular volume and polarizability.
-///
-/// Reference: Wildman & Crippen (1999) JCICS 39(5), 868-873.
-pub struct MolarRefractivity;
-
-impl Descriptor for MolarRefractivity {
-    fn name(&self) -> String {
-        "MolarRefractivity".to_string()
-    }
-
-    fn size(&self) -> usize {
-        1
-    }
-
-    fn calculate(&self, mol: &Molecule, output: &mut [Real]) {
-        let mut assigned = vec![false; mol.atoms.len()];
-        let mut mr_sum = 0.0;
-
-        for pattern in PARSED_PATTERNS.iter() {
-            let matches = find_all_matches(mol, &pattern.query);
-            for m in matches {
-                if !m.is_empty() {
-                    let atom_idx = m[0] as usize;
-                    if !assigned[atom_idx] {
-                        assigned[atom_idx] = true;
-                        mr_sum += pattern.mr;
-                    }
-                }
-            }
-        }
-
-        // Add MR contributions from implicit hydrogens
-        // H1 (H on C): MR = 1.057
-        for i in 0..mol.atoms.len() {
-            if assigned[i] {
-                let atom = &mol.atoms[i];
-                let implicit_h = atom.num_implicit_h;
-                if implicit_h > 0 {
-                    mr_sum += 1.057 * (implicit_h as f64);
-                }
-            }
-        }
-
-        output[0] = mr_sum as Real;
-    }
 }
 
 /// Per-atom Crippen contributions (logP, MR) for all heavy atoms.
@@ -190,6 +77,66 @@ pub fn crippen_atom_contributions(mol: &Molecule) -> (Vec<f64>, Vec<f64>) {
 
     (logp, mr)
 }
+
+/// Compute total LogP and Molar Refractivity for a molecule.
+///
+/// Returns `(logp, mr)` using Wildman-Crippen atom contributions.
+/// This is the main computation entry point used by the typed descriptors
+/// and other modules (lipinski, qed, etc.).
+pub fn compute_logp(mol: &Molecule) -> (f64, f64) {
+    let (logp_contribs, mr_contribs) = crippen_atom_contributions(mol);
+    (logp_contribs.iter().sum(), mr_contribs.iter().sum())
+}
+
+/// Wildman-Crippen LogP descriptor.
+///
+/// Returns `DescriptorValue::Float(f32)`: the predicted octanol-water
+/// partition coefficient. Higher values indicate more lipophilic compounds.
+///
+/// Uses SMARTS patterns from RDKit's Crippen parameters, matching each atom
+/// against patterns in order (first match wins).
+///
+/// ## Performance
+/// Patterns are pre-parsed at startup using `once_cell::Lazy`, providing ~10x
+/// speedup compared to parsing patterns on every calculation.
+pub struct LogP;
+
+impl Descriptor for LogP {
+    fn name(&self) -> &str {
+        "LogP"
+    }
+
+    fn calculate(&self, mol: &mut Molecule) -> super::typed::DescriptorValue {
+        let (logp, _) = compute_logp(mol);
+        super::typed::DescriptorValue::Float(logp as f32)
+    }
+}
+
+/// Wildman-Crippen Molar Refractivity descriptor.
+///
+/// Uses the same Crippen atom typing as LogP but returns the MR sum.
+/// MR is related to molecular volume and polarizability.
+///
+/// Reference: Wildman & Crippen (1999) JCICS 39(5), 868-873.
+pub struct MolarRefractivity;
+
+impl Descriptor for MolarRefractivity {
+    fn name(&self) -> &str {
+        "MolarRefractivity"
+    }
+
+    fn calculate(&self, mol: &mut Molecule) -> super::typed::DescriptorValue {
+        let (_, mr) = compute_logp(mol);
+        super::typed::DescriptorValue::Float(mr as f32)
+    }
+}
+
+// Thread safety
+const _: () = {
+    const fn assert_send_sync<T: Send + Sync>() {}
+    let _ = assert_send_sync::<LogP>;
+    let _ = assert_send_sync::<MolarRefractivity>;
+};
 
 /// Crippen pattern with LogP and molar refractivity contribution.
 struct CrippenPattern {
@@ -339,11 +286,8 @@ mod tests {
         let mut mol = parse_smiles(smiles).unwrap();
         assign_implicit_hydrogens(&mut mol).unwrap();
         perceive_aromaticity(&mut mol);
-        
-        let desc = LogP;
-        let mut result = vec![0.0];
-        desc.calculate(&mol, &mut result);
-        result[0] as f64
+        let (logp, _) = compute_logp(&mol);
+        logp
     }
     
     #[test]
@@ -633,11 +577,10 @@ mod tests {
     }
 
     // Molar Refractivity Tests
-    fn calculate_mr(smiles: &str) -> Real {
+    fn calculate_mr(smiles: &str) -> f64 {
         let mol = parse_smiles(smiles).expect("valid SMILES");
-        let mut output = vec![0.0; 1];
-        MolarRefractivity.calculate(&mol, &mut output);
-        output[0]
+        let (_, mr) = compute_logp(&mol);
+        mr
     }
 
     #[test]

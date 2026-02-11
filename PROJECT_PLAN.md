@@ -28,7 +28,7 @@ ferrum_chem/
 │   │   │   │   ├── valency.rs      # ✅ Implicit hydrogen calculation (bracket-aware)
 │   │   │   │   ├── kekulize.rs     # ✅ Optional kekulization module
 │   │   │   │   ├── canon.rs        # TODO: Morgan canonicalization
-│   │   │   │   ├── electronic.rs   # TODO: Gasteiger partial charges
+│   │   │   │   ├── electronic.rs   # ✅ Gasteiger partial charges (RDKit-validated)
 │   │   │   │   └── standardize.rs  # TODO: Standardization pipeline
 │   │   │   └── desc/         # Descriptor calculations (~30 modules)
 │   │   │       ├── molecular_weight.rs  # ✅ Molecular weight
@@ -242,50 +242,107 @@ Before tackling Gasteiger charges (2 weeks) or 3D conformers (3 weeks), we have 
 
 ---
 
-### Phase 9C: Additional Fingerprints (2 weeks) 🟡
-- Atom Pair Fingerprints (4 days) - distance-based encoding
-- Topological Torsion (4 days) - 4-atom path encoding
-- PubChem Fingerprints (3 days) - 881 structural keys
+### Phase 9C-10: ✅ Complete (see above)
 
-### Phase 10: Medium Complexity Descriptors (3-4 weeks) 🟡
-- Chi Indices (5 days) - path/cluster/chain connectivity
-- MDE Descriptors (4 days) - molecular distance edge
-- Weighted Path (3 days)
-- EState Indices (5 days) - electrotopological state
-- Autocorrelation ATS (5 days) - mass/charge/polarizability weighted
-- BCUT Descriptors (5 days) - eigenvalue based (needs nalgebra)
+### Phase 11: Typed Descriptor Refactoring ✅ COMPLETE
+**Status**: ✅ Complete (February 11, 2026)
 
-**Output**: +30-40 medium complexity descriptors
+**Architecture overhaul:**
+- Single `Descriptor` trait with `DescriptorValue` enum returns
+- Removed legacy dual-trait API (`LegacyDescriptor` + `TypedDescriptor`)
+- Renamed all 60 `*Typed` structs → clean names (e.g. `LogPTyped` → `LogP`)
+- Memory-optimized types: BitVec fingerprints (31x), u32 counts, f32 floats
+- 32x total memory reduction (67.5 GB → 2.13 GB for 1M molecules)
+- Extracted computation functions for cross-descriptor reuse
+- Added `SingleAtomCount::new("C")` configurable element counter
+- Net -645 lines of code, 568 unit tests + 14 doc tests passing
 
-### Phase 11: Electronic Descriptors - COMPLEXITY CLIFF (3-4 weeks) 🔴
-⚠️ **WARNING**: Advanced features ahead
+**Output**: Clean single-API architecture, 60 descriptors, production-ready typed system
 
-#### Gasteiger Partial Charges (2 weeks) 🔴
-**Hardest non-3D feature**
-- Implementation (10 days) - iterative electronegativity equalization
-- Tests & Validation (4 days) - compare to RDKit, many edge cases
-- **Why Hard**: Complex iteration, resonance/conjugation edge cases, requires careful validation
+### Phase 12: Electronic Descriptors ✅ COMPLETE
+**Status**: ✅ Complete (February 11, 2026)
 
-#### Charge-Derived Descriptors (1 week)
-- Partial Charge Min/Max/Abs (2 days) - requires Gasteiger first
-- CPSA Descriptors (3 days) - Charged Partial Surface Area (needs charges + 3D coords)
-- Polarizability Descriptors (2 days)
+#### 12A: Gasteiger Partial Charges ✅
+- Gasteiger-Marsili iterative electronegativity equalization (12 iterations, geometric damping 0.5^(k+1))
+- 15 atom types with (a, b, c) coefficients from RDKit `GasteigerParams.cpp`:
+  H, C×3 (sp/sp2/sp3), N×3 (sp/sp2/sp3), O×2 (sp2/sp3), F, Cl, Br, I, S×2, P
+- Hybridization from bond types + RDKit conjugation logic (norbs=4, degree≤3, conjugated neighbor → SP2)
+- Special hydrogen ionization constant IONXH = 20.02 (RDKit `GasteigerParams.h`)
+- RDKit cross-validated: 17 molecules within ±0.05 per atom
+- 28 tests (12 basic + 16 RDKit validation)
 
-### Phase 12: 3D Descriptors - MAJOR PROJECT (Future) 🔴
-⚠️ **BLOCKED**: Requires conformer generation first
+#### 12B: Charge-Derived Descriptors ✅
+- MaxPartialCharge, MinPartialCharge, MaxAbsPartialCharge, MinAbsPartialCharge (4 scalar descriptors)
+- GasteigerCharges (per-atom charge vector)
+- APol (sum of atomic polarizabilities), BPol (bond polarizability differences)
+- PEOE_VSA (14 charge-weighted surface area bins)
+- 26 new tests, 67 total descriptor implementations
 
-- Conformer Generation (2-3 weeks) - ETKDG algorithm
-- 3D Shape Descriptors (1 week) - PMI, Asphericity, etc.
-- 3D Pharmacophore Fingerprints (2 weeks)
-- Molecular Surface/Volume (2 weeks)
+**Output**: 8 new descriptors + 14 PEOE_VSA bins, 622 unit tests + 14 doc tests passing
 
-**Note**: Many QSAR models work excellently with 2D descriptors only. Defer Phase 12 until 2D suite is rock-solid.
+### Phase 13: ML Pipeline 🔵 NEXT
+**Goal**: Full QSAR training & prediction pipeline — all from scratch, no linfa
 
-### Total Achievable Before Hard Problems:
-- **By end of Phase 9** (4-5 weeks): 55+ descriptors, Morgan/ECFP, 3-4 fingerprint types ✅ **DONE**
-- **By end of Phase 10** (8-9 weeks): 85+ descriptors, all topological features ✅ **DONE**
-- **By end of Phase 10.5**: 62 descriptors, 17,696 dimensions (complete 2D suite) ✅ **DONE**
-- **By end of Phase 11** (11-13 weeks): Typed descriptors + 4x memory reduction (2-3 weeks from now) 🟡
+#### 13A: Data Infrastructure
+- `QsarDataset` struct: features (f64 ndarray), targets, names, f32→f64 conversion boundary
+- `StandardScaler` (Z-score) + `MinMaxScaler` — must store params for inference
+- Feature selection: variance threshold, correlation filter (r > 0.95 removal)
+- PCA dimensionality reduction (reuse Jacobi eigendecomp from BCUT)
+- Train/test splitting: random, stratified, **scaffold-based** (most important for QSAR)
+
+#### 13B: Supervised Models — All From Scratch
+- **k-NN** (~100 lines) — Tanimoto for fingerprints, Euclidean for descriptors. Doubles as AD method
+- **Random Forest** (~600 lines) — decision tree + bagging, optimized for binary fingerprint features, gives feature importance
+- **PLS Regression** (~200 lines, NIPALS) — handles collinearity in mega-vector
+- **Elastic Net / LASSO** (~250 lines, coordinate descent) — automatic feature selection with named features
+- **Classification variants**: RF classifier, k-NN classifier (active/inactive)
+- **Evaluation metrics**:
+  - Regression: R², Q² (cross-validated), RMSE, MAE
+  - Classification: Accuracy, MCC (Matthews), AUC-ROC, Sensitivity/Specificity
+  - Y-randomization (QSAR validation gold standard)
+
+#### 13C: Custom ART-2A (Unsupervised)
+- Adaptive Resonance Theory 2A (~200 lines)
+- Vigilance parameter ρ, learning rate η, L2-normalized input
+- Activation → Competition → Vigilance check → Weight update/new cluster
+- Use cases: chemical space clustering, applicability domain definition
+
+#### 13D: Pipeline, Inference & Optimization
+- `QsarPipeline` serializable struct: scaler + optional PCA + model + AD + metadata
+- Modular: hand-tunable hyperparameters OR built-in grid search optimization
+- `AutoQsar`: train all models, compare via CV, report best
+- Applicability Domain trait: k-NN distance AD, leverage-based AD (Williams plot), ART-2A AD
+- K-Fold CV, Leave-One-Out, scaffold-based CV
+- Conformal prediction for uncertainty quantification
+- Batch prediction (parallel + streaming for 1M+ molecules)
+
+**Dependencies**: `ndarray` 0.16 only — no linfa (~1750 lines total, all from scratch)
+
+### Phase 14: Terminal UI (TUI) 🔵
+**Goal**: Interactive terminal interface for QSAR workflows
+
+- Model training wizard (dataset → preprocess → train → evaluate)
+- Batch prediction interface
+- Chemical space visualization (ASCII scatter plots)
+- Descriptor profiling dashboard
+- Pipeline management (save/load/compare models)
+
+### Phase 15: Infrastructure & Ecosystem 🔵
+- SDF/MOL V2000/V3000 parser
+- Morgan canonicalization (canonical SMILES)
+- PyO3 Python bindings
+- crates.io publish
+- Full API documentation + benchmarks vs RDKit
+
+### Phase 16: 3D Descriptors — SPECIAL CASES 🔴
+⚠️ **Deferred**: Slower computation, only for specialized QSAR models
+- Conformer generation (ETKDG algorithm)
+- 3D shape descriptors (PMI, asphericity, spherocity)
+- 3D pharmacophore fingerprints
+- Molecular surface/volume
+- WHIM/GETAWAY descriptors
+
+**Note**: 2D descriptors + ML pipeline covers 90%+ of QSAR use cases. 3D only needed for shape-dependent SAR or docking-derived models.
 
 ### Mega-Vector Target (~5000+ dimensions) ✅ EXCEEDED
 - Binary fingerprints: **17,431 bits** (MACCS 166 + Morgan 12288 + AtomPair 2048 + Torsion 2048 + PubChem 881)
@@ -293,148 +350,20 @@ Before tackling Gasteiger charges (2 weeks) or 3D conformers (3 weeks), we have 
 - **Total: 17,696 dimensions** 🎉
 - **Status**: Comprehensive 2D QSAR suite complete
 
-### Phase 4: SMARTS Pattern Matching
+### Milestone Summary
+- **Phase 1-11** ✅ Complete: 60 descriptors, 17,696 dims, 32x memory reduction, typed API
+- **Phase 12** ✅ Complete: Gasteiger charges + charge-derived descriptors (67 descriptors, 622 tests)
+- **Phase 13**: Full ML pipeline (train/predict/evaluate) 🔵
+- **Phase 14**: TUI for interactive QSAR workflows 🔵
+- **Phase 15**: SDF parser, Python bindings, crates.io 🔵
+- **Phase 16**: 3D descriptors (special cases only) 🔴
 
-#### 4.1 SMARTS Parser (`io/smarts.rs`)
-- **Priority**: HIGH (needed for MACCS, functional groups)
-- **Complexity**: Higher than SMILES (logical operators, recursive patterns)
-- **Strategy**: Separate QueryGraph structure
-- **Features**:
-  - Logical operators (AND, OR, NOT)
-  - Atom primitives (!, &, ;)
-  - Recursive SMARTS ($(...))
-  - Ring membership queries
-
-#### 4.2 Substructure Matching (`algo/iso.rs`)
-- **Algorithm**: VF2 or Ullmann with backtracking
-- **Performance**: Use heuristics (degree filtering, element counts)
-- **Optimization**: Pre-compute query fingerprints
-
-### Phase 5: Additional I/O Formats
-
-#### 5.1 CSV Reader for SMILES (`io/csv.rs`)
-- **Priority**: HIGH (essential for ML workflows)
-- **Format**: Read CSV files with SMILES column
-- **Features**:
-  - Automatic SMILES column detection
-  - Header parsing (id, smiles, properties)
-  - Parallel reading with Rayon
-  - Error handling (skip invalid SMILES)
-  - Memory-mapped files for large datasets
-- **Use Case**: Batch processing of chemical datasets
-- **Performance**: Stream processing, >100k molecules/sec
-- **Dependencies**: `csv` crate for parsing
-- **Output**: Iterator of (id, Molecule, properties)
-- **Example**:
-  ```rust
-  let reader = CsvReader::from_path("compounds.csv")?;
-  let molecules: Vec<_> = reader
-      .with_smiles_column("SMILES")
-      .parallel_parse()
-      .collect();
-  ```
-
-#### 5.2 SDF/MOL Parser (`io/sdf.rs`)
-- **Priority**: MEDIUM
-- **Format**: MDL MOL/SDF V2000/V3000
-- **Features**: 3D coordinates, property fields
-- **Use Case**: Reading from chemical databases
-
-#### 5.3 InChI Generation
-- **Strategy**: Use external `rust-inchi` crate (C bindings)
-- **Alternative**: Implement basic InChI layer 1 (formula + connectivity)
-
-### Phase 6: Machine Learning Integration
-
-#### 6.1 Feature Vector Design (DECIDED)
-
-**Unified Float Representation:**
-- **All features stored as `Vec<f32>`** (fingerprints + descriptors)
-- **Fingerprint bits encoded as 0.0/1.0** (not packed bits)
-- **No conversion overhead** for ML pipeline
-- **Memory**: ~20 KB per molecule (acceptable for batch processing)
-
-**Implementation:**
-```rust
-pub struct MolecularFeatures {
-    /// All features as floats (~5000 dimensions)
-    /// Layout:
-    ///   [0..2048]:     ECFP4 (bits as 0.0/1.0)
-    ///   [2048..4096]:  FCFP4
-    ///   [4096..4262]:  MACCS (166 bits)
-    ///   [4262..5143]:  PubChem (881 bits)
-    ///   [5143..5182]:  Biosymphony (39 bits)
-    ///   [5182..]:      Physicochemical descriptors
-    pub features: Vec<f32>,
-}
-
-impl MolecularFeatures {
-    pub fn as_ndarray(&self) -> ArrayView1<f32> {
-        ArrayView1::from(&self.features)
-    }
-    
-    pub fn normalize(&mut self, scaler: &Scaler) {
-        // Only normalize continuous descriptors
-        scaler.transform(&mut self.features[5182..]);
-    }
-}
-```
-
-**Rationale:**
-- ✅ ML is primary use case
-- ✅ Simplicity over memory optimization (clarity philosophy)
-- ✅ Zero-cost ndarray conversion
-- ✅ No temporary allocations in ML pipeline
-- ✅ Matches linfa/scikit-learn expectations
-- ✅ Still supports Tanimoto similarity (treat >0.5 as bit set)
-- ⚠️ Trade-off: 8x memory vs packed bits (2.5 KB → 20 KB) - acceptable
-
-**Performance:**
-- No conversion overhead: 0 ns (vs ~15 μs with separate storage)
-- Direct feed to ML models
-- Batch processing: flat_map directly to Array2<f32>
-
-#### 6.2 QsarPipeline Architecture
-- **Status**: Planned (from VISION.md)
-- **Core Struct**: Self-contained pipeline with scaler + PCA + model
-- **Features**:
-  - Reproducible predictions on new data
-  - Serialization with `bincode`
-  - Version-tracked metadata
-- **Implementation**:
-  ```rust
-  pub struct QsarPipeline {
-      scaler: Scaler,           // Z-score normalization params
-      pca: Option<PcaTransform>, // Optional dimensionality reduction
-      model: Box<dyn Model>,     // Trained model (KNN, RF, ART)
-      metadata: PipelineMetadata,
-  }
-  ```
-
-#### 6.3 Descriptor Matrix Export
-- **Status**: Already designed (batch.rs with Rayon)
-- **Format**: Vec<Vec<Real>> → ndarray for linfa
-- **Optimization**: Pre-allocate matrices, parallel computation
-- **Note**: With unified float vector, this becomes trivial flat_map
-
-#### 6.4 Standard Scaler Implementation
-- **Priority**: HIGH (required for mega-vector)
-- **Algorithm**: Z-score normalization (mean=0, std=1)
-- **Purpose**: Prevent binary fingerprints from being dominated by continuous descriptors
-- **Implementation**: O(n) single pass for mean/std calculation
-- **Important**: Only normalize continuous descriptors (5182+), keep fingerprints as 0/1
-
-#### 6.5 Linfa Integration
-- k-NN classification/regression (with Tanimoto metric for fingerprints)
-- Random Forest (handles mixed binary/continuous features)
-- PCA for dimensionality reduction
-- **Data Pipeline**: SMILES → Features (Vec<f32>) → Array2 → Model
-
-#### 6.6 ART 2A Clustering (Custom Implementation)
-- **Algorithm**: Adaptive Resonance Theory 2A
-- **Use Case**: Chemical space exploration, diversity selection
-- **Implementation**: From scratch following Carpenter/Grossberg papers
-- **Performance**: Incremental learning, O(n·m) where m = num_clusters
+### Phase 4-6: SMARTS, I/O, ML Design — ✅ Complete
+- ✅ SMARTS parser + VF2 matching
+- ✅ CSV reader + batch processing
+- ✅ Feature vector design (unified f32, 17,696 dims)
+- ✅ `build_ml_vector()` + `build_ml_vectors_parallel()` in typed.rs
+- See Phase 13 for full ML pipeline implementation
 
 ## Performance Targets
 
@@ -474,7 +403,7 @@ impl MolecularFeatures {
 
 ### Advanced Graph Algorithms
 - **Maximum Common Substructure (MCS)**: For scaffold analysis
-- **Graph kernels**: For SVM on molecular graphs
+- **Graph kernels**: For kernel-based ML on molecular graphs
 - **Message-passing neural networks**: Export to Python/PyTorch
 
 ### Reaction Informatics
@@ -524,15 +453,13 @@ impl MolecularFeatures {
 - `clap`: CLI argument parsing
 
 ### Planned
-- `ahash`/`fnv`: Fast hashing for fingerprints
-- `ndarray`: Matrix operations for ML
-- `linfa`: ML algorithms
-- `serde`: Serialization (JSON/MessagePack output)
+- `ndarray`: Matrix operations for ML pipeline
+- `bincode`: Model serialization
 - `memmap2`: Memory-mapped file I/O for huge datasets
-- `dashmap`: Concurrent hash maps for caching
+- `ratatui` + `crossterm`: TUI interface (Phase 14)
 
 ### Optional (Scientific)
-- `nalgebra`: Linear algebra for 3D geometry
+- `nalgebra`: Linear algebra for 3D geometry (Phase 16)
 - `petgraph`: Advanced graph algorithms
 - `rust-inchi`: InChI generation
 
@@ -572,25 +499,38 @@ impl MolecularFeatures {
 - [x] SMARTS parser
 - [x] Substructure search
 - [x] MACCS fingerprints
-- [ ] Functional group detection
+- [x] Functional group detection
 
-### v0.4.0 - ML Ready (In Progress)
-- [x] 30+ descriptors (28 implemented + MACCS 166-bit)
-- [ ] Morgan/ECFP fingerprints
-- [ ] Linfa integration examples
-- [x] CSV export
+### v0.4.0 - Complete 2D Suite ✅ Complete
+- [x] 60 descriptors, 17,696 dimensions
+- [x] Morgan/ECFP + FCFP + AtomPair + Torsion + PubChem fingerprints
+- [x] Typed descriptor API with 32x memory reduction
+- [x] CSV export + batch processing
 
-### v0.5.0 - Advanced Features
-- [ ] SDF parser
-- [ ] Canonicalization
-- [ ] InChI generation
-- [ ] ART 2A clustering
+### v0.5.0 - Electronic Descriptors ✅ Complete
+- [x] Gasteiger partial charges (RDKit-validated, 17 molecules ±0.05)
+- [x] Charge-derived descriptors (polarizability, PEOE_VSA)
+
+### v0.6.0 - ML Pipeline
+- [ ] QsarDataset + Scalers + Feature Selection
+- [ ] k-NN, RF, PLS, Elastic Net (all from scratch, no linfa)
+- [ ] ART-2A + Applicability Domain
+- [ ] QsarPipeline + AutoQsar + Grid Search + Metrics
+
+### v0.7.0 - TUI
+- [ ] Interactive terminal interface
+- [ ] Model training wizard
+- [ ] Batch prediction
+
+### v0.8.0 - Infrastructure
+- [ ] SDF parser, canonicalization
+- [ ] Python bindings (PyO3)
+- [ ] crates.io publish
 
 ### v1.0.0 - Production Ready
+- [ ] Full documentation, benchmarks vs RDKit
+- [ ] 3D descriptors (optional)
 - [ ] Comprehensive test coverage
-- [ ] Benchmarks vs RDKit
-- [ ] Full documentation
-- [ ] Performance optimized
 
 ## Scientific Validity
 
@@ -636,12 +576,12 @@ impl MolecularFeatures {
 
 ---
 
-**Last Updated**: February 10, 2026  
-**Status**: Phase 10.5 ✅ Complete - Comprehensive 2D QSAR suite  
-**Tests**: 503/503 passing ✅  
-**Descriptors**: 62 implementations, 17,696 dimensions (17,431 FP bits + 265 continuous)  
-**TPSA**: RDKit-exact validation (50/50 molecules, ±0.01 Ų)  
-**Next Priority**: Phase 11 - Typed Descriptors (2-3 weeks)  
-**Roadmap**: Architecture refactor for 4x memory reduction + type safety
+**Last Updated**: February 11, 2026  
+**Status**: Phase 12 ✅ Complete — Gasteiger Charges + Electronic Descriptors  
+**Tests**: 622 unit + 14 doc tests passing ✅  
+**Descriptors**: 67 implementations, 17,710+ dimensions  
+**API**: Single `Descriptor` trait with `DescriptorValue` enum returns  
+**Next Priority**: Phase 13 — ML Pipeline (from scratch, ndarray only)  
+**Code**: ~18,000 lines Rust
 
 

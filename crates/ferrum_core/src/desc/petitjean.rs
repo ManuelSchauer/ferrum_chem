@@ -9,6 +9,7 @@
 //!
 //! Reference: Petitjean (1992) J. Chem. Inf. Comput. Sci.
 
+use super::typed::{Descriptor, DescriptorValue};
 use crate::mol::molecule::Molecule;
 use std::collections::VecDeque;
 
@@ -98,6 +99,30 @@ pub fn calculate(mol: &Molecule) -> (u32, u32, f64) {
     
     (radius, diameter, petitjean)
 }
+
+/// Petitjean shape indices descriptor.
+///
+/// Returns FloatVec with 3 values: [radius, diameter, petitjean_index]
+///
+/// # Thread Safety
+/// Stateless and thread-safe (Send + Sync).
+pub struct PetitjeanIndex;
+
+impl Descriptor for PetitjeanIndex {
+    fn name(&self) -> &str {
+        "PetitjeanIndex"
+    }
+
+    fn calculate(&self, mol: &mut Molecule) -> DescriptorValue {
+        let (r, d, p) = calculate(mol);
+        DescriptorValue::FloatVec(vec![r as f32, d as f32, p as f32])
+    }
+}
+
+const _: () = {
+    const fn assert_send_sync<T: Send + Sync>() {}
+    let _ = assert_send_sync::<PetitjeanIndex>;
+};
 
 #[cfg(test)]
 mod tests {

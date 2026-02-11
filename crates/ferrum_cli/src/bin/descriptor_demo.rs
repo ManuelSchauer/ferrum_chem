@@ -1,12 +1,13 @@
 use ferrum_core::desc::Descriptor;
+use ferrum_core::desc::DescriptorValue;
 use ferrum_core::desc::molecular_weight::MolecularWeight;
 use ferrum_core::desc::atom_count::{AtomCount, HeavyAtomCount, SingleAtomCount, AromaticAtomCount};
-use ferrum_core::desc::bond_count::{BondCountDescriptor, RotatableBondCount};
+use ferrum_core::desc::bond_count::{BondCount, BondCountDetailed, RotatableBondCount};
 use ferrum_core::desc::aromatic_ring_count::AromaticRingCount;
 use ferrum_core::desc::formal_charge::FormalCharge;
 use ferrum_core::desc::hbond::{HBondDonor, HBondAcceptor};
 use ferrum_core::desc::logp::LogP;
-use ferrum_core::desc::lipinski::LipinskiRuleOfFive;
+use ferrum_core::desc::lipinski::LipinskiViolations;
 use ferrum_core::desc::maccs::MaccsKeys;
 use ferrum_core::io::smiles::parse_smiles;
 use ferrum_core::algo::valency::assign_implicit_hydrogens;
@@ -40,49 +41,53 @@ fn main() {
                 assign_implicit_hydrogens(&mut mol).unwrap();
                 perceive_aromaticity(&mut mol);
                 
-                // Calculate descriptors
-                let descriptors: Vec<(Box<dyn Descriptor>, usize)> = vec![
-                    (Box::new(MolecularWeight), 1),
-                    (Box::new(AtomCount), 1),
-                    (Box::new(HeavyAtomCount), 1),
-                    (Box::new(SingleAtomCount::new("C")), 1),
-                    (Box::new(SingleAtomCount::new("N")), 1),
-                    (Box::new(SingleAtomCount::new("O")), 1),
-                    (Box::new(AromaticAtomCount), 1),
-                    (Box::new(HBondDonor), 1),
-                    (Box::new(HBondAcceptor), 1),
-                    (Box::new(LogP), 1),
-                    (Box::new(LipinskiRuleOfFive), 9),
-                    (Box::new(MaccsKeys), 166),
-                    (Box::new(BondCountDescriptor::new(false)), 1),
-                    (Box::new(BondCountDescriptor::new(true)), 4),
-                    (Box::new(RotatableBondCount), 1),
-                    (Box::new(AromaticRingCount), 1),
-                    (Box::new(FormalCharge), 1),
+                // Calculate and display individual descriptors
+                let descriptors: Vec<Box<dyn Descriptor>> = vec![
+                    Box::new(MolecularWeight),
+                    Box::new(AtomCount),
+                    Box::new(HeavyAtomCount),
+                    Box::new(SingleAtomCount::new("C")),
+                    Box::new(SingleAtomCount::new("N")),
+                    Box::new(SingleAtomCount::new("O")),
+                    Box::new(AromaticAtomCount),
+                    Box::new(HBondDonor),
+                    Box::new(HBondAcceptor),
+                    Box::new(LogP),
+                    Box::new(LipinskiViolations),
+                    Box::new(MaccsKeys),
+                    Box::new(BondCount),
+                    Box::new(BondCountDetailed),
+                    Box::new(RotatableBondCount),
+                    Box::new(AromaticRingCount),
+                    Box::new(FormalCharge),
                 ];
                 
-                for (desc, size) in descriptors {
-                    let mut result = vec![0.0; size];
-                    desc.calculate(&mol, &mut result);
+                for desc in &descriptors {
+                    let value = desc.calculate(&mut mol);
                     
                     print!("  {:20} ", desc.name());
-                    if size == 1 {
-                        println!("{:.2}", result[0]);
-                    } else if size == 4 {
-                        // Detailed bond count: [total, single, double, triple]
-                        println!("[Total: {:.0}, Single: {:.0}, Double: {:.0}, Triple: {:.0}]",
-                                 result[0], result[1], result[2], result[3]);
-                    } else if size == 9 {
-                        // Lipinski Rule of Five
-                        println!("MW:{:.1} LogP:{:.2} HBD:{:.0} HBA:{:.0} | Pass: {}",
-                                 result[0], result[1], result[2], result[3],
-                                 if result[8] == 1.0 { "✓" } else { "✗" });
-                    } else if size == 60 || size == 166 {
-                        // MACCS Keys - show count of set bits
-                        let set_count = result.iter().filter(|&&x| x == 1.0).count();
-                        println!("{} / {} keys set", set_count, size);
-                    } else {
-                        println!("{:?}", result);
+                    match &value {
+                        DescriptorValue::Float(v) => println!("{:.2}", v),
+                        DescriptorValue::Int(v) => println!("{}", v),
+                        DescriptorValue::IntVec(v) => {
+                            if v.len() == 4 {
+                                println!("[Total: {}, Single: {}, Double: {}, Triple: {}]",
+                                         v[0], v[1], v[2], v[3]);
+                            } else {
+                                println!("{:?}", v);
+                            }
+                        }
+                        DescriptorValue::Binary(_bits) => {
+                            let mut floats = Vec::new();
+                            value.to_floats(&mut floats);
+                            let set_count = floats.iter().filter(|&&x| x == 1.0).count();
+                            println!("{} / {} keys set", set_count, floats.len());
+                        }
+                        _ => {
+                            let mut floats = Vec::new();
+                            value.to_floats(&mut floats);
+                            println!("{:?}", floats);
+                        }
                     }
                 }
             }

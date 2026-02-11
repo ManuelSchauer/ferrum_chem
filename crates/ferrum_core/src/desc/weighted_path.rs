@@ -9,9 +9,9 @@
 //! Reference: Randić, M. (1993) "Novel graph theoretical approach to
 //!            heteroatoms in QSAR", Chemometrics & Intell. Lab. Systems.
 
-use super::Descriptor;
+use super::typed::{Descriptor, DescriptorValue};
 use crate::mol::molecule::Molecule;
-use crate::types::{AtomIdx, Real};
+use crate::types::AtomIdx;
 
 fn atomic_mass(an: u8) -> f64 {
     crate::mol::elements::ATOMIC_MASSES[an as usize] as f64
@@ -77,21 +77,25 @@ fn dfs_wp(
     }
 }
 
-/// Weighted Path descriptors: 10 values.
+/// Weighted Path descriptors.
 ///
+/// Returns FloatVec with 10 values:
 /// [WPm1..WPm5, WPe1..WPe5]
 /// m = mass-weighted, e = electronegativity-weighted.
 pub struct WeightedPath;
 
 impl Descriptor for WeightedPath {
-    fn name(&self) -> String { "WeightedPath".to_string() }
-    fn size(&self) -> usize { MAX_PATH_LEN * 2 }
+    fn name(&self) -> &str {
+        "WeightedPath"
+    }
 
-    fn calculate(&self, mol: &Molecule, output: &mut [Real]) {
-        for v in output.iter_mut() { *v = 0.0; }
-
+    fn calculate(&self, mol: &mut Molecule) -> DescriptorValue {
+        let mut values = vec![0.0f32; MAX_PATH_LEN * 2];
+        
         let n = mol.num_atoms();
-        if n < 2 { return; }
+        if n < 2 {
+            return DescriptorValue::FloatVec(values);
+        }
 
         let w_mass: Vec<f64> = (0..n).map(|i| atomic_mass(mol.atoms[i].atomic_number)).collect();
         let w_en: Vec<f64> = (0..n).map(|i| electronegativity(mol.atoms[i].atomic_number)).collect();
@@ -100,9 +104,11 @@ impl Descriptor for WeightedPath {
         let wp_en = weighted_paths(mol, &w_en);
 
         for i in 0..MAX_PATH_LEN {
-            output[i] = wp_mass[i] as Real;
-            output[MAX_PATH_LEN + i] = wp_en[i] as Real;
+            values[i] = wp_mass[i] as f32;
+            values[MAX_PATH_LEN + i] = wp_en[i] as f32;
         }
+        
+        DescriptorValue::FloatVec(values)
     }
 }
 
@@ -115,21 +121,21 @@ const _: () = {
 mod tests {
     use super::*;
     use crate::io::smiles::parse_smiles;
+    use super::super::typed::Descriptor;
 
-    fn calc_wp(smiles: &str) -> Vec<Real> {
-        let mol = parse_smiles(smiles).expect("valid SMILES");
-        let mut output = vec![0.0; MAX_PATH_LEN * 2];
-        WeightedPath.calculate(&mol, &mut output);
-        output
+    fn calc_wp(smiles: &str) -> Vec<f32> {
+        let mut mol = parse_smiles(smiles).expect("valid SMILES");
+        match WeightedPath.calculate(&mut mol) {
+            DescriptorValue::FloatVec(v) => v,
+            other => panic!("expected FloatVec, got {:?}", other),
+        }
     }
 
     #[test]
     fn test_wp_ethane() {
         let wp = calc_wp("CC");
-        // WPm1 = (12.011 * 12.011) / 1 = 144.26
         assert!(wp[0] > 100.0, "WPm1 = {}", wp[0]);
-        // No longer paths
-        assert!((wp[1]).abs() < 0.001, "WPm2 should be 0");
+        assert!(wp[1].abs() < 0.001, "WPm2 should be 0");
     }
 
     #[test]
@@ -143,7 +149,6 @@ mod tests {
     fn test_wp_ethanol_vs_ethane() {
         let ethane = calc_wp("CC");
         let ethanol = calc_wp("CCO");
-        // Different due to O's different mass/EN
         assert_ne!(ethane[0], ethanol[0]);
     }
 
@@ -158,14 +163,13 @@ mod tests {
     fn test_wp_single_atom() {
         let wp = calc_wp("C");
         for v in &wp {
-            assert!((v).abs() < 0.001);
+            assert!(v.abs() < 0.001);
         }
     }
 
     #[test]
     fn test_wp_benzene() {
         let wp = calc_wp("c1ccccc1");
-        // Should have paths up to length 3 (max distance in benzene)
         assert!(wp[0] > 0.0);
         assert!(wp[1] > 0.0);
         assert!(wp[2] > 0.0);

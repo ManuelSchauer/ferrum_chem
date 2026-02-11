@@ -18,38 +18,15 @@
 //! - TPSA ≤ 60 Ų: Good blood-brain barrier penetration
 //! - TPSA > 140 Ų: Poor oral absorption
 
-use super::Descriptor;
+use super::typed::{DescriptorValue, Descriptor};
 use crate::mol::molecule::Molecule;
-use crate::types::{Real, BondType};
+use crate::types::BondType;
 
-/// Topological Polar Surface Area (TPSA) descriptor.
+/// Compute TPSA for a molecule.
 ///
-/// Calculates TPSA using the exact RDKit algorithm based on Ertl et al. (2000).
-/// Uses bond type counting for nitrogen, oxygen, sulfur, and phosphorus atoms.
-///
-/// ## Thread Safety
-/// Stateless and thread-safe.
-pub struct Tpsa;
-
-impl Descriptor for Tpsa {
-    fn name(&self) -> String {
-        "TPSA".to_string()
-    }
-
-    fn size(&self) -> usize {
-        1
-    }
-
-    fn calculate(&self, mol: &Molecule, output: &mut [Real]) {
-        output[0] = calculate_tpsa(mol, false) as Real;
-    }
-}
-
-/// Calculate TPSA for a molecule.
-/// 
-/// If include_sp is true, includes sulfur and phosphorus atoms (default).
-/// This matches RDKit's CalcTPSA(mol, includeSandP=True).
-fn calculate_tpsa(mol: &Molecule, include_sp: bool) -> f64 {
+/// If `include_sp` is true, includes sulfur and phosphorus atoms.
+/// Matches RDKit's `CalcTPSA(mol, includeSandP)`.
+pub fn compute_tpsa(mol: &Molecule, include_sp: bool) -> f64 {
     let n_atoms = mol.atoms.len();
     
     // Count bond types for each atom (excluding H bonds)
@@ -351,10 +328,7 @@ mod tests {
 
     fn tpsa(smiles: &str) -> f64 {
         let mol = parse_smiles(smiles).unwrap();
-        let desc = Tpsa;
-        let mut output = vec![0.0];
-        desc.calculate(&mol, &mut output);
-        output[0] as f64
+        compute_tpsa(&mol, false)
     }
 
     #[test]
@@ -420,7 +394,7 @@ mod tests {
         for (smi, name, expected) in &cases {
             match parse_smiles(smi) {
                 Ok(mol) => {
-                    let got = calculate_tpsa(&mol, false);
+                    let got = compute_tpsa(&mol, false);
                     let err = (got - expected).abs();
                     count += 1;
                     if err > 0.01 {
@@ -514,3 +488,50 @@ mod tests {
         assert!((tpsa("CC(=O)N") - 43.09).abs() < 0.01);
     }
 }
+
+/// Topological Polar Surface Area (TPSA) descriptor.
+///
+/// Returns a single Float value representing TPSA in Ų.
+///
+/// ## Thread Safety
+/// Stateless and thread-safe.
+///
+/// # Examples
+///
+/// ```
+/// use ferrum_core::desc::tpsa::Tpsa;
+/// use ferrum_core::desc::typed::Descriptor;
+/// use ferrum_core::io::smiles::parse_smiles;
+/// use ferrum_core::algo::aromaticity::perceive_aromaticity;
+///
+/// let mut mol = parse_smiles("c1ccccc1").unwrap();
+/// perceive_aromaticity(&mut mol);
+///
+/// let descriptor = Tpsa;
+/// let tpsa = descriptor.calculate(&mut mol);
+///
+/// // Benzene has no polar atoms
+/// match tpsa {
+///     ferrum_core::desc::typed::DescriptorValue::Float(v) => {
+///         assert!((v - 0.0).abs() < 0.01);
+///     }
+///     _ => panic!("Expected Float"),
+/// }
+/// ```
+pub struct Tpsa;
+
+impl Descriptor for Tpsa {
+    fn name(&self) -> &str {
+        "TPSA"
+    }
+
+    fn calculate(&self, mol: &mut Molecule) -> DescriptorValue {
+        let tpsa = compute_tpsa(mol, true) as f32;
+        DescriptorValue::Float(tpsa)
+    }
+}
+
+const _: () = {
+    const fn assert_send_sync<T: Send + Sync>() {}
+    let _ = assert_send_sync::<Tpsa>;
+};

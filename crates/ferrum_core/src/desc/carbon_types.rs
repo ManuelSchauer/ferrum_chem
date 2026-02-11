@@ -13,6 +13,7 @@
 
 use crate::mol::molecule::Molecule;
 use crate::types::Hybridization;
+use crate::desc::typed::{Descriptor, DescriptorValue};
 
 /// Count carbon atoms by type: neighbor count and hybridization
 ///
@@ -193,3 +194,102 @@ mod tests {
         assert_eq!(c1sp3, 1); // Methyl
     }
 }
+
+// ===========================================================================
+// Typed API: Carbon Types
+// ===========================================================================
+
+/// Carbon type counts descriptor.
+///
+/// Returns IntU16Vec with 9 values:
+/// [C1SP1, C2SP1, C1SP2, C2SP2, C3SP2, C1SP3, C2SP3, C3SP3, C4SP3]
+///
+/// Uses u16 since most molecules have <65k carbons of any single type.
+pub struct CarbonTypes;
+
+impl Descriptor for CarbonTypes {
+    fn name(&self) -> &str {
+        "CarbonTypes"
+    }
+
+    fn calculate(&self, mol: &mut Molecule) -> DescriptorValue {
+        use crate::types::BondType;
+        
+        let mut counts = vec![0u16; 9];
+        
+        for (idx, atom) in mol.atoms.iter().enumerate() {
+            // Only count carbon atoms
+            if atom.atomic_number != 6 {
+                continue;
+            }
+            
+            let neighbors = mol.get_degree(idx as u16);
+            
+            // Infer hybridization from bond types if not specified
+            let hybridization = if atom.hybridization == Hybridization::Unspecified {
+                // Count double and triple bonds
+                let mut has_triple = false;
+                let mut has_double = false;
+                
+                for &bond_idx in &mol.adjacency[idx] {
+                    let bond = &mol.bonds[bond_idx as usize];
+                    match bond.bond_type {
+                        BondType::Triple => has_triple = true,
+                        BondType::Double => has_double = true,
+                        _ => {}
+                    }
+                }
+                
+                if has_triple {
+                    Hybridization::SP
+                } else if has_double || atom.is_aromatic() {
+                    Hybridization::SP2
+                } else {
+                    Hybridization::SP3
+                }
+            } else {
+                atom.hybridization
+            };
+            
+            match hybridization {
+                Hybridization::SP => {
+                    match neighbors {
+                        1 => counts[0] += 1, // C1SP1
+                        2 => counts[1] += 1, // C2SP1
+                        _ => {} // Unusual, ignore
+                    }
+                }
+                Hybridization::SP2 => {
+                    match neighbors {
+                        1 => counts[2] += 1, // C1SP2
+                        2 => counts[3] += 1, // C2SP2
+                        3 => counts[4] += 1, // C3SP2
+                        _ => {} // Unusual, ignore
+                    }
+                }
+                Hybridization::SP3 => {
+                    match neighbors {
+                        1 => counts[5] += 1, // C1SP3
+                        2 => counts[6] += 1, // C2SP3
+                        3 => counts[7] += 1, // C3SP3
+                        4 => counts[8] += 1, // C4SP3
+                        _ => {} // Unusual, ignore
+                    }
+                }
+                Hybridization::SP3D | Hybridization::SP3D2 => {
+                    // Higher coordination (phosphorus, sulfur), skip
+                }
+                Hybridization::Unspecified => {
+                    // Already handled above
+                }
+            }
+        }
+        
+        DescriptorValue::IntU16Vec(counts)
+    }
+}
+
+const _: () = {
+    const fn assert_send_sync<T: Send + Sync>() {}
+    let _ = assert_send_sync::<CarbonTypes>;
+};

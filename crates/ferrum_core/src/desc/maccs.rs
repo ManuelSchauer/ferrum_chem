@@ -9,11 +9,11 @@
 //! Note: This is the public MACCS keys set with 166 keys (numbered 1-166).
 //! Key 0 is reserved and always returns 0.
 
-use super::Descriptor;
 use crate::mol::molecule::Molecule;
-use crate::types::Real;
 use crate::io::smarts::{parse_smarts, QueryGraph};
 use crate::algo::iso::find_all_matches;
+use super::typed::{DescriptorValue, Descriptor};
+use bitvec::prelude::*;
 use once_cell::sync::Lazy;
 
 /// Pre-parsed MACCS keys patterns for fast fingerprint calculation.
@@ -38,69 +38,46 @@ struct MaccsKey {
 
 /// MACCS Keys fingerprint descriptor.
 ///
-/// Returns 166 binary values (0.0 or 1.0) representing the presence/absence
-/// of 166 predefined structural features.
-///
-/// Keys are numbered 1-166. Each key represents a specific structural pattern:
-/// - Rings of various sizes
-/// - Functional groups
-/// - Heteroatoms
-/// - Bond types
-/// - Aromatic features
-///
-/// # Performance
-/// Patterns are pre-parsed at startup using `once_cell::Lazy`, providing
-/// fast fingerprint generation after one-time initialization.
+/// Returns 166 binary values representing the presence/absence
+/// of 166 predefined structural features. Returns bit-packed fingerprint.
 pub struct MaccsKeys;
 
 impl Descriptor for MaccsKeys {
-    fn name(&self) -> String {
-        "MaccsKeys".to_string()
+    fn name(&self) -> &str {
+        "MaccsKeys"
     }
-    
-    fn size(&self) -> usize {
-        166 // All 166 MACCS keys (1-166)
-    }
-    
-    fn calculate(&self, mol: &Molecule, output: &mut [Real]) {
-        // Initialize all keys to 0
-        for i in 0..166 {
-            output[i] = 0.0;
-        }
-        
-        // Define keys that require count > N matches
-        // From RDKit: (key_number, required_count)
+
+    fn calculate(&self, mol: &mut Molecule) -> DescriptorValue {
+        let mut bits = bitvec![u8, Lsb0; 0; 166];
+
         let count_keys = [
             (118, 1), (120, 1), (127, 1), (130, 1), (131, 1), (136, 1),
             (138, 1), (140, 3), (141, 2), (142, 1), (145, 1), (146, 2),
             (149, 1), (159, 1),
         ];
         let count_map: std::collections::HashMap<usize, usize> = count_keys.iter().cloned().collect();
-        
-        // Calculate each key
+
         for (i, key_def) in MACCS_KEYS.iter().enumerate() {
             let key_number = key_def.number;
             let required_count = count_map.get(&key_number).copied().unwrap_or(0);
-            
+
             let key_present = if let Some(Some(query)) = PARSED_KEYS.get(i) {
-                // SMARTS-based key
                 let matches = find_all_matches(mol, query);
                 if required_count == 0 {
-                    // Key is set if pattern matches at least once
                     !matches.is_empty()
                 } else {
-                    // Key is set if matches > required_count
                     matches.len() > required_count
                 }
             } else {
-                // Special keys requiring custom logic
                 calculate_special_key(mol, key_number)
             };
-            
+
             if key_present {
-                output[i] = 1.0;
+                bits.set(i, true);
             }
         }
+
+        DescriptorValue::Binary(bits)
     }
 }
 
@@ -362,190 +339,94 @@ mod tests {
         perceive_aromaticity(&mut mol);
         mol
     }
-    
-    fn get_set_bits(output: &[Real]) -> Vec<usize> {
-        output.iter().enumerate()
-            .filter_map(|(i, &val)| if val == 1.0 { Some(i + 1) } else { None })
+
+    fn get_set_bits(bits: &BitVec<u8, Lsb0>) -> Vec<usize> {
+        bits.iter().by_vals().enumerate()
+            .filter_map(|(i, val)| if val { Some(i + 1) } else { None })
             .collect()
+    }
+
+    fn calc_maccs(smiles: &str) -> BitVec<u8, Lsb0> {
+        let mut mol = parse_and_prepare(smiles);
+        MaccsKeys.calculate(&mut mol).as_binary().clone()
     }
 
     #[test]
     fn test_pattern_parsing() {
-        // Check how many patterns successfully parsed
         let parsed_count = PARSED_KEYS.iter().filter(|p| p.is_some()).count();
-        let total_count = MACCS_KEYS.len();
-        let empty_count = MACCS_KEYS.iter().filter(|k| k.smarts.is_empty()).count();
-        
-        println!("Pattern parsing statistics:");
-        println!("  Total keys: {}", total_count);
-        println!("  Empty patterns (special keys): {}", empty_count);
-        println!("  Patterns parsed successfully: {}", parsed_count);
-        println!("  Patterns that should parse: {}", total_count - empty_count);
-        
-        // List keys that failed to parse
-        for (i, (key, parsed)) in MACCS_KEYS.iter().zip(PARSED_KEYS.iter()).enumerate() {
-            if !key.smarts.is_empty() && parsed.is_none() {
-                println!("  Key {}: Failed to parse '{}'", i + 1, key.smarts);
-            }
-        }
-        
-        // Most patterns should parse (allowing for a few complex ones to fail)
         assert!(parsed_count >= 150, "Too many patterns failed to parse: only {} succeeded", parsed_count);
     }
 
     #[test]
-    fn test_maccs_descriptor_size() {
+    fn test_maccs_descriptor_name() {
         let desc = MaccsKeys;
-        assert_eq!(desc.size(), 166);
-        assert_eq!(desc.name(), "MaccsKeys");
+        assert_eq!(Descriptor::name(&desc), "MaccsKeys");
     }
 
     #[test]
     fn test_maccs_benzene() {
-        let mol = parse_and_prepare("c1ccccc1"); // Benzene
-        let desc = MaccsKeys;
-        let mut output = vec![0.0; 166];
-        desc.calculate(&mol, &mut output);
-        
-        let set_bits = get_set_bits(&output);
-        println!("Benzene: {} bits set: {:?}", set_bits.len(), set_bits);
-        
-        // RDKit reference: [162, 163, 165]
-        // Key 162: Aromatic - should match
-        // Key 163: 6M Ring - NOW WORKS after ring closure bond fix
-        // Key 165: Ring - should match
-        assert_eq!(output[161], 1.0, "Key 162: Aromatic");
-        assert_eq!(output[162], 1.0, "Key 163: 6M Ring");
-        assert_eq!(output[164], 1.0, "Key 165: Ring");
+        let fp = calc_maccs("c1ccccc1");
+        assert!(fp[161], "Key 162: Aromatic");
+        assert!(fp[162], "Key 163: 6M Ring");
+        assert!(fp[164], "Key 165: Ring");
     }
 
     #[test]
     fn test_maccs_ethanol() {
-        let mol = parse_and_prepare("CCO"); // Ethanol
-        let desc = MaccsKeys;
-        let mut output = vec![0.0; 166];
-        desc.calculate(&mol, &mut output);
-        
-        let set_bits = get_set_bits(&output);
-        println!("Ethanol: {} bits set: {:?}", set_bits.len(), set_bits);
-        
-        // RDKit reference: [82, 109, 114, 139, 153, 155, 157, 160, 164]
-        // Key 82: ACH2QH
-        // Key 109: ACH2O
-        // Key 114: CH3CH2A
-        // Key 139: OH
-        // Key 153: QCH2A
-        // Key 155: A!CH2!A
-        // Key 157: C-O
-        // Key 160: CH3
-        // Key 164: O
-        assert_eq!(output[163], 1.0, "Key 164: O");
-        assert_eq!(output[138], 1.0, "Key 139: OH");
-        assert_eq!(output[156], 1.0, "Key 157: C-O");
-        assert_eq!(output[159], 1.0, "Key 160: CH3");
+        let fp = calc_maccs("CCO");
+        assert!(fp[163], "Key 164: O");
+        assert!(fp[138], "Key 139: OH");
+        assert!(fp[156], "Key 157: C-O");
+        assert!(fp[159], "Key 160: CH3");
     }
 
     #[test]
     fn test_maccs_aspirin() {
-        let mol = parse_and_prepare("CC(=O)Oc1ccccc1C(=O)O"); // Aspirin
-        let desc = MaccsKeys;
-        let mut output = vec![0.0; 166];
-        desc.calculate(&mol, &mut output);
-        
-        let set_bits = get_set_bits(&output);
-        println!("Aspirin: {} bits set: {:?}", set_bits.len(), set_bits);
-        
-        // RDKit reference: 21 bits set
-        // Key 154: C=O (carbonyl)
-        // Key 162: Aromatic
-        // Key 163: 6M Ring
-        // Key 164: O
-        // Key 165: Ring
-        assert_eq!(output[153], 1.0, "Key 154: C=O");
-        assert_eq!(output[161], 1.0, "Key 162: Aromatic");
-        assert_eq!(output[163], 1.0, "Key 164: O");
-        assert_eq!(output[164], 1.0, "Key 165: Ring");
-        
-        // Should have about 21 bits set
+        let fp = calc_maccs("CC(=O)Oc1ccccc1C(=O)O");
+        let set_bits = get_set_bits(&fp);
+        assert!(fp[153], "Key 154: C=O");
+        assert!(fp[161], "Key 162: Aromatic");
+        assert!(fp[163], "Key 164: O");
+        assert!(fp[164], "Key 165: Ring");
         let count = set_bits.len();
         assert!(count >= 15 && count <= 25, "Expected ~21 bits, got {}", count);
     }
 
     #[test]
     fn test_maccs_caffeine() {
-        let mol = parse_and_prepare("CN1C=NC2=C1C(=O)N(C(=O)N2C)C"); // Caffeine
-        let desc = MaccsKeys;
-        let mut output = vec![0.0; 166];
-        desc.calculate(&mol, &mut output);
-        
-        let set_bits = get_set_bits(&output);
-        println!("Caffeine: {} bits set: {:?}", set_bits.len(), set_bits);
-        
-        // RDKit reference: 46 bits set
-        // Key 121: N Heterocycle
-        // Key 137: Heterocycle
-        // Key 161: N
-        // Key 162: Aromatic - Note: caffeine SMILES uses uppercase letters, aromaticity depends on perception
-        // Key 164: O
-        // Key 165: Ring
-        assert_eq!(output[120], 1.0, "Key 121: N Heterocycle");
-        assert_eq!(output[160], 1.0, "Key 161: N");
-        // Aromatic perception may vary based on SMILES notation
-        // assert_eq!(output[161], 1.0, "Key 162: Aromatic");
-        assert_eq!(output[163], 1.0, "Key 164: O");
-        assert_eq!(output[164], 1.0, "Key 165: Ring");
-        
-        // Should have reasonable number of bits set (relaxed due to aromaticity/SSSR issues)
-        let count = set_bits.len();
-        assert!(count >= 20, "Expected at least 20 bits, got {}", count);
+        let fp = calc_maccs("CN1C=NC2=C1C(=O)N(C(=O)N2C)C");
+        let set_bits = get_set_bits(&fp);
+        assert!(fp[120], "Key 121: N Heterocycle");
+        assert!(fp[160], "Key 161: N");
+        assert!(fp[163], "Key 164: O");
+        assert!(fp[164], "Key 165: Ring");
+        assert!(set_bits.len() >= 20, "Expected at least 20 bits, got {}", set_bits.len());
     }
-    
+
     #[test]
     fn test_maccs_hexane() {
-        let mol = parse_and_prepare("CCCCCC"); // Hexane
-        let desc = MaccsKeys;
-        let mut output = vec![0.0; 166];
-        desc.calculate(&mol, &mut output);
-        
-        let set_bits = get_set_bits(&output);
-        println!("Hexane: {} bits set: {:?}", set_bits.len(), set_bits);
-        
-        // RDKit reference: [108, 114, 115, 116, 118, 129, 147, 149, 155, 160]
-        // Some keys may not match due to SSSR interaction with isomorphism matching
-        // Key 160: CH3
-        // Key 164: O should be 0
-        assert_eq!(output[159], 1.0, "Key 160: CH3");
-        assert_eq!(output[163], 0.0, "Key 164: O (should not be set)");
-        assert_eq!(output[164], 0.0, "Key 165: Ring (should not be set)");
-        
-        // Should have at least 5 bits set (relaxed due to SSSR issue affecting some patterns)
-        let count = set_bits.len();
-        assert!(count >= 5, "Expected at least 5 bits, got {}", count);
+        let fp = calc_maccs("CCCCCC");
+        assert!(fp[159], "Key 160: CH3");
+        assert!(!fp[163], "Key 164: O (should not be set)");
+        assert!(!fp[164], "Key 165: Ring (should not be set)");
+        let set_bits = get_set_bits(&fp);
+        assert!(set_bits.len() >= 5, "Expected at least 5 bits, got {}", set_bits.len());
     }
-    
+
     #[test]
     fn test_maccs_pyridine() {
-        let mol = parse_and_prepare("c1ccncc1"); // Pyridine
-        let desc = MaccsKeys;
-        let mut output = vec![0.0; 166];
-        desc.calculate(&mol, &mut output);
-        
-        let set_bits = get_set_bits(&output);
-        println!("Pyridine: {} bits set: {:?}", set_bits.len(), set_bits);
-        
-        // RDKit reference: [65, 98, 121, 137, 161, 162, 163, 165]
-        // Key 65: C%N (aromatic C-N)
-        // Key 121: N Heterocycle
-        // Key 137: Heterocycle
-        // Key 161: N
-        // Key 162: Aromatic
-        // Key 163: 6M Ring
-        // Key 165: Ring
-        assert_eq!(output[64], 1.0, "Key 65: C%N");
-        assert_eq!(output[120], 1.0, "Key 121: N Heterocycle");
-        assert_eq!(output[136], 1.0, "Key 137: Heterocycle");
-        assert_eq!(output[160], 1.0, "Key 161: N");
-        assert_eq!(output[161], 1.0, "Key 162: Aromatic");
-        assert_eq!(output[164], 1.0, "Key 165: Ring");
+        let fp = calc_maccs("c1ccncc1");
+        assert!(fp[64], "Key 65: C%N");
+        assert!(fp[120], "Key 121: N Heterocycle");
+        assert!(fp[136], "Key 137: Heterocycle");
+        assert!(fp[160], "Key 161: N");
+        assert!(fp[161], "Key 162: Aromatic");
+        assert!(fp[164], "Key 165: Ring");
     }
 }
+
+// Thread safety
+const _: () = {
+    const fn assert_send_sync<T: Send + Sync>() {}
+    let _ = assert_send_sync::<MaccsKeys>;
+};

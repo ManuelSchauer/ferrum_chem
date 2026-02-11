@@ -8,6 +8,7 @@
 use crate::mol::molecule::Molecule;
 use crate::algo::rings::find_sssr;
 use crate::types::BondType;
+use crate::desc::typed::{Descriptor, DescriptorValue};
 
 /// Count number of saturated rings (no double/triple bonds)
 ///
@@ -152,3 +153,75 @@ mod tests {
         assert_eq!(num_aromatic_rings(&mut mol), 0);
     }
 }
+
+// ===========================================================================
+// Typed API: Ring Types
+// ===========================================================================
+
+/// Ring type counts descriptor.
+///
+/// Returns IntU16Vec with 3 values:
+/// [saturated_rings, aliphatic_rings, aromatic_rings]
+///
+/// Uses u16 since molecules rarely have >65k rings of any type.
+pub struct RingTypeCounts;
+
+impl Descriptor for RingTypeCounts {
+    fn name(&self) -> &str {
+        "RingTypeCounts"
+    }
+
+    fn calculate(&self, mol: &mut Molecule) -> DescriptorValue {
+        let rings = find_sssr(mol);
+        
+        let mut saturated = 0u16;
+        let mut aliphatic = 0u16;
+        let mut aromatic = 0u16;
+        
+        for ring in &rings {
+            // Check if aromatic
+            let is_aromatic = ring.iter().all(|&atom_idx| {
+                mol.atoms[atom_idx as usize].is_aromatic()
+            });
+            
+            if is_aromatic {
+                aromatic += 1;
+            } else {
+                aliphatic += 1;
+                
+                // Check if saturated (all single bonds)
+                let mut is_saturated = true;
+                for i in 0..ring.len() {
+                    let atom1 = ring[i];
+                    let atom2 = ring[(i + 1) % ring.len()];
+                    
+                    // Find bond between atom1 and atom2
+                    if let Some(bond_idx) = mol.adjacency[atom1 as usize].iter()
+                        .find(|&&bond_idx| {
+                            let bond = &mol.bonds[bond_idx as usize];
+                            (bond.source == atom1 && bond.target == atom2) ||
+                            (bond.source == atom2 && bond.target == atom1)
+                        })
+                    {
+                        let bond = &mol.bonds[*bond_idx as usize];
+                        if bond.bond_type != BondType::Single {
+                            is_saturated = false;
+                            break;
+                        }
+                    }
+                }
+                
+                if is_saturated {
+                    saturated += 1;
+                }
+            }
+        }
+        
+        DescriptorValue::IntU16Vec(vec![saturated, aliphatic, aromatic])
+    }
+}
+
+const _: () = {
+    const fn assert_send_sync<T: Send + Sync>() {}
+    let _ = assert_send_sync::<RingTypeCounts>;
+};

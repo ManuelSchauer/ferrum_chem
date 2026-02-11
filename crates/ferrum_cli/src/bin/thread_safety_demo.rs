@@ -11,7 +11,7 @@ fn main() {
     let smiles_list: Vec<&str> = vec!["c1ccccc1"; 10000];
 
     let start = std::time::Instant::now();
-    let molecules: Vec<_> = smiles_list
+    let mut molecules: Vec<_> = smiles_list
         .par_iter()
         .map(|s| parse_smiles(s).unwrap())
         .collect();
@@ -26,11 +26,9 @@ fn main() {
 
     let start = std::time::Instant::now();
     let weights: Vec<f32> = molecules
-        .par_iter()
+        .par_iter_mut()
         .map(|mol| {
-            let mut result = vec![0.0; 1];
-            descriptor.calculate(mol, &mut result);
-            result[0]
+            descriptor.calculate(mol).as_float()
         })
         .collect();
     let duration = start.elapsed();
@@ -65,10 +63,9 @@ fn main() {
     let results: Vec<_> = input_smiles
         .par_iter()
         .map(|s| {
-            let mol = parse_smiles(s).unwrap();
-            let mut mw = vec![0.0; 1];
-            descriptor.calculate(&mol, &mut mw);
-            (s.to_string(), mol.num_atoms(), mw[0])
+            let mut mol = parse_smiles(s).unwrap();
+            let mw = descriptor.calculate(&mut mol).as_float();
+            (s.to_string(), mol.num_atoms(), mw)
         })
         .collect();
     let duration = start.elapsed();

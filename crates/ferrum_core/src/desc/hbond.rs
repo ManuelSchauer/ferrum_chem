@@ -1,285 +1,212 @@
-use super::Descriptor;
+use super::typed::{DescriptorValue, Descriptor};
 use crate::mol::molecule::Molecule;
-use crate::types::Real;
 
-/// Counts hydrogen bond donor groups in the molecule.
-/// 
-/// A hydrogen bond donor is defined as a nitrogen or oxygen atom
-/// with at least one hydrogen attached (N-H or O-H groups).
-/// 
-/// This follows the Lipinski Rule of Five definition where
-/// the number of H-bond donors should be ≤ 5 for drug-like molecules.
-/// 
-/// **Note**: This implementation counts all N-H and O-H groups, which matches
-/// RDKit's Lipinski descriptor for drug-like molecules. For very simple molecules
-/// like standalone water (O) or ammonia (N), there may be differences due to
-/// context-specific handling in RDKit.
-/// 
-/// # Examples
-/// ```
-/// use ferrum_core::desc::{Descriptor, hbond::HBondDonor};
-/// use ferrum_core::io::smiles::parse_smiles;
-/// 
-/// let mol = parse_smiles("CCO").unwrap(); // Ethanol
-/// let desc = HBondDonor;
-/// let mut result = vec![0.0];
-/// desc.calculate(&mol, &mut result);
-/// assert_eq!(result[0], 1.0); // One -OH group
-/// ```
+/// Compute the number of hydrogen bond donors in a molecule.
+///
+/// A hydrogen bond donor is a nitrogen or oxygen atom with at least one
+/// hydrogen attached (N-H or O-H groups). Follows the Lipinski Rule of Five
+/// definition (HBD ≤ 5 for drug-like molecules).
+pub fn compute_hbond_donors(mol: &Molecule) -> u32 {
+    mol.atoms.iter()
+        .filter(|atom| {
+            (atom.atomic_number == 7 || atom.atomic_number == 8) &&
+            atom.total_h() > 0
+        })
+        .count() as u32
+}
+
+/// Compute the number of hydrogen bond acceptors in a molecule.
+///
+/// A hydrogen bond acceptor is a nitrogen or oxygen atom (has lone pairs).
+/// Follows the Lipinski Rule of Five definition (HBA ≤ 10 for drug-like molecules).
+pub fn compute_hbond_acceptors(mol: &Molecule) -> u32 {
+    mol.atoms.iter()
+        .filter(|atom| {
+            atom.atomic_number == 7 || atom.atomic_number == 8
+        })
+        .count() as u32
+}
+
+/// Hydrogen bond donor count descriptor.
+///
+/// Returns `Int(u32)` with number of N-H and O-H groups.
 pub struct HBondDonor;
 
 impl Descriptor for HBondDonor {
-    fn name(&self) -> String {
-        "HBondDonor".to_string()
+    fn name(&self) -> &str {
+        "HBondDonor"
     }
-    
-    fn size(&self) -> usize {
-        1
-    }
-    
-    fn calculate(&self, mol: &Molecule, output: &mut [Real]) {
-        let count = mol.atoms.iter()
-            .filter(|atom| {
-                // N or O with at least one hydrogen
-                (atom.atomic_number == 7 || atom.atomic_number == 8) &&
-                atom.total_h() > 0
-            })
-            .count();
-        
-        output[0] = count as Real;
+
+    fn calculate(&self, mol: &mut Molecule) -> DescriptorValue {
+        DescriptorValue::Int(compute_hbond_donors(mol))
     }
 }
 
-/// Counts hydrogen bond acceptor groups in the molecule.
-/// 
-/// A hydrogen bond acceptor is defined as a nitrogen or oxygen atom
-/// that can accept hydrogen bonds (has lone pairs).
-/// 
-/// This follows the Lipinski Rule of Five definition where
-/// the number of H-bond acceptors should be ≤ 10 for drug-like molecules.
-/// 
-/// # Examples
-/// ```
-/// use ferrum_core::desc::{Descriptor, hbond::HBondAcceptor};
-/// use ferrum_core::io::smiles::parse_smiles;
-/// 
-/// let mol = parse_smiles("CC(=O)C").unwrap(); // Acetone
-/// let desc = HBondAcceptor;
-/// let mut result = vec![0.0];
-/// desc.calculate(&mol, &mut result);
-/// assert_eq!(result[0], 1.0); // One C=O oxygen
-/// ```
+/// Hydrogen bond acceptor count descriptor.
+///
+/// Returns `Int(u32)` with number of N and O atoms (potential acceptors).
 pub struct HBondAcceptor;
 
 impl Descriptor for HBondAcceptor {
-    fn name(&self) -> String {
-        "HBondAcceptor".to_string()
+    fn name(&self) -> &str {
+        "HBondAcceptor"
     }
-    
-    fn size(&self) -> usize {
-        1
-    }
-    
-    fn calculate(&self, mol: &Molecule, output: &mut [Real]) {
-        let count = mol.atoms.iter()
-            .filter(|atom| {
-                // N or O atoms (potential acceptors)
-                atom.atomic_number == 7 || atom.atomic_number == 8
-            })
-            .count();
-        
-        output[0] = count as Real;
+
+    fn calculate(&self, mol: &mut Molecule) -> DescriptorValue {
+        DescriptorValue::Int(compute_hbond_acceptors(mol))
     }
 }
+
+const _: () = {
+    const fn assert_send_sync<T: Send + Sync>() {}
+    let _ = assert_send_sync::<HBondDonor>;
+    let _ = assert_send_sync::<HBondAcceptor>;
+};
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::io::smiles::parse_smiles;
-    
+
     // HBondDonor Tests
-    
+
     #[test]
     fn test_hbond_donor_water() {
-        let mol = parse_smiles("O").unwrap(); // Water: H2O
-        let desc = HBondDonor;
-        let mut result = vec![0.0];
-        desc.calculate(&mol, &mut result);
-        assert_eq!(result[0], 1.0); // O-H
+        let mol = parse_smiles("O").unwrap();
+        assert_eq!(compute_hbond_donors(&mol), 1);
     }
-    
+
     #[test]
     fn test_hbond_donor_ammonia() {
-        let mol = parse_smiles("N").unwrap(); // Ammonia: NH3
-        let desc = HBondDonor;
-        let mut result = vec![0.0];
-        desc.calculate(&mol, &mut result);
-        assert_eq!(result[0], 1.0); // N-H
+        let mol = parse_smiles("N").unwrap();
+        assert_eq!(compute_hbond_donors(&mol), 1);
     }
-    
+
     #[test]
     fn test_hbond_donor_ethanol() {
-        let mol = parse_smiles("CCO").unwrap(); // Ethanol: C2H6O
-        let desc = HBondDonor;
-        let mut result = vec![0.0];
-        desc.calculate(&mol, &mut result);
-        assert_eq!(result[0], 1.0); // One -OH group
+        let mol = parse_smiles("CCO").unwrap();
+        assert_eq!(compute_hbond_donors(&mol), 1);
     }
-    
+
     #[test]
     fn test_hbond_donor_urea() {
-        let mol = parse_smiles("NC(=O)N").unwrap(); // Urea
-        let desc = HBondDonor;
-        let mut result = vec![0.0];
-        desc.calculate(&mol, &mut result);
-        assert_eq!(result[0], 2.0); // Two -NH2 groups
+        let mol = parse_smiles("NC(=O)N").unwrap();
+        assert_eq!(compute_hbond_donors(&mol), 2);
     }
-    
+
     #[test]
     fn test_hbond_donor_methane() {
-        let mol = parse_smiles("C").unwrap(); // Methane: CH4
-        let desc = HBondDonor;
-        let mut result = vec![0.0];
-        desc.calculate(&mol, &mut result);
-        assert_eq!(result[0], 0.0); // No N-H or O-H
+        let mol = parse_smiles("C").unwrap();
+        assert_eq!(compute_hbond_donors(&mol), 0);
     }
-    
+
     #[test]
     fn test_hbond_donor_acetone() {
-        let mol = parse_smiles("CC(=O)C").unwrap(); // Acetone
-        let desc = HBondDonor;
-        let mut result = vec![0.0];
-        desc.calculate(&mol, &mut result);
-        assert_eq!(result[0], 0.0); // C=O has no hydrogen on oxygen
+        let mol = parse_smiles("CC(=O)C").unwrap();
+        assert_eq!(compute_hbond_donors(&mol), 0);
     }
-    
+
     #[test]
     fn test_hbond_donor_ethylamine() {
-        let mol = parse_smiles("CCN").unwrap(); // Ethylamine
-        let desc = HBondDonor;
-        let mut result = vec![0.0];
-        desc.calculate(&mol, &mut result);
-        assert_eq!(result[0], 1.0); // -NH2 group
+        let mol = parse_smiles("CCN").unwrap();
+        assert_eq!(compute_hbond_donors(&mol), 1);
     }
-    
+
     #[test]
     fn test_hbond_donor_glycine() {
-        let mol = parse_smiles("NCC(=O)O").unwrap(); // Glycine
-        let desc = HBondDonor;
-        let mut result = vec![0.0];
-        desc.calculate(&mol, &mut result);
-        assert_eq!(result[0], 2.0); // -NH2 and -COOH
+        let mol = parse_smiles("NCC(=O)O").unwrap();
+        assert_eq!(compute_hbond_donors(&mol), 2);
     }
-    
+
     #[test]
     fn test_hbond_donor_phenol() {
-        let mol = parse_smiles("c1ccc(cc1)O").unwrap(); // Phenol
-        let desc = HBondDonor;
-        let mut result = vec![0.0];
-        desc.calculate(&mol, &mut result);
-        assert_eq!(result[0], 1.0); // One -OH (matches RDKit)
+        let mol = parse_smiles("c1ccc(cc1)O").unwrap();
+        assert_eq!(compute_hbond_donors(&mol), 1);
     }
-    
+
     #[test]
     fn test_hbond_donor_aspirin() {
-        let mol = parse_smiles("CC(=O)Oc1ccccc1C(=O)O").unwrap(); // Aspirin
-        let desc = HBondDonor;
-        let mut result = vec![0.0];
-        desc.calculate(&mol, &mut result);
-        assert_eq!(result[0], 1.0); // Carboxylic acid OH (matches RDKit)
+        let mol = parse_smiles("CC(=O)Oc1ccccc1C(=O)O").unwrap();
+        assert_eq!(compute_hbond_donors(&mol), 1);
     }
-    
+
     // HBondAcceptor Tests
-    
+
     #[test]
     fn test_hbond_acceptor_water() {
-        let mol = parse_smiles("O").unwrap(); // Water
-        let desc = HBondAcceptor;
-        let mut result = vec![0.0];
-        desc.calculate(&mol, &mut result);
-        assert_eq!(result[0], 1.0); // One oxygen
+        let mol = parse_smiles("O").unwrap();
+        assert_eq!(compute_hbond_acceptors(&mol), 1);
     }
-    
+
     #[test]
     fn test_hbond_acceptor_ammonia() {
-        let mol = parse_smiles("N").unwrap(); // Ammonia
-        let desc = HBondAcceptor;
-        let mut result = vec![0.0];
-        desc.calculate(&mol, &mut result);
-        assert_eq!(result[0], 1.0); // One nitrogen
+        let mol = parse_smiles("N").unwrap();
+        assert_eq!(compute_hbond_acceptors(&mol), 1);
     }
-    
+
     #[test]
     fn test_hbond_acceptor_ethanol() {
-        let mol = parse_smiles("CCO").unwrap(); // Ethanol
-        let desc = HBondAcceptor;
-        let mut result = vec![0.0];
-        desc.calculate(&mol, &mut result);
-        assert_eq!(result[0], 1.0); // One oxygen
+        let mol = parse_smiles("CCO").unwrap();
+        assert_eq!(compute_hbond_acceptors(&mol), 1);
     }
-    
+
     #[test]
     fn test_hbond_acceptor_acetone() {
-        let mol = parse_smiles("CC(=O)C").unwrap(); // Acetone
-        let desc = HBondAcceptor;
-        let mut result = vec![0.0];
-        desc.calculate(&mol, &mut result);
-        assert_eq!(result[0], 1.0); // One C=O oxygen
+        let mol = parse_smiles("CC(=O)C").unwrap();
+        assert_eq!(compute_hbond_acceptors(&mol), 1);
     }
-    
+
     #[test]
     fn test_hbond_acceptor_urea() {
-        let mol = parse_smiles("NC(=O)N").unwrap(); // Urea
-        let desc = HBondAcceptor;
-        let mut result = vec![0.0];
-        desc.calculate(&mol, &mut result);
-        assert_eq!(result[0], 3.0); // 2 N + 1 O
+        let mol = parse_smiles("NC(=O)N").unwrap();
+        assert_eq!(compute_hbond_acceptors(&mol), 3);
     }
-    
+
     #[test]
     fn test_hbond_acceptor_methane() {
-        let mol = parse_smiles("C").unwrap(); // Methane
-        let desc = HBondAcceptor;
-        let mut result = vec![0.0];
-        desc.calculate(&mol, &mut result);
-        assert_eq!(result[0], 0.0); // No N or O
+        let mol = parse_smiles("C").unwrap();
+        assert_eq!(compute_hbond_acceptors(&mol), 0);
     }
-    
+
     #[test]
     fn test_hbond_acceptor_diethyl_ether() {
-        let mol = parse_smiles("CCOCC").unwrap(); // Diethyl ether
-        let desc = HBondAcceptor;
-        let mut result = vec![0.0];
-        desc.calculate(&mol, &mut result);
-        assert_eq!(result[0], 1.0); // One oxygen
+        let mol = parse_smiles("CCOCC").unwrap();
+        assert_eq!(compute_hbond_acceptors(&mol), 1);
     }
-    
+
     #[test]
     fn test_hbond_acceptor_glycine() {
-        let mol = parse_smiles("NCC(=O)O").unwrap(); // Glycine
-        let desc = HBondAcceptor;
-        let mut result = vec![0.0];
-        desc.calculate(&mol, &mut result);
-        assert_eq!(result[0], 3.0); // 1 N + 2 O (carbonyl and hydroxyl)
+        let mol = parse_smiles("NCC(=O)O").unwrap();
+        assert_eq!(compute_hbond_acceptors(&mol), 3);
     }
-    
+
     #[test]
     fn test_hbond_acceptor_phenol() {
-        let mol = parse_smiles("c1ccc(cc1)O").unwrap(); // Phenol
-        let desc = HBondAcceptor;
-        let mut result = vec![0.0];
-        desc.calculate(&mol, &mut result);
-        assert_eq!(result[0], 1.0); // One O (matches RDKit)
+        let mol = parse_smiles("c1ccc(cc1)O").unwrap();
+        assert_eq!(compute_hbond_acceptors(&mol), 1);
     }
-    
+
     #[test]
     fn test_hbond_acceptor_aspirin() {
-        let mol = parse_smiles("CC(=O)Oc1ccccc1C(=O)O").unwrap(); // Aspirin
+        let mol = parse_smiles("CC(=O)Oc1ccccc1C(=O)O").unwrap();
+        assert_eq!(compute_hbond_acceptors(&mol), 4);
+    }
+
+    
+
+    #[test]
+    fn test_hbond_donor_descriptor() {
+        let mut mol = parse_smiles("CCO").unwrap();
+        let desc = HBondDonor;
+        assert_eq!(desc.name(), "HBondDonor");
+        assert_eq!(desc.calculate(&mut mol), DescriptorValue::Int(1));
+    }
+
+    #[test]
+    fn test_hbond_acceptor_descriptor() {
+        let mut mol = parse_smiles("CCO").unwrap();
         let desc = HBondAcceptor;
-        let mut result = vec![0.0];
-        desc.calculate(&mol, &mut result);
-        assert_eq!(result[0], 4.0); // 4 oxygens - actually RDKit reports 3
-        // Note: RDKit uses more sophisticated SMARTS patterns
-        // Our simple count gives 4, RDKit gives 3 (excludes ester O)
+        assert_eq!(desc.name(), "HBondAcceptor");
+        assert_eq!(desc.calculate(&mut mol), DescriptorValue::Int(1));
     }
 }
