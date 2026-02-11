@@ -36,12 +36,11 @@ fn main() {
     println!("{}", "-".repeat(40));
 
     let mw_descriptor = MolecularWeight;
-    let mut result = vec![0.0; 1];
 
     for (name, smiles) in &molecules {
-        if let Ok(mol) = parse_smiles(smiles) {
-            mw_descriptor.calculate(&mol, &mut result);
-            println!("{:12} MW = {:7.2} Da", name, result[0]);
+        if let Ok(mut mol) = parse_smiles(smiles) {
+            let value = mw_descriptor.calculate(&mut mol);
+            println!("{:12} MW = {:7.2} Da", name, value.as_float());
         }
     }
 
@@ -59,36 +58,36 @@ fn main() {
         sodium_ion.atoms[0].formal_charge);
 
     // Isotopes
-    let heavy_water = parse_smiles("[2H]O[2H]").unwrap();
+    let mut heavy_water = parse_smiles("[2H]O[2H]").unwrap();
     println!("\nHeavy water [2H]O[2H]:");
     println!("  Atoms: {}", heavy_water.num_atoms());
     println!("  Isotopes: {} and {}",
         heavy_water.atoms[0].isotope,
         heavy_water.atoms[2].isotope);
 
-    mw_descriptor.calculate(&heavy_water, &mut result);
-    println!("  MW: {:.2} Da (vs 18.01 for normal water)", result[0]);
+    let mw_val = mw_descriptor.calculate(&mut heavy_water);
+    println!("  MW: {:.2} Da (vs 18.01 for normal water)", mw_val.as_float());
 
     // Explicit hydrogens
-    let methane = parse_smiles("[CH4]").unwrap();
+    let mut methane = parse_smiles("[CH4]").unwrap();
     println!("\nMethane with explicit H [CH4]:");
     println!("  Atoms: {}, Explicit H: {}",
         methane.num_atoms(),
         methane.atoms[0].num_explicit_h);
 
-    mw_descriptor.calculate(&methane, &mut result);
-    println!("  MW: {:.2} Da", result[0]);
+    let mw_val = mw_descriptor.calculate(&mut methane);
+    println!("  MW: {:.2} Da", mw_val.as_float());
 
     // Aromatic systems
-    let benzene = parse_smiles("c1ccccc1").unwrap();
+    let mut benzene = parse_smiles("c1ccccc1").unwrap();
     println!("\nBenzene c1ccccc1:");
     println!("  Atoms: {}, Bonds: {}", benzene.num_atoms(), benzene.num_bonds());
     let aromatic_count = benzene.atoms.iter().filter(|a| a.is_aromatic()).count();
     println!("  Aromatic atoms: {}", aromatic_count);
     let implicit_h: u8 = benzene.atoms.iter().map(|a| a.num_implicit_h).sum();
     println!("  Implicit H: {} (automatically calculated)", implicit_h);
-    mw_descriptor.calculate(&benzene, &mut result);
-    println!("  MW: {:.2} Da", result[0]);
+    let mw_val = mw_descriptor.calculate(&mut benzene);
+    println!("  MW: {:.2} Da", mw_val.as_float());
 
     println!("\n");
 
@@ -103,10 +102,10 @@ fn main() {
     ];
 
     for (name, smiles) in &complex_molecules {
-        if let Ok(mol) = parse_smiles(smiles) {
-            mw_descriptor.calculate(&mol, &mut result);
+        if let Ok(mut mol) = parse_smiles(smiles) {
+            let mw_val = mw_descriptor.calculate(&mut mol);
             println!("{:15} → {} atoms, MW = {:.2} Da",
-                name, mol.num_atoms(), result[0]);
+                name, mol.num_atoms(), mw_val.as_float());
         }
     }
 

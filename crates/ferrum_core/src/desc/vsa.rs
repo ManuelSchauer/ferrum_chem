@@ -14,10 +14,10 @@
 //! - Labute (2000) J. Mol. Graph. Model. 18, 464
 //! - Wildman & Crippen (1999) JCICS 39(5), 868
 
-use super::Descriptor;
+use super::typed::{Descriptor, DescriptorValue};
 use super::logp::crippen_atom_contributions;
+use crate::algo::electronic::compute_gasteiger_charges;
 use crate::mol::molecule::Molecule;
-use crate::types::Real;
 use std::f64::consts::PI;
 
 // ---------------------------------------------------------------------------
@@ -74,21 +74,7 @@ fn compute_atom_vsa(mol: &Molecule) -> Vec<f64> {
 
 /// SlogP_VSA: VSA binned by Crippen logP atom contributions (12 values).
 ///
-/// Bin boundaries (RDKit-compatible):
-/// ```text
-/// Bin  0: logP < -0.40
-/// Bin  1: -0.40 ≤ logP < -0.20
-/// Bin  2: -0.20 ≤ logP <  0.00
-/// Bin  3:  0.00 ≤ logP <  0.10
-/// Bin  4:  0.10 ≤ logP <  0.15
-/// Bin  5:  0.15 ≤ logP <  0.20
-/// Bin  6:  0.20 ≤ logP <  0.25
-/// Bin  7:  0.25 ≤ logP <  0.30
-/// Bin  8:  0.30 ≤ logP <  0.40
-/// Bin  9:  0.40 ≤ logP <  0.50
-/// Bin 10:  0.50 ≤ logP <  0.60
-/// Bin 11:  0.60 ≤ logP
-/// ```
+/// Returns FloatVec with 12 logP-weighted VSA bins.
 pub struct SlogpVSA;
 
 const SLOGP_BINS: [f64; 12] = [
@@ -97,12 +83,13 @@ const SLOGP_BINS: [f64; 12] = [
 ];
 
 impl Descriptor for SlogpVSA {
-    fn name(&self) -> String { "SlogP_VSA".to_string() }
-    fn size(&self) -> usize { 12 }
+    fn name(&self) -> &str {
+        "SlogP_VSA"
+    }
 
-    fn calculate(&self, mol: &Molecule, output: &mut [Real]) {
-        for v in output.iter_mut() { *v = 0.0; }
-
+    fn calculate(&self, mol: &mut Molecule) -> DescriptorValue {
+        let mut values = vec![0.0f32; 12];
+        
         let vsa = compute_atom_vsa(mol);
         let (logp_contrib, _) = crippen_atom_contributions(mol);
 
@@ -110,8 +97,10 @@ impl Descriptor for SlogpVSA {
             if mol.atoms[i].atomic_number <= 1 { continue; }
             let lp = logp_contrib[i];
             let bin = find_bin(lp, &SLOGP_BINS);
-            output[bin] += vsa[i] as Real;
+            values[bin] += vsa[i] as f32;
         }
+        
+        DescriptorValue::FloatVec(values)
     }
 }
 
@@ -121,19 +110,7 @@ impl Descriptor for SlogpVSA {
 
 /// SMR_VSA: VSA binned by Crippen MR atom contributions (10 values).
 ///
-/// Bin boundaries (RDKit-compatible):
-/// ```text
-/// Bin 0: MR < 1.29
-/// Bin 1: 1.29 ≤ MR < 1.82
-/// Bin 2: 1.82 ≤ MR < 2.24
-/// Bin 3: 2.24 ≤ MR < 2.45
-/// Bin 4: 2.45 ≤ MR < 2.75
-/// Bin 5: 2.75 ≤ MR < 3.05
-/// Bin 6: 3.05 ≤ MR < 3.63
-/// Bin 7: 3.63 ≤ MR < 3.80
-/// Bin 8: 3.80 ≤ MR < 4.00
-/// Bin 9: 4.00 ≤ MR
-/// ```
+/// Returns FloatVec with 10 MR-weighted VSA bins.
 pub struct SmrVSA;
 
 const SMR_BINS: [f64; 10] = [
@@ -142,21 +119,24 @@ const SMR_BINS: [f64; 10] = [
 ];
 
 impl Descriptor for SmrVSA {
-    fn name(&self) -> String { "SMR_VSA".to_string() }
-    fn size(&self) -> usize { 10 }
+    fn name(&self) -> &str {
+        "SMR_VSA"
+    }
 
-    fn calculate(&self, mol: &Molecule, output: &mut [Real]) {
-        for v in output.iter_mut() { *v = 0.0; }
-
+    fn calculate(&self, mol: &mut Molecule) -> DescriptorValue {
+        let mut values = vec![0.0f32; 10];
+        
         let vsa = compute_atom_vsa(mol);
         let (_, mr_contrib) = crippen_atom_contributions(mol);
 
         for i in 0..mol.atoms.len() {
             if mol.atoms[i].atomic_number <= 1 { continue; }
-            let m = mr_contrib[i];
-            let bin = find_bin(m, &SMR_BINS);
-            output[bin] += vsa[i] as Real;
+            let mr = mr_contrib[i];
+            let bin = find_bin(mr, &SMR_BINS);
+            values[bin] += vsa[i] as f32;
         }
+        
+        DescriptorValue::FloatVec(values)
     }
 }
 
@@ -165,15 +145,55 @@ impl Descriptor for SmrVSA {
 // ---------------------------------------------------------------------------
 
 /// Labute's Approximate Surface Area: sum of all atom VSA contributions.
+///
+/// Returns Float with total approximate surface area.
 pub struct LabuteASA;
 
 impl Descriptor for LabuteASA {
-    fn name(&self) -> String { "LabuteASA".to_string() }
-    fn size(&self) -> usize { 1 }
+    fn name(&self) -> &str {
+        "LabuteASA"
+    }
 
-    fn calculate(&self, mol: &Molecule, output: &mut [Real]) {
+    fn calculate(&self, mol: &mut Molecule) -> DescriptorValue {
         let vsa = compute_atom_vsa(mol);
-        output[0] = vsa.iter().sum::<f64>() as Real;
+        let total: f64 = vsa.iter().sum();
+        DescriptorValue::Float(total as f32)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// PEOE_VSA — 14 bins
+// ---------------------------------------------------------------------------
+
+/// PEOE_VSA: VSA binned by Gasteiger partial charge ranges (14 values).
+///
+/// Returns FloatVec with 14 charge-weighted VSA bins.
+pub struct PeoeVsa;
+
+const PEOE_BINS: [f64; 14] = [
+    -0.30, -0.25, -0.20, -0.15, -0.10, -0.05, 0.00,
+    0.05,  0.10,  0.15,  0.20,  0.25,  0.30, f64::INFINITY,
+];
+
+impl Descriptor for PeoeVsa {
+    fn name(&self) -> &str {
+        "PEOE_VSA"
+    }
+
+    fn calculate(&self, mol: &mut Molecule) -> DescriptorValue {
+        let mut values = vec![0.0f32; 14];
+
+        let charges = compute_gasteiger_charges(mol);
+        let vsa = compute_atom_vsa(mol);
+
+        for i in 0..mol.atoms.len() {
+            if mol.atoms[i].atomic_number <= 1 { continue; }
+            let charge = charges[i];
+            let bin = find_bin(charge, &PEOE_BINS);
+            values[bin] += vsa[i] as f32;
+        }
+
+        DescriptorValue::FloatVec(values)
     }
 }
 
@@ -197,6 +217,7 @@ const _: () = {
     let _ = assert_send_sync::<SlogpVSA>;
     let _ = assert_send_sync::<SmrVSA>;
     let _ = assert_send_sync::<LabuteASA>;
+    let _ = assert_send_sync::<PeoeVsa>;
 };
 
 // ---------------------------------------------------------------------------
@@ -206,12 +227,22 @@ const _: () = {
 mod tests {
     use super::*;
     use crate::io::smiles::parse_smiles;
+    use super::super::typed::Descriptor;
 
-    fn calc<D: Descriptor>(d: &D, smiles: &str) -> Vec<Real> {
-        let mol = parse_smiles(smiles).expect("valid SMILES");
-        let mut output = vec![0.0; d.size()];
-        d.calculate(&mol, &mut output);
-        output
+    fn calc_float_vec(d: &dyn Descriptor, smiles: &str) -> Vec<f32> {
+        let mut mol = parse_smiles(smiles).expect("valid SMILES");
+        match d.calculate(&mut mol) {
+            DescriptorValue::FloatVec(v) => v,
+            other => panic!("expected FloatVec, got {:?}", other),
+        }
+    }
+
+    fn calc_float(d: &dyn Descriptor, smiles: &str) -> f32 {
+        let mut mol = parse_smiles(smiles).expect("valid SMILES");
+        match d.calculate(&mut mol) {
+            DescriptorValue::Float(v) => v,
+            other => panic!("expected Float, got {:?}", other),
+        }
     }
 
     // -- compute_atom_vsa --
@@ -220,7 +251,6 @@ mod tests {
     fn test_vsa_positive() {
         let mol = parse_smiles("CCO").unwrap();
         let vsa = compute_atom_vsa(&mol);
-        // All heavy atoms should have positive VSA
         for (i, &v) in vsa.iter().enumerate() {
             if mol.atoms[i].atomic_number > 1 {
                 assert!(v > 0.0, "atom {} VSA = {}", i, v);
@@ -232,7 +262,6 @@ mod tests {
     fn test_vsa_benzene_symmetry() {
         let mol = parse_smiles("c1ccccc1").unwrap();
         let vsa = compute_atom_vsa(&mol);
-        // All carbons should have same VSA (symmetric molecule)
         let c_vsas: Vec<f64> = vsa.iter().copied()
             .enumerate()
             .filter(|(i, _)| mol.atoms[*i].atomic_number == 6)
@@ -247,24 +276,24 @@ mod tests {
 
     #[test]
     fn test_slogp_vsa_nonzero() {
-        let v = calc(&SlogpVSA, "c1ccccc1");
-        let total: Real = v.iter().sum();
+        let v = calc_float_vec(&SlogpVSA, "c1ccccc1");
+        let total: f32 = v.iter().sum();
         assert!(total > 0.0, "total SlogP_VSA = {}", total);
     }
 
     #[test]
     fn test_slogp_vsa_bins_sum_to_labute() {
-        let slogp = calc(&SlogpVSA, "CCO");
-        let labute = calc(&LabuteASA, "CCO");
-        let bin_sum: Real = slogp.iter().sum();
-        assert!((bin_sum - labute[0]).abs() < 1.0,
-            "bin sum {} ≈ LabuteASA {}", bin_sum, labute[0]);
+        let slogp = calc_float_vec(&SlogpVSA, "CCO");
+        let labute = calc_float(&LabuteASA, "CCO");
+        let bin_sum: f32 = slogp.iter().sum();
+        assert!((bin_sum - labute).abs() < 1.0,
+            "bin sum {} ≈ LabuteASA {}", bin_sum, labute);
     }
 
     #[test]
     fn test_slogp_vsa_larger_molecule() {
-        let v = calc(&SlogpVSA, "CC(=O)Oc1ccccc1C(=O)O"); // aspirin
-        let total: Real = v.iter().sum();
+        let v = calc_float_vec(&SlogpVSA, "CC(=O)Oc1ccccc1C(=O)O");
+        let total: f32 = v.iter().sum();
         assert!(total > 50.0, "aspirin total VSA = {}", total);
     }
 
@@ -272,47 +301,89 @@ mod tests {
 
     #[test]
     fn test_smr_vsa_nonzero() {
-        let v = calc(&SmrVSA, "c1ccccc1");
-        let total: Real = v.iter().sum();
+        let v = calc_float_vec(&SmrVSA, "c1ccccc1");
+        let total: f32 = v.iter().sum();
         assert!(total > 0.0, "total SMR_VSA = {}", total);
     }
 
     #[test]
     fn test_smr_vsa_bins_sum_to_labute() {
-        let smr = calc(&SmrVSA, "CCO");
-        let labute = calc(&LabuteASA, "CCO");
-        let bin_sum: Real = smr.iter().sum();
-        assert!((bin_sum - labute[0]).abs() < 1.0,
-            "bin sum {} ≈ LabuteASA {}", bin_sum, labute[0]);
+        let smr = calc_float_vec(&SmrVSA, "CCO");
+        let labute = calc_float(&LabuteASA, "CCO");
+        let bin_sum: f32 = smr.iter().sum();
+        assert!((bin_sum - labute).abs() < 1.0,
+            "bin sum {} ≈ LabuteASA {}", bin_sum, labute);
     }
 
     // -- LabuteASA --
 
     #[test]
     fn test_labute_positive() {
-        let v = calc(&LabuteASA, "CCCCCC");
-        assert!(v[0] > 0.0, "hexane ASA = {}", v[0]);
+        let v = calc_float(&LabuteASA, "CCCCCC");
+        assert!(v > 0.0, "hexane ASA = {}", v);
     }
 
     #[test]
     fn test_labute_larger_more() {
-        let small = calc(&LabuteASA, "CC");
-        let large = calc(&LabuteASA, "CCCCCCCCCC");
-        assert!(large[0] > small[0],
-            "decane {} > ethane {}", large[0], small[0]);
+        let small = calc_float(&LabuteASA, "CC");
+        let large = calc_float(&LabuteASA, "CCCCCCCCCC");
+        assert!(large > small,
+            "decane {} > ethane {}", large, small);
     }
 
     #[test]
     fn test_labute_benzene() {
-        let v = calc(&LabuteASA, "c1ccccc1");
-        // Benzene: 6 carbons, each ~20-30 Å² exposed
-        assert!(v[0] > 50.0 && v[0] < 200.0, "benzene ASA = {}", v[0]);
+        let v = calc_float(&LabuteASA, "c1ccccc1");
+        assert!(v > 50.0 && v < 200.0, "benzene ASA = {}", v);
     }
 
     #[test]
     fn test_labute_methane() {
-        let v = calc(&LabuteASA, "C");
-        // Methane: single C with no heavy neighbors → full sphere = 4π(1.7)² ≈ 36.3
-        assert!((v[0] - 36.3).abs() < 1.0, "methane ASA = {}", v[0]);
+        let v = calc_float(&LabuteASA, "C");
+        assert!((v - 36.3).abs() < 1.0, "methane ASA = {}", v);
+    }
+
+    // -- PEOE_VSA --
+
+    #[test]
+    fn test_peoe_vsa_benzene() {
+        let v = calc_float_vec(&PeoeVsa, "c1ccccc1");
+        // All C atoms have same charge → all VSA lands in one bin
+        let nonzero: Vec<_> = v.iter().filter(|&&x| x > 0.0).collect();
+        assert!(!nonzero.is_empty(), "should have at least one nonzero bin");
+        let total: f32 = v.iter().sum();
+        let labute = calc_float(&LabuteASA, "c1ccccc1");
+        assert!((total - labute).abs() < 1.0,
+            "PEOE_VSA sum {} ≈ LabuteASA {}", total, labute);
+    }
+
+    #[test]
+    fn test_peoe_vsa_length() {
+        let v = calc_float_vec(&PeoeVsa, "CCO");
+        assert_eq!(v.len(), 14, "PEOE_VSA should have 14 bins");
+        let v2 = calc_float_vec(&PeoeVsa, "c1ccccc1");
+        assert_eq!(v2.len(), 14);
+    }
+
+    #[test]
+    fn test_peoe_vsa_formaldehyde() {
+        // C=O: O is more electronegative → negative charge, C → positive
+        let v = calc_float_vec(&PeoeVsa, "C=O");
+        // Bins 0-6 are negative charges, bins 7-13 are non-negative
+        let neg_sum: f32 = v[..7].iter().sum();
+        let pos_sum: f32 = v[7..].iter().sum();
+        assert!(neg_sum > 0.0, "O should contribute to negative bins: {:?}", v);
+        assert!(pos_sum > 0.0, "C should contribute to positive bins: {:?}", v);
+    }
+
+    #[test]
+    fn test_peoe_vsa_sum() {
+        for smi in &["CCO", "CC(=O)O", "c1ccccc1", "CCCCCC"] {
+            let peoe = calc_float_vec(&PeoeVsa, smi);
+            let labute = calc_float(&LabuteASA, smi);
+            let bin_sum: f32 = peoe.iter().sum();
+            assert!((bin_sum - labute).abs() < 1.0,
+                "{}: PEOE_VSA sum {} ≈ LabuteASA {}", smi, bin_sum, labute);
+        }
     }
 }

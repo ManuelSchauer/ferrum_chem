@@ -9,12 +9,13 @@
 //! - Carhart et al. (1985) "Atom pairs as molecular features" JCICS 25, 64-73
 //! - Nilakantan et al. (1987) "Topological torsion" JCICS 27, 82-85
 
-use super::Descriptor;
 use crate::mol::molecule::Molecule;
-use crate::types::{AtomIdx, Real, BondType};
+use crate::types::{AtomIdx, BondType};
 use std::collections::VecDeque;
 use std::hash::{Hash, Hasher};
 use std::collections::hash_map::DefaultHasher;
+use super::typed::{DescriptorValue, Descriptor};
+use bitvec::prelude::*;
 
 /// Maximum topological distance for atom pair encoding.
 const MAX_PAIR_DISTANCE: u32 = 7;
@@ -83,12 +84,21 @@ fn compute_distances(mol: &Molecule) -> Vec<u32> {
     distances
 }
 
+/// Fold hashes into a fixed-size bit vector.
+fn fold_bitvec(hashes: &[u64], num_bits: usize) -> BitVec<u8, Lsb0> {
+    let mut bits = bitvec![u8, Lsb0; 0; num_bits];
+    for &hash in hashes {
+        let bit = (hash as usize) % num_bits;
+        bits.set(bit, true);
+    }
+    bits
+}
+
 /// Atom Pair Fingerprint descriptor.
 ///
 /// Encodes all pairs of atoms at topological distances 1-7.
 /// Each pair is hashed as: (atom_type_i, distance, atom_type_j) with canonical ordering.
-///
-/// Output: bit vector of 0.0/1.0 values.
+/// Returns bit-packed fingerprint.
 pub struct AtomPairFingerprint {
     pub num_bits: usize,
 }
@@ -106,6 +116,18 @@ impl AtomPairFingerprint {
     /// Get raw feature hashes.
     pub fn raw_features(&self, mol: &Molecule) -> Vec<u64> {
         atom_pair_features(mol)
+    }
+}
+
+impl Descriptor for AtomPairFingerprint {
+    fn name(&self) -> &str {
+        "AtomPair"
+    }
+
+    fn calculate(&self, mol: &mut Molecule) -> DescriptorValue {
+        let hashes = atom_pair_features(mol);
+        let bits = fold_bitvec(&hashes, self.num_bits);
+        DescriptorValue::Binary(bits)
     }
 }
 
@@ -141,38 +163,16 @@ fn atom_pair_features(mol: &Molecule) -> Vec<u64> {
     features
 }
 
-impl Descriptor for AtomPairFingerprint {
-    fn name(&self) -> String {
-        "AtomPair".to_string()
-    }
-
-    fn size(&self) -> usize {
-        self.num_bits
-    }
-
-    fn calculate(&self, mol: &Molecule, output: &mut [Real]) {
-        for v in output.iter_mut() {
-            *v = 0.0;
-        }
-        let features = atom_pair_features(mol);
-        for hash in features {
-            let bit = (hash as usize) % self.num_bits;
-            output[bit] = 1.0;
-        }
-    }
-}
-
 /// Topological Torsion Fingerprint descriptor.
 ///
 /// Encodes all linear 4-atom paths in the molecule.
 /// Each path is hashed as: (type1, type2, type3, type4) with canonical ordering.
-///
-/// Output: bit vector of 0.0/1.0 values.
-pub struct TopologicalTorsion {
+/// Returns bit-packed fingerprint.
+pub struct TopologicalTorsionFingerprint {
     pub num_bits: usize,
 }
 
-impl TopologicalTorsion {
+impl TopologicalTorsionFingerprint {
     pub fn new(num_bits: usize) -> Self {
         Self { num_bits }
     }
@@ -183,6 +183,18 @@ impl TopologicalTorsion {
 
     pub fn raw_features(&self, mol: &Molecule) -> Vec<u64> {
         torsion_features(mol)
+    }
+}
+
+impl Descriptor for TopologicalTorsionFingerprint {
+    fn name(&self) -> &str {
+        "TopologicalTorsion"
+    }
+
+    fn calculate(&self, mol: &mut Molecule) -> DescriptorValue {
+        let hashes = torsion_features(mol);
+        let bits = fold_bitvec(&hashes, self.num_bits);
+        DescriptorValue::Binary(bits)
     }
 }
 
@@ -265,31 +277,10 @@ fn torsion_features(mol: &Molecule) -> Vec<u64> {
     features
 }
 
-impl Descriptor for TopologicalTorsion {
-    fn name(&self) -> String {
-        "TopologicalTorsion".to_string()
-    }
-
-    fn size(&self) -> usize {
-        self.num_bits
-    }
-
-    fn calculate(&self, mol: &Molecule, output: &mut [Real]) {
-        for v in output.iter_mut() {
-            *v = 0.0;
-        }
-        let features = torsion_features(mol);
-        for hash in features {
-            let bit = (hash as usize) % self.num_bits;
-            output[bit] = 1.0;
-        }
-    }
-}
-
 const _: () = {
     const fn assert_send_sync<T: Send + Sync>() {}
     let _ = assert_send_sync::<AtomPairFingerprint>;
-    let _ = assert_send_sync::<TopologicalTorsion>;
+    let _ = assert_send_sync::<TopologicalTorsionFingerprint>;
 };
 
 #[cfg(test)]
@@ -298,23 +289,20 @@ mod tests {
     use crate::io::smiles::parse_smiles;
     use crate::desc::fingerprint::tanimoto_similarity;
 
-    fn count_bits(fp: &[Real]) -> usize {
-        fp.iter().filter(|&&v| v > 0.5).count()
+    fn count_bits(fp: &BitVec<u8, Lsb0>) -> usize {
+        fp.count_ones()
     }
 
     // ========== Atom Pair Tests ==========
 
-    fn calc_ap(smiles: &str, bits: usize) -> Vec<Real> {
-        let mol = parse_smiles(smiles).expect("valid SMILES");
+    fn calc_ap(smiles: &str, bits: usize) -> BitVec<u8, Lsb0> {
+        let mut mol = parse_smiles(smiles).expect("valid SMILES");
         let ap = AtomPairFingerprint::new(bits);
-        let mut output = vec![0.0; bits];
-        ap.calculate(&mol, &mut output);
-        output
+        ap.calculate(&mut mol).as_binary().clone()
     }
 
     #[test]
     fn test_ap_methane_no_pairs() {
-        // Single atom: no atom pairs
         let fp = calc_ap("C", 2048);
         assert_eq!(count_bits(&fp), 0);
     }
@@ -322,16 +310,13 @@ mod tests {
     #[test]
     fn test_ap_ethane() {
         let fp = calc_ap("CC", 2048);
-        let bits = count_bits(&fp);
-        assert!(bits > 0, "Ethane should have at least 1 atom pair");
-        println!("Ethane AP bits: {}", bits);
+        assert!(count_bits(&fp) > 0, "Ethane should have at least 1 atom pair");
     }
 
     #[test]
     fn test_ap_benzene() {
         let fp = calc_ap("c1ccccc1", 2048);
         let bits = count_bits(&fp);
-        println!("Benzene AP bits: {}", bits);
         assert!(bits > 0 && bits < 100);
     }
 
@@ -354,7 +339,6 @@ mod tests {
         let fp1 = calc_ap("c1ccc(O)cc1", 2048);
         let fp2 = calc_ap("Cc1ccc(O)cc1", 2048);
         let sim = tanimoto_similarity(&fp1, &fp2);
-        println!("Phenol vs Cresol AP Tanimoto: {}", sim);
         assert!(sim > 0.2, "Similar molecules should have some AP overlap: {}", sim);
     }
 
@@ -367,25 +351,21 @@ mod tests {
 
     #[test]
     fn test_ap_drug_molecule() {
-        let fp = calc_ap("CC(=O)Oc1ccccc1C(=O)O", 2048); // aspirin
+        let fp = calc_ap("CC(=O)Oc1ccccc1C(=O)O", 2048);
         let bits = count_bits(&fp);
-        println!("Aspirin AP bits: {}", bits);
         assert!(bits > 5 && bits < 500);
     }
 
     // ========== Topological Torsion Tests ==========
 
-    fn calc_tt(smiles: &str, bits: usize) -> Vec<Real> {
-        let mol = parse_smiles(smiles).expect("valid SMILES");
-        let tt = TopologicalTorsion::new(bits);
-        let mut output = vec![0.0; bits];
-        tt.calculate(&mol, &mut output);
-        output
+    fn calc_tt(smiles: &str, bits: usize) -> BitVec<u8, Lsb0> {
+        let mut mol = parse_smiles(smiles).expect("valid SMILES");
+        let tt = TopologicalTorsionFingerprint::new(bits);
+        tt.calculate(&mut mol).as_binary().clone()
     }
 
     #[test]
     fn test_tt_small_molecules_no_paths() {
-        // Fewer than 4 atoms: no 4-atom paths
         assert_eq!(count_bits(&calc_tt("C", 2048)), 0);
         assert_eq!(count_bits(&calc_tt("CC", 2048)), 0);
         assert_eq!(count_bits(&calc_tt("CCC", 2048)), 0);
@@ -394,17 +374,13 @@ mod tests {
     #[test]
     fn test_tt_butane() {
         let fp = calc_tt("CCCC", 2048);
-        let bits = count_bits(&fp);
-        println!("Butane TT bits: {}", bits);
-        assert!(bits > 0, "Butane has one 4-atom path");
+        assert!(count_bits(&fp) > 0, "Butane has one 4-atom path");
     }
 
     #[test]
     fn test_tt_benzene() {
         let fp = calc_tt("c1ccccc1", 2048);
-        let bits = count_bits(&fp);
-        println!("Benzene TT bits: {}", bits);
-        assert!(bits > 0);
+        assert!(count_bits(&fp) > 0);
     }
 
     #[test]
@@ -430,9 +406,8 @@ mod tests {
 
     #[test]
     fn test_tt_drug_molecule() {
-        let fp = calc_tt("CC(=O)Oc1ccccc1C(=O)O", 2048); // aspirin
+        let fp = calc_tt("CC(=O)Oc1ccccc1C(=O)O", 2048);
         let bits = count_bits(&fp);
-        println!("Aspirin TT bits: {}", bits);
         assert!(bits > 3 && bits < 500);
     }
 }

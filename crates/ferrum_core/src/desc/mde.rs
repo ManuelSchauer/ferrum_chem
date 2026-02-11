@@ -10,9 +10,9 @@
 //! Reference: Liu, S. et al. (1998) "Molecular Distance Edge (MDE)
 //!            Vector", JCICS 38, 536-540.
 
-use super::Descriptor;
+use super::typed::{Descriptor, DescriptorValue};
 use crate::mol::molecule::Molecule;
-use crate::types::{AtomIdx, Real};
+use crate::types::AtomIdx;
 use std::collections::VecDeque;
 
 fn compute_distance_matrix(mol: &Molecule) -> Vec<u32> {
@@ -67,20 +67,24 @@ fn pair_index(a: usize, b: usize) -> Option<usize> {
     Some(offset + (hi - lo))
 }
 
-/// MDE descriptors: 15 values (one per atom-pair type).
+/// MDE descriptors.
 ///
+/// Returns FloatVec with 15 values (one per atom-pair type).
 /// Each value is the sum of 1/d² for all atom pairs of that type.
 pub struct MDE;
 
 impl Descriptor for MDE {
-    fn name(&self) -> String { "MDE".to_string() }
-    fn size(&self) -> usize { NUM_PAIR_TYPES }
+    fn name(&self) -> &str {
+        "MDE"
+    }
 
-    fn calculate(&self, mol: &Molecule, output: &mut [Real]) {
-        for v in output.iter_mut() { *v = 0.0; }
-
+    fn calculate(&self, mol: &mut Molecule) -> DescriptorValue {
+        let mut values = vec![0.0f32; NUM_PAIR_TYPES];
+        
         let n = mol.num_atoms();
-        if n < 2 { return; }
+        if n < 2 {
+            return DescriptorValue::FloatVec(values);
+        }
 
         let dist = compute_distance_matrix(mol);
         let classes: Vec<usize> = mol.atoms.iter()
@@ -88,17 +92,17 @@ impl Descriptor for MDE {
             .collect();
 
         for i in 0..n {
-            if classes[i] > 4 { continue; }
-            for j in (i + 1)..n {
-                if classes[j] > 4 { continue; }
+            for j in i + 1..n {
                 let d = dist[i * n + j];
-                if d == 0 || d == u32::MAX { continue; }
-
-                if let Some(idx) = pair_index(classes[i], classes[j]) {
-                    output[idx] += (1.0 / (d as f64 * d as f64)) as Real;
+                if d > 0 && d < u32::MAX {
+                    if let Some(pidx) = pair_index(classes[i], classes[j]) {
+                        values[pidx] += 1.0 / (d * d) as f32;
+                    }
                 }
             }
         }
+        
+        DescriptorValue::FloatVec(values)
     }
 }
 
@@ -111,23 +115,25 @@ const _: () = {
 mod tests {
     use super::*;
     use crate::io::smiles::parse_smiles;
+    use super::super::typed::Descriptor;
 
-    fn calc_mde(smiles: &str) -> Vec<Real> {
-        let mol = parse_smiles(smiles).expect("valid SMILES");
-        let mut output = vec![0.0; NUM_PAIR_TYPES];
-        MDE.calculate(&mol, &mut output);
-        output
+    fn calc_mde(smiles: &str) -> Vec<f32> {
+        let mut mol = parse_smiles(smiles).expect("valid SMILES");
+        match MDE.calculate(&mut mol) {
+            DescriptorValue::FloatVec(v) => v,
+            other => panic!("expected FloatVec, got {:?}", other),
+        }
     }
 
     #[test]
-    fn test_mde_size() {
-        assert_eq!(MDE.size(), 15);
+    fn test_mde_len() {
+        let m = calc_mde("CC");
+        assert_eq!(m.len(), 15);
     }
 
     #[test]
     fn test_mde_ethane() {
         let m = calc_mde("CC");
-        // One C-C pair at distance 1: 1/1² = 1.0
         let cc_idx = pair_index(0, 0).unwrap();
         assert!((m[cc_idx] - 1.0).abs() < 0.01, "CC = {}", m[cc_idx]);
     }
@@ -145,14 +151,13 @@ mod tests {
     fn test_mde_no_nitrogen_in_ethane() {
         let m = calc_mde("CC");
         let cn = pair_index(0, 1).unwrap();
-        assert!((m[cn]).abs() < 0.001, "no C-N pairs in ethane");
+        assert!(m[cn].abs() < 0.001, "no C-N pairs in ethane");
     }
 
     #[test]
     fn test_mde_benzene() {
         let m = calc_mde("c1ccccc1");
         let cc = pair_index(0, 0).unwrap();
-        // 15 C-C pairs at various distances
         assert!(m[cc] > 5.0, "many CC pairs in benzene: {}", m[cc]);
     }
 
@@ -172,9 +177,9 @@ mod tests {
 
     #[test]
     fn test_pair_index() {
-        assert_eq!(pair_index(0, 0), Some(0)); // CC
-        assert_eq!(pair_index(0, 1), Some(1)); // CN
-        assert_eq!(pair_index(0, 2), Some(2)); // CO
-        assert_eq!(pair_index(1, 1), Some(5)); // NN
+        assert_eq!(pair_index(0, 0), Some(0));
+        assert_eq!(pair_index(0, 1), Some(1));
+        assert_eq!(pair_index(0, 2), Some(2));
+        assert_eq!(pair_index(1, 1), Some(5));
     }
 }

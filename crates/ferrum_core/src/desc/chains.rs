@@ -9,17 +9,15 @@
 //! - Lipophilicity
 //! - Molecular complexity
 
-use super::Descriptor;
+use super::typed::{DescriptorValue, Descriptor};
 use crate::mol::molecule::Molecule;
-use crate::types::{Real, AtomIdx};
+use crate::types::AtomIdx;
 use std::collections::HashSet;
 
 /// Longest aliphatic (sp3 carbon) chain descriptor.
 ///
 /// Finds the longest continuous chain of sp3-hybridized carbons (non-aromatic, single bonds).
-/// This is important for predicting lipophilicity and molecular flexibility.
-///
-/// Returns 1 value: the length of the longest aliphatic carbon chain.
+/// Returns Int(u32) with the length of the longest aliphatic carbon chain.
 pub struct LongestAliphaticChain;
 
 impl LongestAliphaticChain {
@@ -34,7 +32,6 @@ impl LongestAliphaticChain {
         
         let mut max_length = depth;
         
-        // Try extending through aliphatic carbon neighbors
         for &neighbor_idx in &mol.adjacency[current as usize] {
             if visited.contains(&neighbor_idx) {
                 continue;
@@ -42,7 +39,6 @@ impl LongestAliphaticChain {
             
             let neighbor = &mol.atoms[neighbor_idx as usize];
             
-            // Check if neighbor is aliphatic carbon
             if neighbor.atomic_number == 6 && !neighbor.is_aromatic() {
                 let length = Self::dfs_aliphatic(mol, neighbor_idx, visited, depth + 1);
                 max_length = max_length.max(length);
@@ -52,21 +48,10 @@ impl LongestAliphaticChain {
         visited.remove(&current);
         max_length
     }
-}
 
-impl Descriptor for LongestAliphaticChain {
-    fn name(&self) -> String {
-        "LongestAliphaticChain".to_string()
-    }
-    
-    fn size(&self) -> usize {
-        1
-    }
-    
-    fn calculate(&self, mol: &Molecule, output: &mut [Real]) {
+    fn compute(mol: &Molecule) -> u32 {
         let mut max_chain = 0;
         
-        // Try starting from each aliphatic carbon
         for i in 0..mol.atoms.len() {
             let atom = &mol.atoms[i];
             
@@ -77,16 +62,22 @@ impl Descriptor for LongestAliphaticChain {
             }
         }
         
-        output[0] = max_chain as Real;
+        max_chain as u32
+    }
+}
+
+impl Descriptor for LongestAliphaticChain {
+    fn name(&self) -> &str { "LongestAliphaticChain" }
+
+    fn calculate(&self, mol: &mut Molecule) -> DescriptorValue {
+        DescriptorValue::Int(Self::compute(mol))
     }
 }
 
 /// Largest chain through any atoms descriptor.
 ///
 /// Finds the longest continuous chain through any atoms (not just carbons).
-/// This measures overall molecular backbone length and complexity.
-///
-/// Returns 1 value: the length of the longest atom chain.
+/// Returns Int(u32) with the length of the longest atom chain.
 pub struct LargestChain;
 
 impl LargestChain {
@@ -101,7 +92,6 @@ impl LargestChain {
         
         let mut max_length = depth;
         
-        // Try extending through all neighbors
         for &neighbor_idx in &mol.adjacency[current as usize] {
             if !visited.contains(&neighbor_idx) {
                 let length = Self::dfs_any(mol, neighbor_idx, visited, depth + 1);
@@ -112,30 +102,33 @@ impl LargestChain {
         visited.remove(&current);
         max_length
     }
-}
 
-impl Descriptor for LargestChain {
-    fn name(&self) -> String {
-        "LargestChain".to_string()
-    }
-    
-    fn size(&self) -> usize {
-        1
-    }
-    
-    fn calculate(&self, mol: &Molecule, output: &mut [Real]) {
+    fn compute(mol: &Molecule) -> u32 {
         let mut max_chain = 0;
         
-        // Try starting from each atom
         for i in 0..mol.atoms.len() {
             let mut visited = HashSet::new();
             let length = Self::dfs_any(mol, i as AtomIdx, &mut visited, 1);
             max_chain = max_chain.max(length);
         }
         
-        output[0] = max_chain as Real;
+        max_chain as u32
     }
 }
+
+impl Descriptor for LargestChain {
+    fn name(&self) -> &str { "LargestChain" }
+
+    fn calculate(&self, mol: &mut Molecule) -> DescriptorValue {
+        DescriptorValue::Int(Self::compute(mol))
+    }
+}
+
+const _: () = {
+    const fn assert_send_sync<T: Send + Sync>() {}
+    let _ = assert_send_sync::<LongestAliphaticChain>;
+    let _ = assert_send_sync::<LargestChain>;
+};
 
 #[cfg(test)]
 mod tests {
@@ -153,105 +146,56 @@ mod tests {
 
     #[test]
     fn test_longest_aliphatic_chain_linear() {
-        let mol = parse_and_prepare("CCCCCC"); // Hexane
-        let desc = LongestAliphaticChain;
-        let mut output = vec![0.0; 1];
-        desc.calculate(&mol, &mut output);
-        
-        println!("Hexane longest aliphatic chain: {}", output[0]);
-        assert_eq!(output[0], 6.0, "Hexane should have chain of 6");
+        let mut mol = parse_and_prepare("CCCCCC");
+        assert_eq!(LongestAliphaticChain.calculate(&mut mol), DescriptorValue::Int(6));
     }
 
     #[test]
     fn test_longest_aliphatic_chain_branched() {
-        let mol = parse_and_prepare("CC(C)CCC"); // 2-methylpentane
-        let desc = LongestAliphaticChain;
-        let mut output = vec![0.0; 1];
-        desc.calculate(&mol, &mut output);
-        
-        println!("2-methylpentane longest aliphatic chain: {}", output[0]);
-        // The longest PATH is C-C-C-C-C-C (going through the branch point)
-        assert_eq!(output[0], 6.0, "Longest path through carbons is 6");
+        let mut mol = parse_and_prepare("CC(C)CCC");
+        assert_eq!(LongestAliphaticChain.calculate(&mut mol), DescriptorValue::Int(6));
     }
 
     #[test]
     fn test_longest_aliphatic_chain_aromatic() {
-        let mol = parse_and_prepare("CCCc1ccccc1"); // Propylbenzene
-        let desc = LongestAliphaticChain;
-        let mut output = vec![0.0; 1];
-        desc.calculate(&mol, &mut output);
-        
-        println!("Propylbenzene longest aliphatic chain: {}", output[0]);
-        assert_eq!(output[0], 3.0, "Should only count aliphatic propyl chain");
+        let mut mol = parse_and_prepare("CCCc1ccccc1");
+        assert_eq!(LongestAliphaticChain.calculate(&mut mol), DescriptorValue::Int(3));
     }
 
     #[test]
     fn test_longest_aliphatic_chain_aromatic_only() {
-        let mol = parse_and_prepare("c1ccccc1"); // Benzene
-        let desc = LongestAliphaticChain;
-        let mut output = vec![0.0; 1];
-        desc.calculate(&mol, &mut output);
-        
-        println!("Benzene longest aliphatic chain: {}", output[0]);
-        assert_eq!(output[0], 0.0, "Benzene has no aliphatic carbons");
+        let mut mol = parse_and_prepare("c1ccccc1");
+        assert_eq!(LongestAliphaticChain.calculate(&mut mol), DescriptorValue::Int(0));
     }
 
     #[test]
     fn test_longest_aliphatic_chain_complex() {
-        let mol = parse_and_prepare("CCCCC(CC)CCCC"); // 3-ethyloctane
-        let desc = LongestAliphaticChain;
-        let mut output = vec![0.0; 1];
-        desc.calculate(&mol, &mut output);
-        
-        println!("3-ethyloctane longest aliphatic chain: {}", output[0]);
-        // Longest path goes through all carbons: 11 total
-        assert_eq!(output[0], 11.0, "Longest path through all carbons");
+        let mut mol = parse_and_prepare("CCCCC(CC)CCCC");
+        assert_eq!(LongestAliphaticChain.calculate(&mut mol), DescriptorValue::Int(11));
     }
 
     #[test]
     fn test_largest_chain_linear() {
-        let mol = parse_and_prepare("CCCCCC"); // Hexane
-        let desc = LargestChain;
-        let mut output = vec![0.0; 1];
-        desc.calculate(&mol, &mut output);
-        
-        println!("Hexane largest chain: {}", output[0]);
-        assert_eq!(output[0], 6.0, "Hexane chain is 6 carbons");
+        let mut mol = parse_and_prepare("CCCCCC");
+        assert_eq!(LargestChain.calculate(&mut mol), DescriptorValue::Int(6));
     }
 
     #[test]
     fn test_largest_chain_aromatic() {
-        let mol = parse_and_prepare("c1ccccc1"); // Benzene
-        let desc = LargestChain;
-        let mut output = vec![0.0; 1];
-        desc.calculate(&mol, &mut output);
-        
-        println!("Benzene largest chain: {}", output[0]);
-        assert_eq!(output[0], 6.0, "Benzene ring has 6 atoms");
+        let mut mol = parse_and_prepare("c1ccccc1");
+        assert_eq!(LargestChain.calculate(&mut mol), DescriptorValue::Int(6));
     }
 
     #[test]
     fn test_largest_chain_with_heteroatom() {
-        let mol = parse_and_prepare("CCOCCOC"); // Diethyl ether with O in chain
-        let desc = LargestChain;
-        let mut output = vec![0.0; 1];
-        desc.calculate(&mol, &mut output);
-        
-        println!("Diethyl ether chain variant largest chain: {}", output[0]);
-        // Chain includes heteroatoms: C-C-O-C-C-O-C = 7
-        assert_eq!(output[0], 7.0, "Should count through oxygen atoms");
+        let mut mol = parse_and_prepare("CCOCCOC");
+        assert_eq!(LargestChain.calculate(&mut mol), DescriptorValue::Int(7));
     }
 
     #[test]
     fn test_largest_chain_branched() {
-        let mol = parse_and_prepare("CC(C)(C)C"); // Neopentane
-        let desc = LargestChain;
-        let mut output = vec![0.0; 1];
-        desc.calculate(&mol, &mut output);
-        
-        println!("Neopentane largest chain: {}", output[0]);
-        // Can go from one branch through center to another: 5 carbons total
-        assert_eq!(output[0], 5.0, "Longest path is 5 (counting all carbons in path)");
+        let mut mol = parse_and_prepare("CC(C)(C)C");
+        assert_eq!(LargestChain.calculate(&mut mol), DescriptorValue::Int(5));
     }
 
     #[test]

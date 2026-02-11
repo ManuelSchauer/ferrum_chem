@@ -11,6 +11,7 @@
 //!
 //! Reference: Balaban, A.T. (1982) Chemical Applications of Graph Theory
 
+use super::typed::{Descriptor, DescriptorValue};
 use crate::mol::molecule::Molecule;
 use std::collections::VecDeque;
 
@@ -106,6 +107,29 @@ pub fn calculate(mol: &Molecule) -> f64 {
     let j = (m as f64 / (mu + 1) as f64) * sum;
     j
 }
+
+/// Balaban J Index descriptor.
+///
+/// Returns Float with the Balaban J index.
+///
+/// # Thread Safety
+/// Stateless and thread-safe (Send + Sync).
+pub struct BalabanIndex;
+
+impl Descriptor for BalabanIndex {
+    fn name(&self) -> &str {
+        "BalabanJ"
+    }
+
+    fn calculate(&self, mol: &mut Molecule) -> DescriptorValue {
+        DescriptorValue::Float(calculate(mol) as f32)
+    }
+}
+
+const _: () = {
+    const fn assert_send_sync<T: Send + Sync>() {}
+    let _ = assert_send_sync::<BalabanIndex>;
+};
 
 #[cfg(test)]
 mod tests {

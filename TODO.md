@@ -159,171 +159,109 @@ See [`THREAD_SAFETY.md`](THREAD_SAFETY.md) for guidelines.
 - **17,696 total feature dimensions** (17,431 fingerprint bits + 265 continuous)
 - **Production-ready 2D QSAR library** with essential RDKit/CDK features
 
-## 🧬 Phase 11: Architecture Refactor - Typed Descriptors (2-3 weeks) 🟡
+## 🧬 Phase 11: Typed Descriptor Refactoring ✅ COMPLETE
 
-### Goal: Replace f32 outputs with proper types for QSAR + memory efficiency
+### Architecture Refactor ✅
+- [x] Implemented `DescriptorValue` enum (Int, Float, IntVec, IntU16Vec, FloatVec, Binary)
+- [x] Created `Descriptor` trait with typed returns (`&mut Molecule → DescriptorValue`)
+- [x] Implemented typed versions for ALL 60 descriptors
+- [x] Memory-optimized types (u8 radius, u16 element counts, BitVec fingerprints)
+- [x] 32x memory reduction validated (67.5 GB → 2.13 GB for 1M molecules)
+- [x] ML vector builder: `build_ml_vector()` + `build_ml_vectors_parallel()`
 
-**Current Issue:**
-- All descriptors return `Vec<f32>` → wastes memory, loses precision
-- Fingerprints: 881 bits = 3.5 KB/molecule (881 × f32)
-- Atom counts stored as floats (rounding issues)
+### Legacy Removal ✅
+- [x] Removed `LegacyDescriptor` trait entirely
+- [x] Removed `TypedDescriptor` alias
+- [x] Renamed all 60 `*Typed` structs → clean names (e.g. `LogPTyped` → `LogP`)
+- [x] Single trait: `Descriptor` with `fn calculate(&self, mol: &mut Molecule) -> DescriptorValue`
+- [x] Rewritten batch.rs to use new API
+- [x] Deleted dead code (logp_old.rs)
+- [x] Extracted computation functions for cross-descriptor reuse
+- [x] Added `SingleAtomCount::new("C")` configurable element counter
+- [x] 568 unit tests + 14 doc tests passing
+- [x] Net -645 lines of code
 
-**Benefits of Typed Returns:**
-- **4x memory reduction** for fingerprints: 3.5KB → 881 bytes (BitVec)
-- **Type safety** for QSAR: u32 atom counts (no float rounding)
-- **Better API**: `atom_count()` → `u32` not `[f32; 1]`
-- **Direct binary ops** for Tanimoto similarity
+**Status**: 60 descriptors, 17,696 dimensions, 568 tests ✅
 
-### Design (1 week)
-```rust
-pub enum DescriptorValue {
-    Int(u32),
-    Float(f32),
-    IntVec(Vec<u32>),
-    FloatVec(Vec<f32>),
-    Binary(BitVec),  // bit-packed
-}
+## 🧬 Phase 12: Electronic Descriptors ✅ COMPLETE
 
-pub trait TypedDescriptor: Send + Sync {
-    fn name(&self) -> &str;
-    fn calculate(&self, mol: &Molecule) -> DescriptorValue;
-}
+### Gasteiger Partial Charges ✅
+- [x] Gasteiger-Marsili iterative algorithm (12 iterations, geometric damping)
+- [x] 15 atom types: H, C×3 (sp/sp2/sp3), N×3 (sp/sp2/sp3), O×2, F, Cl, Br, I, S×2, P
+- [x] Hybridization from bond types + RDKit conjugation logic (IONXH = 20.02)
+- [x] RDKit cross-validated: 17 molecules within ±0.05 per atom, 28 tests
 
-// Conversion layer for ML pipelines
-impl DescriptorValue {
-    fn to_floats(&self, output: &mut [f32]);
-}
-```
+### Charge-Derived Descriptors ✅
+- [x] MaxPartialCharge, MinPartialCharge, MaxAbsPartialCharge, MinAbsPartialCharge
+- [x] GasteigerCharges (per-atom vector)
+- [x] APol (sum atomic polarizabilities), BPol (bond polarizability differences)
+- [x] PEOE_VSA (14 charge-weighted surface area bins)
 
-### Migration (2 weeks)
-- [ ] Implement TypedDescriptor trait + DescriptorValue enum
-- [ ] Migrate fingerprints first (PubChem, MACCS, ECFP, AtomPair → BitVec)
-- [ ] Migrate counting descriptors (atoms, bonds, rings → u32)
-- [ ] Migrate floating descriptors (LogP, TPSA, MW → f32)
-- [ ] Keep legacy Descriptor trait for backward compatibility
-- [ ] Add ML vector builder with type conversions
-- [ ] Update all 395 tests incrementally
+**Status**: 67 descriptors, 622 unit + 14 doc tests ✅
 
-**Phase 11 Output**: Typed descriptor system, 4x memory reduction, QSAR-ready
+## 🤖 Phase 13: ML Pipeline — All From Scratch 🔵
 
-## 🧬 Phase 12: Electronic Descriptors - COMPLEXITY CLIFF (3-4 weeks) 🔴
+### 13A: Data Infrastructure
+- [ ] `QsarDataset` struct (f64 ndarray, targets, feature names, f32→f64 boundary)
+- [ ] `StandardScaler` (Z-score: μ/σ persistence for inference)
+- [ ] `MinMaxScaler` (alternative scaling)
+- [ ] Feature selection: variance threshold, correlation filter (r > 0.95)
+- [ ] PCA dimensionality reduction (reuse Jacobi eigendecomp from BCUT)
+- [ ] Train/test splitting: random, stratified, **scaffold-based**
 
-### ⚠️ Gasteiger Partial Charges (2 weeks) - HARDEST NON-3D FEATURE
+### 13B: Supervised Models — From Scratch (~1150 lines)
+- [ ] **k-NN** (~100 lines) — Tanimoto for fingerprints, Euclidean for descriptors
+- [ ] **Random Forest** (~600 lines) — decision tree + bagging, binary feature optimization
+- [ ] **PLS Regression** (~200 lines, NIPALS) — handles collinearity
+- [ ] **Elastic Net / LASSO** (~250 lines, coordinate descent) — automatic feature selection
+- [ ] **Classification variants** — RF classifier, k-NN classifier
 
-- [ ] **Implementation** (10 days)
-  - Iterative electronegativity equalization
-  - Algorithm: Gasteiger & Marsili 1980
-  - Steps:
-    1. Assign atom types + parameters (a, b, c)
-    2. Initialize charges (0)
-    3. Iterate: χ = a + b×q + c×q², transfer charge Δq ∝ (χ_i - χ_j)
-    4. Damping + convergence (6-10 iterations)
-  - Edge cases: conjugation, aromatics, heteroatoms, charged species
-  - 20+ atom type parameters
+### 13C: Custom ART-2A (~200 lines)
+- [ ] ART-2A: vigilance ρ, learning rate η, L2-normalized input
+- [ ] Chemical space clustering, applicability domain
 
-- [ ] **Tests & Validation** (4 days)
-  - 20+ molecules covering all atom types
-  - Compare to RDKit (tolerance ±0.01-0.05)
-  - Edge cases: zwitterions, resonance
-  - Molecules: alkanes, aromatics, heterocycles, charged
+### 13D: Pipeline, Inference & Optimization
+- [ ] `QsarPipeline` serializable struct (scaler + PCA + model + AD + metadata)
+- [ ] Hand-tunable hyperparameters + built-in grid search optimization
+- [ ] `AutoQsar` — train all models, compare via CV, report best
+- [ ] Applicability Domain trait: k-NN distance AD, leverage AD, ART-2A AD
+- [ ] Conformal prediction (uncertainty quantification)
+- [ ] K-Fold CV, Leave-One-Out, scaffold-based CV
+- [ ] Evaluation metrics: R², Q², RMSE, MAE, MCC, AUC-ROC
+- [ ] Y-randomization validation
+- [ ] Batch prediction (parallel, 1M+ molecules)
 
-**Why This Is Hard**:
-- Complex atom typing (20+ types)
-- Iteration convergence tricky
-- Many chemistry edge cases
-- Requires extensive validation
-- Bugs show as subtle charge errors
+**Dependencies**: `ndarray` 0.16 only — no linfa
 
-### Charge-Derived Descriptors (1 week)
-**Requires Gasteiger completed first**
+## 🖥️ Phase 14: Terminal UI (TUI) 🔵
 
-- [ ] **Partial Charge Min/Max/Abs** (2 days)
-  - MaxPartialCharge, MinPartialCharge
-  - MaxAbsPartialCharge, MinAbsPartialCharge
-  - Test: carbonyl C positive, O negative
+- [ ] Interactive model training wizard
+- [ ] Batch prediction interface
+- [ ] Chemical space visualization (ASCII plots)
+- [ ] Descriptor profiling dashboard
+- [ ] Pipeline management (save/load/compare)
 
-- [ ] **CPSA Descriptors** (3 days)
-  - Charged Partial Surface Area (29 descriptors)
-  - Requires: Gasteiger + 3D coordinates
-  - PPSA, PNSA, DPSA variants
-  - ⚠️ May defer until conformer generation
+## 🔧 Phase 15: Infrastructure & Ecosystem 🔵
 
-- [ ] **Polarizability Descriptors** (2 days)
-  - Atomic polarizabilities (table lookup)
-  - APol: sum of polarizabilities
-  - BPol: polarizability differences
+- [ ] SDF/MOL V2000/V3000 parser
+- [ ] Morgan canonicalization (canonical SMILES)
+- [ ] PyO3 Python bindings
+- [ ] crates.io publish
+- [ ] Full API documentation + benchmarks vs RDKit
 
-**Phase 11 Output**: Electronic property descriptors, gateway to advanced QSAR
+## 🧊 Phase 16: 3D Descriptors — SPECIAL CASES 🔴
 
-## 🧬 Phase 12: 3D Descriptors - MAJOR PROJECT (Future) 🔴
+⚠️ Deferred: Slower computation, only for specialized models
 
-### ⚠️ BLOCKED: Requires Conformer Generation First
+- [ ] Conformer generation (ETKDG algorithm)
+- [ ] 3D shape descriptors (PMI, asphericity, spherocity)
+- [ ] 3D pharmacophore fingerprints
+- [ ] Molecular surface/volume
+- [ ] WHIM/GETAWAY descriptors
 
-### Conformer Generation (2-3 weeks)
-- [ ] **ETKDG Algorithm**
-  - Distance geometry + experimental torsion knowledge
-  - Riniker & Landrum JCIM 2015
-  - Major algorithmic project
-  - Alternative: RDKit FFI wrapper
-
-### 3D Shape Descriptors (1 week after conformers)
-- [ ] **Principal Moments of Inertia**
-  - PMI1, PMI2, PMI3
-  - NPR1, NPR2 (normalized ratios)
-  - Asphericity, Eccentricity, Spherocity
-  - Diagonalize inertia tensor
-
-- [ ] **Radius of Gyration**
-  - RMS distance from center of mass
-
-### Other 3D Features
-- [ ] 3D Pharmacophore fingerprints
-- [ ] Molecular surface area/volume
-- [ ] Shape similarity (USR, USRCAT)
-- [ ] WHIM descriptors
-- [ ] GETAWAY descriptors
-
-**Phase 12 Note**: Defer until 2D suite complete. Many QSAR models work fine with 2D only.
+**Note**: 2D + ML pipeline covers 90%+ of QSAR use cases.
 
 ---
-
-## 🐛 Known Issues / Improvements
-
-### Phase 9B: Morgan/ECFP Fingerprints 🟡
-- [ ] Morgan algorithm core (circular fingerprints)
-- [ ] Hashing with FNV or xxHash
-- [ ] Bit folding (1024, 2048, 4096)
-- [ ] ECFP2, ECFP4, ECFP6 variants
-
-### Phase 9C: Additional Fingerprints 🟡
-- [ ] Atom pair fingerprints
-- [ ] Topological torsion
-- [ ] PubChem 881 structural keys
-
-### Phase 10: Medium Complexity Descriptors 🟡
-- [ ] Chi indices (Kier & Hall connectivity)
-- [ ] EState indices (electrotopological state)
-- [ ] Autocorrelation ATS
-- [ ] BCUT eigenvalues
-
-### Phase 11: Electronic Descriptors 🔴
-- [ ] Gasteiger partial charges
-- [ ] Charge-derived descriptors (CPSA, polarizability)
-
-### Phase 12: I/O & Infrastructure
-- [ ] SDF/MOL V2000/V3000 parser
-- [ ] InChI generation
-- [ ] Morgan canonicalization
-
-### Phase 13: ML Integration
-- [ ] Linfa integration examples
-- [ ] ART 2A clustering
-- [ ] PyO3 Python bindings
-
-### Phase 14: 3D Descriptors (Future)
-- [ ] Conformer generation (ETKDG)
-- [ ] 3D shape descriptors (PMI, USR)
-- [ ] 3D pharmacophore fingerprints
 
 ## 🐛 Known Issues / Improvements
 
@@ -335,55 +273,72 @@ impl DescriptorValue {
 - [ ] Stereochemistry (E/Z, R/S)
 
 ### Architecture
+- [x] Typed descriptor API (single Descriptor trait, DescriptorValue enum)
+- [x] Memory-efficient fingerprints (BitVec)
 - [ ] Consider adding 3D coordinates to Atom
 - [ ] Add conformer support to Molecule
+- [ ] SDF/MOL V2000/V3000 parser
+- [ ] InChI generation
+- [ ] Morgan canonicalization
+
+### ML Integration (Phase 13)
+- [ ] QsarDataset + Scalers + Feature Selection
+- [ ] k-NN, RF, PLS, Elastic Net (all from scratch, no linfa)
+- [ ] ART 2A clustering + applicability domain
+- [ ] QsarPipeline + AutoQsar + grid search optimization
+- [ ] K-Fold CV + evaluation metrics
+- [ ] PyO3 Python bindings (Phase 15)
 
 ## 📊 Performance
 
-### Current (Phase 10.5 Complete)
+### Current (Phase 11 Complete)
 - ✅ SMILES parsing: 1-6M mol/sec
 - ✅ MW calculation: 1B calc/sec
-- ✅ Memory: ~22 bytes/atom
+- ✅ Memory: ~22 bytes/atom, 32x reduction via typed descriptors
 - ✅ SMARTS matching: ~50k mol/sec (VF2 algorithm)
 - ✅ LogP: ~500k-5M mol/sec (pre-parsed patterns)
 - ✅ TPSA: RDKit-exact (50/50 molecules ±0.01 Ų)
-- ✅ Total tests: 503/503 passing
-- ✅ Total descriptors: 62 implementations, 17,696 dimensions
+- ✅ Total tests: 622 unit + 14 doc tests passing
+- ✅ Total descriptors: 67 implementations, 17,710+ dimensions
 - ✅ Fingerprints: MACCS (166), PubChem (881), ECFP (6144), FCFP (6144), AtomPair (2048), Torsion (2048)
 
 ## 🎯 Milestones
 
-### v0.1.0 - v0.3.0 ✅ Complete
-- [x] SMILES parser, MW, implicit H, rings, aromaticity
-- [x] SMARTS parser, VF2 subgraph isomorphism, CSV batch
+### v0.1.0 - v0.6.0 ✅ Complete
+- [x] SMILES/SMARTS parser, core algorithms, 35+ descriptors
+- [x] MACCS 166-bit, ECFP/FCFP, AtomPair, Torsion, PubChem 881
 
-### v0.4.0 - Phase 7 ✅ Complete
-- [x] 18 descriptors (LogP, H-bond, Lipinski, chains, pi system)
+### v0.7.0 - Phase 10-11 ✅ Complete
+- [x] Chi, EState, BCUT, Autocorrelation, MDE, WeightedPath
+- [x] VSA descriptors, extra counts, complexity metrics
+- [x] Typed descriptor refactoring (single API, 32x memory reduction)
 
-### v0.5.0 - Phase 8 ✅ Complete
-- [x] MACCS 166-bit fingerprint (163/163 patterns)
-- [x] SmallRing descriptor (11 values)
+### v0.8.0 - Phase 12 ✅ Complete
+- [x] Gasteiger partial charges (RDKit-validated)
+- [x] Charge-derived descriptors (polarizability, PEOE_VSA)
 
-### v0.6.0 - Phase 9A ✅ Complete
-- [x] 35 descriptors total (Wiener, Zagreb, Balaban, Eccentric, TPSA, Petitjean, Kappa, MR, QED, FuncGroups, etc.)
-- [x] TPSA: RDKit-exact validation
-- [x] Kappa indices, Molar Refractivity, Functional Groups, Acidic/Basic counts, QED
+### v0.9.0 - Phase 13: ML Pipeline
+- [ ] QsarDataset + Scalers + Feature Selection
+- [ ] k-NN, Random Forest, PLS, Elastic Net (all from scratch)
+- [ ] ART-2A + Applicability Domain
+- [ ] QsarPipeline + AutoQsar + Grid Search + Metrics
 
-### v0.7.0 - Phase 9B/C (Current)
-- [x] Morgan/ECFP fingerprints (ECFP2/4/6, Tanimoto similarity)
-- [ ] Atom pair, topological torsion, PubChem FP
+### v0.10.0 - Phase 14: TUI
+- [ ] Interactive model training wizard
+- [ ] Batch prediction interface
 
 ### v1.0.0 - Production (Future)
+- [ ] SDF parser, canonicalization, Python bindings
 - [ ] Full documentation, benchmarks, crates.io publish
+- [ ] 3D descriptors (optional, special cases)
 
 ---
 
-**Last Updated**: February 10, 2026  
-**Status**: Phase 10.5 ✅ Complete  
-**Tests**: 503/503 passing ✅  
-**Descriptors**: 62 implementations, 17,696 dimensions (17,431 FP bits + 265 continuous)  
-**TPSA**: RDKit-exact (50/50 molecules, ±0.01 Ų)  
-**Next Priority**: Phase 11 - Typed Descriptors (2-3 weeks)  
-**Strategy**: Architecture refactor for 4x memory reduction + type safety
+**Last Updated**: February 11, 2026  
+**Status**: Phase 12 ✅ Complete — Gasteiger Charges + Electronic Descriptors  
+**Tests**: 622 unit + 14 doc tests passing ✅  
+**Descriptors**: 67 implementations, 17,710+ dimensions  
+**API**: Single `Descriptor` trait with `DescriptorValue` enum returns  
+**Next Priority**: Phase 13 — ML Pipeline → Phase 14 — TUI
 
 

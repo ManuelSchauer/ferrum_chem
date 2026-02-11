@@ -10,9 +10,8 @@
 //! Reference: Pearlman, R.S. & Smith, K.M. (1999) "Metric Validation and
 //!            the Receptor-Relevant Subspace Concept", JCICS 39, 28-35.
 
-use super::Descriptor;
+use super::typed::{Descriptor, DescriptorValue};
 use crate::mol::molecule::Molecule;
-use crate::types::{AtomIdx, Real};
 
 // ---------------------------------------------------------------------------
 // Atomic property functions (shared with autocorrelation)
@@ -154,24 +153,28 @@ fn eigenvalues_symmetric(matrix: &[f64], n: usize) -> Vec<f64> {
 // Descriptor
 // ---------------------------------------------------------------------------
 
-/// BCUT descriptors: 8 values.
+/// BCUT descriptors.
 ///
 /// For each of 4 atomic properties (mass, electronegativity, polarizability,
 /// vdW volume), computes the highest and lowest eigenvalue of the modified
 /// Burden matrix.
 ///
-/// Output: [mass_low, mass_high, en_low, en_high, pol_low, pol_high, vdw_low, vdw_high]
+/// Returns FloatVec with 8 values:
+/// [mass_low, mass_high, en_low, en_high, pol_low, pol_high, vdw_low, vdw_high]
 pub struct BCUT;
 
 impl Descriptor for BCUT {
-    fn name(&self) -> String { "BCUT".to_string() }
-    fn size(&self) -> usize { 8 }
+    fn name(&self) -> &str {
+        "BCUT"
+    }
 
-    fn calculate(&self, mol: &Molecule, output: &mut [Real]) {
-        for v in output.iter_mut() { *v = 0.0; }
-
+    fn calculate(&self, mol: &mut Molecule) -> DescriptorValue {
+        let mut values = vec![0.0f32; 8];
+        
         let n = mol.num_atoms();
-        if n == 0 { return; }
+        if n == 0 {
+            return DescriptorValue::FloatVec(values);
+        }
 
         let weight_fns: [fn(u8) -> f64; 4] = [
             atomic_mass, electronegativity, polarizability, vdw_volume
@@ -183,10 +186,12 @@ impl Descriptor for BCUT {
             let eigs = eigenvalues_symmetric(&mat, n);
 
             if !eigs.is_empty() {
-                output[wi * 2] = eigs[0] as Real;             // lowest
-                output[wi * 2 + 1] = *eigs.last().unwrap() as Real;  // highest
+                values[wi * 2] = eigs[0] as f32;
+                values[wi * 2 + 1] = *eigs.last().unwrap() as f32;
             }
         }
+        
+        DescriptorValue::FloatVec(values)
     }
 }
 
@@ -199,25 +204,25 @@ const _: () = {
 mod tests {
     use super::*;
     use crate::io::smiles::parse_smiles;
+    use super::super::typed::Descriptor;
 
-    fn calc_bcut(smiles: &str) -> [Real; 8] {
-        let mol = parse_smiles(smiles).expect("valid SMILES");
-        let mut output = [0.0; 8];
-        BCUT.calculate(&mol, &mut output);
-        output
+    fn calc_bcut(smiles: &str) -> Vec<f32> {
+        let mut mol = parse_smiles(smiles).expect("valid SMILES");
+        match BCUT.calculate(&mut mol) {
+            DescriptorValue::FloatVec(v) => v,
+            other => panic!("expected FloatVec, got {:?}", other),
+        }
     }
 
     #[test]
-    fn test_bcut_size() {
-        assert_eq!(BCUT.size(), 8);
+    fn test_bcut_len() {
+        let b = calc_bcut("CC");
+        assert_eq!(b.len(), 8);
     }
 
     #[test]
     fn test_bcut_ethane() {
         let b = calc_bcut("CC");
-        // Two C atoms: mass weight 12.011 on diagonal
-        // Should have two eigenvalues
-        println!("Ethane BCUT: {:?}", b);
         assert!(b[1] > 0.0, "mass high > 0");
     }
 
@@ -225,15 +230,12 @@ mod tests {
     fn test_bcut_ethanol_different_from_ethane() {
         let ethane = calc_bcut("CC");
         let ethanol = calc_bcut("CCO");
-        // Different atoms → different eigenvalues
         assert_ne!(ethane, ethanol);
     }
 
     #[test]
     fn test_bcut_high_ge_low() {
         let b = calc_bcut("c1ccccc1");
-        println!("Benzene BCUT: {:?}", b);
-        // For each property: high >= low
         for i in 0..4 {
             assert!(b[i * 2 + 1] >= b[i * 2],
                 "prop {}: high {} >= low {}", i, b[i * 2 + 1], b[i * 2]);
@@ -250,23 +252,18 @@ mod tests {
     #[test]
     fn test_bcut_single_atom() {
         let b = calc_bcut("C");
-        // Single atom: eigenvalue = property weight itself
-        println!("Methane BCUT: {:?}", b);
-        assert!(b[0] > 0.0); // mass
+        assert!(b[0] > 0.0);
         assert!((b[0] - b[1]).abs() < 0.01, "single atom: low ≈ high");
     }
 
     #[test]
     fn test_bcut_aspirin() {
         let b = calc_bcut("CC(=O)Oc1ccccc1C(=O)O");
-        println!("Aspirin BCUT: {:?}", b);
-        // Aspirin has C, O → different property extremes
         assert!(b[1] > b[0], "mass: high > low for mixed atoms");
     }
 
     #[test]
     fn test_eigenvalues_2x2() {
-        // Simple 2x2 symmetric matrix [[4,1],[1,4]] → eigenvalues 3 and 5
         let mat = vec![4.0, 1.0, 1.0, 4.0];
         let eigs = eigenvalues_symmetric(&mat, 2);
         assert!((eigs[0] - 3.0).abs() < 0.01, "λ₁ = {}", eigs[0]);

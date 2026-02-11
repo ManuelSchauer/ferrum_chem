@@ -14,12 +14,12 @@
 //!
 //! Reference: ftp://ftp.ncbi.nlm.nih.gov/pubchem/specifications/pubchem_fingerprints.txt
 
-use super::Descriptor;
+use super::typed::{DescriptorValue, Descriptor};
 use crate::mol::molecule::Molecule;
-use crate::types::Real;
 use crate::io::smarts::{parse_smarts, QueryGraph};
 use crate::algo::iso::count_matches;
 use once_cell::sync::Lazy;
+use bitvec::prelude::*;
 
 /// A PubChem key: SMARTS pattern + minimum count to set the bit.
 struct PubChemKey {
@@ -45,33 +45,44 @@ static PARSED_KEYS: Lazy<Vec<Option<ParsedPubChemKey>>> = Lazy::new(|| {
 
 /// PubChem 881-bit structural key fingerprint.
 ///
-/// Returns 881 binary values (0.0 or 1.0).
-/// Each bit encodes the presence of a specific structural feature
-/// at or above a count threshold, all defined via SMARTS.
+/// Returns bit-packed fingerprint. Each bit encodes the presence of a
+/// specific structural feature at or above a count threshold.
+///
+/// # Examples
+///
+/// ```
+/// use ferrum_core::desc::pubchem::PubChem881;
+/// use ferrum_core::desc::typed::Descriptor;
+/// use ferrum_core::io::smiles::parse_smiles;
+///
+/// let mut mol = parse_smiles("c1ccccc1").unwrap();
+/// let descriptor = PubChem881;
+/// let fp = descriptor.calculate(&mut mol);
+///
+/// let bits = fp.as_binary();
+/// assert_eq!(bits.len(), 881);
+/// assert!(bits.count_ones() > 0);
+/// ```
 pub struct PubChem881;
 
 impl Descriptor for PubChem881 {
-    fn name(&self) -> String {
-        "PubChem881".to_string()
+    fn name(&self) -> &str {
+        "PubChem881"
     }
 
-    fn size(&self) -> usize {
-        881
-    }
-
-    fn calculate(&self, mol: &Molecule, output: &mut [Real]) {
-        for v in output.iter_mut() {
-            *v = 0.0;
-        }
+    fn calculate(&self, mol: &mut Molecule) -> DescriptorValue {
+        let mut bits = bitvec![u8, Lsb0; 0; 881];
 
         for (i, key) in PARSED_KEYS.iter().enumerate() {
             if let Some(pk) = key {
                 let cnt = count_matches(mol, &pk.query);
                 if cnt >= pk.threshold {
-                    output[i] = 1.0;
+                    bits.set(i, true);
                 }
             }
         }
+
+        DescriptorValue::Binary(bits)
     }
 }
 
@@ -1193,69 +1204,57 @@ mod tests {
     use super::*;
     use crate::io::smiles::parse_smiles;
 
-    fn count_bits(fp: &[Real]) -> usize {
-        fp.iter().filter(|&&v| v > 0.5).count()
-    }
-
-    fn calc_pubchem(smiles: &str) -> Vec<Real> {
-        let mol = parse_smiles(smiles).expect("valid SMILES");
-        let mut output = vec![0.0; 881];
-        PubChem881.calculate(&mol, &mut output);
-        output
+    fn calc_pubchem(smiles: &str) -> BitVec<u8, Lsb0> {
+        let mut mol = parse_smiles(smiles).expect("valid SMILES");
+        PubChem881.calculate(&mut mol).as_binary().clone()
     }
 
     #[test]
     fn test_pubchem_size() {
-        assert_eq!(PubChem881.size(), 881);
+        let mut mol = parse_smiles("C").unwrap();
+        let fp = PubChem881.calculate(&mut mol);
+        assert_eq!(fp.len(), 881);
     }
 
     #[test]
     fn test_pubchem_methane() {
-        // Methane has 1 C and 4 implicit H.
-        // [#1] only matches explicit H atoms, and [#6] threshold starts at 2,
-        // so methane sets 0 bits. This is correct for SMARTS-based matching.
         let fp = calc_pubchem("C");
-        let bits = count_bits(&fp);
-        println!("Methane PubChem bits: {}", bits);
+        let bits = fp.count_ones();
         assert!(bits < 5, "Methane should set very few bits: {}", bits);
     }
 
     #[test]
     fn test_pubchem_benzene() {
         let fp = calc_pubchem("c1ccccc1");
-        let bits = count_bits(&fp);
-        println!("Benzene PubChem bits: {}", bits);
+        let bits = fp.count_ones();
         assert!(bits > 10, "Benzene should set many bits: {}", bits);
     }
 
     #[test]
     fn test_pubchem_ethanol() {
         let fp = calc_pubchem("CCO");
-        // Should have C, O, C-C, C-O, OH bits set
-        assert!(fp[12] > 0.5, "Should have >=2 C"); // bit 12: >=2 C
-        assert!(fp[21] > 0.5, "Should have >=1 O"); // bit 21: >=1 O
-        assert!(fp[460] > 0.5, "Should have hydroxyl"); // bit 460: [OX2H]
+        assert!(fp[12], "Should have >=2 C");
+        assert!(fp[21], "Should have >=1 O");
+        assert!(fp[460], "Should have hydroxyl");
     }
 
     #[test]
     fn test_pubchem_acetic_acid() {
         let fp = calc_pubchem("CC(=O)O");
-        assert!(fp[463] > 0.5, "Should have carboxylic acid pattern");
+        assert!(fp[463], "Should have carboxylic acid pattern");
     }
 
     #[test]
     fn test_pubchem_aspirin() {
         let fp = calc_pubchem("CC(=O)Oc1ccccc1C(=O)O");
-        let bits = count_bits(&fp);
-        println!("Aspirin PubChem bits: {}", bits);
+        let bits = fp.count_ones();
         assert!(bits > 30, "Aspirin should set many bits: {}", bits);
     }
 
     #[test]
     fn test_pubchem_caffeine() {
         let fp = calc_pubchem("CN1C=NC2=C1C(=O)N(C(=O)N2C)C");
-        let bits = count_bits(&fp);
-        println!("Caffeine PubChem bits: {}", bits);
+        let bits = fp.count_ones();
         assert!(bits > 20);
     }
 
@@ -1282,10 +1281,8 @@ mod tests {
             }
         }
         let parsed_count = PUBCHEM_KEYS.len() - failed.len();
-        println!("PubChem parsed: {}/{}", parsed_count, PUBCHEM_KEYS.len());
-        for (i, s) in &failed {
-            println!("  FAILED bit {}: {}", i, s);
-        }
         assert_eq!(parsed_count, 881, "All patterns should parse: {}/881", parsed_count);
     }
 }
+
+

@@ -39,14 +39,14 @@ fn main() {
     let descriptor = molecular_weight::MolecularWeight;
 
     for (name, smiles) in &test_smiles {
-        let mol = parse_smiles(smiles).unwrap();
+        let mut mol = parse_smiles(smiles).unwrap();
 
         let iterations = 100000;
-        let mut result = vec![0.0; 1];
 
         let start = Instant::now();
+        let mut mw_val = 0.0f32;
         for _ in 0..iterations {
-            descriptor.calculate(&mol, &mut result);
+            mw_val = descriptor.calculate(&mut mol).as_float();
         }
 
         let duration = start.elapsed();
@@ -55,20 +55,21 @@ fn main() {
 
         println!(
             "{:12}: MW = {:7.2}, {:5} ns/calc  ({:9.0} calcs/sec)",
-            name, result[0], per_calc, per_second
+            name, mw_val, per_calc, per_second
         );
     }
 
     println!("\n--- Combined Pipeline (Parse + Calculate MW) ---");
     for (name, smiles) in &test_smiles {
         let iterations = 10000;
-        let mut result = vec![0.0; 1];
 
         let start = Instant::now();
+        let mut last_mw = 0.0f32;
         for _ in 0..iterations {
-            let mol = parse_smiles(smiles).unwrap();
-            descriptor.calculate(&mol, &mut result);
+            let mut mol = parse_smiles(smiles).unwrap();
+            last_mw = descriptor.calculate(&mut mol).as_float();
         }
+        let _ = last_mw;
 
         let duration = start.elapsed();
         let per_molecule = duration.as_nanos() / iterations;
@@ -89,9 +90,8 @@ fn main() {
         let start = Instant::now();
 
         for _ in 0..size {
-            let mol = parse_smiles(sample_smiles).unwrap();
-            let mut result = vec![0.0; 1];
-            descriptor.calculate(&mol, &mut result);
+            let mut mol = parse_smiles(sample_smiles).unwrap();
+            descriptor.calculate(&mut mol);
         }
 
         let duration = start.elapsed();

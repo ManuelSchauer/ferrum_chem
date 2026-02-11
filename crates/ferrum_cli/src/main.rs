@@ -36,14 +36,13 @@ fn main() {
             let raw_mol = io::smiles::parse_smiles("c1ccccc1").unwrap();
 
             // 2. Standardisieren
-            let mol = algo::standardize::process(raw_mol).unwrap();
+            let mut mol = algo::standardize::process(raw_mol).unwrap();
 
             // 3. Rechnen
             let mw = desc::molecular_weight::MolecularWeight;
-            let mut results = vec![0.0; mw.size()];
-            mw.calculate(&mol, &mut results);
+            let result = mw.calculate(&mut mol);
 
-            println!("Ergebnis: {:?}", results);
+            println!("Ergebnis: {:?}", result);
         }
     }
 }

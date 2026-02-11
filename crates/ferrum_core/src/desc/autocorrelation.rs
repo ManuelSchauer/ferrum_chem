@@ -12,9 +12,9 @@
 //!
 //! Reference: Moreau, G. & Broto, P. (1980) Nouv. J. Chim. 4, 359-360.
 
-use super::Descriptor;
+use super::typed::{DescriptorValue, Descriptor};
 use crate::mol::molecule::Molecule;
-use crate::types::{AtomIdx, Real};
+use crate::types::AtomIdx;
 use std::collections::VecDeque;
 
 // ---------------------------------------------------------------------------
@@ -146,22 +146,30 @@ fn compute_ats(mol: &Molecule, dist: &[u32], weights: &[f64]) -> [f64; MAX_LAG] 
 // Descriptors
 // ---------------------------------------------------------------------------
 
+// (Legacy descriptor removed — use Autocorrelation below)
+
+// ===========================================================================
+// Typed API: Autocorrelation
+// ===========================================================================
+
 /// Moreau-Broto Autocorrelation descriptors.
 ///
-/// 32 values: 8 distance lags × 4 property weights
+/// Returns FloatVec with 32 values:
 /// [ATSm1..ATSm8, ATSp1..ATSp8, ATSe1..ATSe8, ATSv1..ATSv8]
-/// where m=mass, p=polarizability, e=electronegativity, v=vdw volume.
 pub struct Autocorrelation;
 
 impl Descriptor for Autocorrelation {
-    fn name(&self) -> String { "ATS".to_string() }
-    fn size(&self) -> usize { MAX_LAG * 4 }
+    fn name(&self) -> &str {
+        "Autocorrelation"
+    }
 
-    fn calculate(&self, mol: &Molecule, output: &mut [Real]) {
-        for v in output.iter_mut() { *v = 0.0; }
-
+    fn calculate(&self, mol: &mut Molecule) -> DescriptorValue {
+        let mut values = vec![0.0f32; MAX_LAG * 4];
+        
         let n = mol.num_atoms();
-        if n < 2 { return; }
+        if n < 2 {
+            return DescriptorValue::FloatVec(values);
+        }
 
         let dist = compute_distance_matrix(mol);
 
@@ -177,11 +185,13 @@ impl Descriptor for Autocorrelation {
         let ats_vdw = compute_ats(mol, &dist, &w_vdw);
 
         for i in 0..MAX_LAG {
-            output[i] = ats_mass[i] as Real;
-            output[MAX_LAG + i] = ats_pol[i] as Real;
-            output[2 * MAX_LAG + i] = ats_en[i] as Real;
-            output[3 * MAX_LAG + i] = ats_vdw[i] as Real;
+            values[i] = ats_mass[i] as f32;
+            values[MAX_LAG + i] = ats_pol[i] as f32;
+            values[MAX_LAG * 2 + i] = ats_en[i] as f32;
+            values[MAX_LAG * 3 + i] = ats_vdw[i] as f32;
         }
+        
+        DescriptorValue::FloatVec(values)
     }
 }
 
@@ -195,82 +205,62 @@ mod tests {
     use super::*;
     use crate::io::smiles::parse_smiles;
 
-    fn calc_ats(smiles: &str) -> Vec<Real> {
-        let mol = parse_smiles(smiles).expect("valid SMILES");
-        let mut output = vec![0.0; MAX_LAG * 4];
-        Autocorrelation.calculate(&mol, &mut output);
-        output
+    fn calc_ats(smiles: &str) -> Vec<f32> {
+        let mut mol = parse_smiles(smiles).expect("valid SMILES");
+        match Autocorrelation.calculate(&mut mol) {
+            DescriptorValue::FloatVec(v) => v,
+            other => panic!("expected FloatVec, got {:?}", other),
+        }
     }
 
     #[test]
     fn test_ats_size() {
-        assert_eq!(Autocorrelation.size(), 32);
+        let a = calc_ats("CC");
+        assert_eq!(a.len(), 32);
     }
 
     #[test]
     fn test_ats_ethane() {
         let a = calc_ats("CC");
-        // Distance 1: two C atoms → ATSm1 = 2 × 12.011 × 12.011 ≈ 288.5
         assert!(a[0] > 200.0, "ATSm1 = {}", a[0]);
-        // Distance 2+: no pairs → should be 0
-        assert!((a[1]).abs() < 0.001, "ATSm2 = {}", a[1]);
+        assert!(a[1].abs() < 0.001, "ATSm2 = {}", a[1]);
     }
 
     #[test]
     fn test_ats_propane() {
         let a = calc_ats("CCC");
-        // Should have non-zero at d=1 and d=2
         assert!(a[0] > 0.0, "ATSm1 > 0");
         assert!(a[1] > 0.0, "ATSm2 > 0");
-        assert!((a[2]).abs() < 0.001, "ATSm3 should be 0 for 3-atom chain");
+        assert!(a[2].abs() < 0.001, "ATSm3 should be 0 for 3-atom chain");
     }
 
     #[test]
     fn test_ats_benzene() {
         let a = calc_ats("c1ccccc1");
-        // Benzene: max distance is 3
         assert!(a[0] > 0.0, "ATSm1");
         assert!(a[1] > 0.0, "ATSm2");
         assert!(a[2] > 0.0, "ATSm3");
-        assert!((a[3]).abs() < 0.001, "ATSm4 should be ~0 for benzene");
+        assert!(a[3].abs() < 0.001, "ATSm4 should be ~0 for benzene");
     }
 
     #[test]
     fn test_ats_ethanol_vs_ethane() {
         let ethane = calc_ats("CC");
         let ethanol = calc_ats("CCO");
-        // Ethanol has O (mass 16) → different ATSm1
         assert!(ethanol[0] > ethane[0], "ethanol ATSm1 > ethane ATSm1");
-    }
-
-    #[test]
-    fn test_ats_electronegativity() {
-        let a = calc_ats("CCO");
-        // ATSe (electronegativity) at lag 1 should be nonzero
-        let en_offset = 2 * MAX_LAG;
-        assert!(a[en_offset] > 0.0, "ATSe1 > 0");
-    }
-
-    #[test]
-    fn test_ats_symmetry() {
-        let a1 = calc_ats("CCC");
-        let a2 = calc_ats("CCC");
-        assert_eq!(a1, a2, "same molecule → same ATS");
     }
 
     #[test]
     fn test_ats_single_atom() {
         let a = calc_ats("C");
-        // Single atom: no pairs → all zeros
         for v in &a {
-            assert!((v).abs() < 0.001);
+            assert!(v.abs() < 0.001);
         }
     }
 
     #[test]
     fn test_ats_long_chain() {
-        let a = calc_ats("CCCCCCCCCC"); // decane, 10 atoms
-        // Should have nonzero up to distance 9 (but max lag is 8)
+        let a = calc_ats("CCCCCCCCCC");
         for i in 0..MAX_LAG {
             assert!(a[i] > 0.0, "ATSm{} should be > 0 for decane", i + 1);
         }

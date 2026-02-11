@@ -5,7 +5,7 @@ use ferrum_core::desc::Descriptor;
 use ferrum_core::desc::batch::{calculate_batch, write_csv, write_json};
 use ferrum_core::desc::molecular_weight::MolecularWeight;
 use ferrum_core::desc::atom_count::{AtomCount, HeavyAtomCount, AromaticAtomCount};
-use ferrum_core::desc::bond_count::{BondCountDescriptor, RotatableBondCount};
+use ferrum_core::desc::bond_count::BondCount;
 use ferrum_core::desc::aromatic_ring_count::AromaticRingCount;
 use ferrum_core::desc::formal_charge::FormalCharge;
 use std::fs::File;
@@ -72,13 +72,12 @@ CC(C)CC
     // Define descriptors to calculate
     println!("📊 Step 2: Calculating descriptors...");
     
-    let descriptors: Vec<Box<dyn Descriptor + Sync>> = vec![
+    let descriptors: Vec<Box<dyn Descriptor>> = vec![
         Box::new(MolecularWeight),
         Box::new(AtomCount),
         Box::new(HeavyAtomCount),
         Box::new(AromaticAtomCount),
-        Box::new(BondCountDescriptor::new(false)),
-        Box::new(RotatableBondCount),
+        Box::new(BondCount),
         Box::new(AromaticRingCount),
         Box::new(FormalCharge),
     ];
@@ -90,7 +89,7 @@ CC(C)CC
     println!();
     
     // Calculate descriptors in parallel
-    let matrix = calculate_batch(&molecules, &descriptors);
+    let matrix = calculate_batch(&mut molecules, &descriptors);
     
     println!("✅ Calculated {} x {} descriptor matrix\n", 
              matrix.len(), matrix[0].len());

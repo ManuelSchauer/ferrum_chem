@@ -1,16 +1,16 @@
 use crate::mol::molecule::Molecule;
-use crate::types::{Real, AtomIdx};
-use crate::desc::Descriptor;
+use crate::types::AtomIdx;
+use crate::desc::typed::{Descriptor, DescriptorValue};
 use std::collections::HashSet;
 
 /// Small ring descriptor - analyzes ring structure in molecules.
 ///
-/// Returns 11 values:
-/// 1. nSmallRings - total number of small rings (size 3-9)
-/// 2. nAromRings - total number of small aromatic rings  
-/// 3. nRingBlocks - total number of distinct ring systems
-/// 4. nAromBlocks - total number of aromatically connected components
-/// 5-11. nRings3..nRings9 - counts of individual ring sizes
+/// Returns IntU16Vec with 11 values:
+/// - [0]: Total small rings (3-9 members)
+/// - [1]: Aromatic rings
+/// - [2]: Ring blocks (distinct ring systems)
+/// - [3]: Aromatic blocks
+/// - [4-10]: Individual ring sizes (3, 4, 5, 6, 7, 8, 9)
 ///
 /// Based on CDK's SmallRingDescriptor implementation.
 ///
@@ -19,28 +19,21 @@ use std::collections::HashSet;
 pub struct SmallRingDescriptor;
 
 impl Descriptor for SmallRingDescriptor {
-    fn name(&self) -> String {
-        "SmallRingDescriptor".to_string()
+    fn name(&self) -> &str {
+        "SmallRingDescriptor"
     }
-    
-    fn size(&self) -> usize {
-        11 // Total of 11 descriptor values
-    }
-    
-    fn calculate(&self, mol: &Molecule, output: &mut [Real]) {
-        // Initialize all values to 0
-        for i in 0..11 {
-            output[i] = 0.0;
-        }
+
+    fn calculate(&self, mol: &mut Molecule) -> DescriptorValue {
+        let mut counts = vec![0u16; 11];
         
         // Find all small rings (3-9 members)
         let rings = find_small_rings(mol, 3, 9);
         
         // Count total small rings
-        output[0] = rings.len() as Real;
+        counts[0] = rings.len() as u16;
         
         // Count rings by size
-        let mut size_counts = [0; 7]; // indices 0-6 for sizes 3-9
+        let mut size_counts = [0u16; 7]; // indices 0-6 for sizes 3-9
         for ring in &rings {
             let size = ring.len();
             if size >= 3 && size <= 9 {
@@ -50,22 +43,29 @@ impl Descriptor for SmallRingDescriptor {
         
         // Set individual size counts (indices 4-10)
         for i in 0..7 {
-            output[4 + i] = size_counts[i] as Real;
+            counts[4 + i] = size_counts[i];
         }
         
         // Count aromatic rings
         let arom_ring_count = count_aromatic_rings(mol, &rings);
-        output[1] = arom_ring_count as Real;
+        counts[1] = arom_ring_count as u16;
         
         // Count ring blocks (distinct ring systems)
         let ring_blocks = count_ring_blocks(mol);
-        output[2] = ring_blocks as Real;
+        counts[2] = ring_blocks as u16;
         
         // Count aromatically connected components
         let arom_blocks = count_aromatic_components(mol);
-        output[3] = arom_blocks as Real;
+        counts[3] = arom_blocks as u16;
+        
+        DescriptorValue::IntU16Vec(counts)
     }
 }
+
+const _: () = {
+    const fn assert_send_sync<T: Send + Sync>() {}
+    let _ = assert_send_sync::<SmallRingDescriptor>;
+};
 
 /// Find all small rings in a molecule (sizes min_size to max_size).
 fn find_small_rings(mol: &Molecule, min_size: usize, max_size: usize) -> Vec<Vec<AtomIdx>> {
@@ -386,73 +386,61 @@ mod tests {
         perceive_aromaticity(&mut mol);
         mol
     }
+
+    fn calc_small_ring(smiles: &str) -> Vec<u16> {
+        let mut mol = prepare_molecule(smiles);
+        match SmallRingDescriptor.calculate(&mut mol) {
+            DescriptorValue::IntU16Vec(v) => v,
+            other => panic!("expected IntU16Vec, got {:?}", other),
+        }
+    }
     
     #[test]
     fn test_benzene() {
-        let mol = prepare_molecule("c1ccccc1");
-        let desc = SmallRingDescriptor;
-        let mut output = vec![0.0; 11];
-        desc.calculate(&mol, &mut output);
+        let output = calc_small_ring("c1ccccc1");
         
-        // Benzene: 1 ring, aromatic, 6-membered
-        assert_eq!(output[0], 1.0, "Should have 1 small ring");
-        assert_eq!(output[1], 1.0, "Should have 1 aromatic ring");
-        assert_eq!(output[2], 1.0, "Should have 1 ring block");
-        assert!(output[3] >= 1.0, "Should have at least 1 aromatic component");
-        assert_eq!(output[4 + 3], 1.0, "Should have 1 six-membered ring (index 7)");
+        assert_eq!(output[0], 1, "Should have 1 small ring");
+        assert_eq!(output[1], 1, "Should have 1 aromatic ring");
+        assert_eq!(output[2], 1, "Should have 1 ring block");
+        assert!(output[3] >= 1, "Should have at least 1 aromatic component");
+        assert_eq!(output[4 + 3], 1, "Should have 1 six-membered ring (index 7)");
     }
     
     #[test]
     fn test_naphthalene() {
-        let mol = prepare_molecule("c1ccc2ccccc2c1");
-        let desc = SmallRingDescriptor;
-        let mut output = vec![0.0; 11];
-        desc.calculate(&mol, &mut output);
+        let output = calc_small_ring("c1ccc2ccccc2c1");
         
-        // Naphthalene: 2 fused rings, both aromatic, 6-membered
-        assert!(output[0] >= 2.0, "Should have at least 2 small rings");
-        assert!(output[1] >= 2.0, "Should have at least 2 aromatic rings");
-        assert_eq!(output[2], 1.0, "Should have 1 ring block (fused system)");
-        assert_eq!(output[3], 1.0, "Should have 1 aromatic component");
+        assert!(output[0] >= 2, "Should have at least 2 small rings");
+        assert!(output[1] >= 2, "Should have at least 2 aromatic rings");
+        assert_eq!(output[2], 1, "Should have 1 ring block (fused system)");
+        assert_eq!(output[3], 1, "Should have 1 aromatic component");
     }
     
     #[test]
     fn test_cyclohexane() {
-        let mol = prepare_molecule("C1CCCCC1");
-        let desc = SmallRingDescriptor;
-        let mut output = vec![0.0; 11];
-        desc.calculate(&mol, &mut output);
+        let output = calc_small_ring("C1CCCCC1");
         
-        // Cyclohexane: 1 ring, not aromatic, 6-membered
-        assert_eq!(output[0], 1.0, "Should have 1 small ring");
-        assert_eq!(output[1], 0.0, "Should have 0 aromatic rings");
-        assert_eq!(output[2], 1.0, "Should have 1 ring block");
-        assert_eq!(output[3], 0.0, "Should have 0 aromatic components");
-        assert_eq!(output[4 + 3], 1.0, "Should have 1 six-membered ring");
+        assert_eq!(output[0], 1, "Should have 1 small ring");
+        assert_eq!(output[1], 0, "Should have 0 aromatic rings");
+        assert_eq!(output[2], 1, "Should have 1 ring block");
+        assert_eq!(output[3], 0, "Should have 0 aromatic components");
+        assert_eq!(output[4 + 3], 1, "Should have 1 six-membered ring");
     }
     
     #[test]
     fn test_cyclopropane() {
-        let mol = prepare_molecule("C1CC1");
-        let desc = SmallRingDescriptor;
-        let mut output = vec![0.0; 11];
-        desc.calculate(&mol, &mut output);
+        let output = calc_small_ring("C1CC1");
         
-        // Cyclopropane: 1 ring, 3-membered
-        assert_eq!(output[0], 1.0, "Should have 1 small ring");
-        assert_eq!(output[4], 1.0, "Should have 1 three-membered ring (index 4)");
+        assert_eq!(output[0], 1, "Should have 1 small ring");
+        assert_eq!(output[4], 1, "Should have 1 three-membered ring (index 4)");
     }
     
     #[test]
     fn test_no_rings() {
-        let mol = prepare_molecule("CCCC");
-        let desc = SmallRingDescriptor;
-        let mut output = vec![0.0; 11];
-        desc.calculate(&mol, &mut output);
+        let output = calc_small_ring("CCCC");
         
-        // No rings
         for i in 0..11 {
-            assert_eq!(output[i], 0.0, "All counts should be 0 for non-cyclic molecule");
+            assert_eq!(output[i], 0, "All counts should be 0 for non-cyclic molecule");
         }
     }
 }

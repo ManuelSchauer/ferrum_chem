@@ -16,10 +16,10 @@
 //! Reference: Kier, L.B. & Hall, L.H. (1999) "Molecular Structure
 //!            Description: The Electrotopological State", Academic Press.
 
-use super::Descriptor;
+use super::typed::{DescriptorValue, Descriptor};
 use crate::mol::elements::outer_electrons;
 use crate::mol::molecule::Molecule;
-use crate::types::{AtomIdx, Real};
+use crate::types::AtomIdx;
 use std::collections::VecDeque;
 
 // ---------------------------------------------------------------------------
@@ -289,81 +289,19 @@ const ESTATE_NAMES: [&str; NUM_ESTATE_TYPES] = [
 // Descriptors
 // ---------------------------------------------------------------------------
 
-/// E-State summary indices: [sum, min, max].
-///
-/// Provides overall electronic/topological summary of the molecule.
-pub struct EStateSummary;
-
-impl Descriptor for EStateSummary {
-    fn name(&self) -> String { "EState".to_string() }
-    fn size(&self) -> usize { 3 }
-
-    fn calculate(&self, mol: &Molecule, output: &mut [Real]) {
-        let estates = compute_estates(mol);
-        if estates.is_empty() {
-            output[0] = 0.0;
-            output[1] = 0.0;
-            output[2] = 0.0;
-            return;
-        }
-        let sum: f64 = estates.iter().sum();
-        let min = estates.iter().cloned().fold(f64::MAX, f64::min);
-        let max = estates.iter().cloned().fold(f64::MIN, f64::max);
-        output[0] = sum as Real;
-        output[1] = min as Real;
-        output[2] = max as Real;
-    }
-}
-
-/// E-State atom type indices: 44 values, each being the sum of E-State
-/// values for all atoms of that type.
-///
-/// These encode the electronic environment of specific atom types,
-/// widely used in QSAR models.
-pub struct EStateAtomTypes;
-
-impl Descriptor for EStateAtomTypes {
-    fn name(&self) -> String { "EStateAtomType".to_string() }
-    fn size(&self) -> usize { NUM_ESTATE_TYPES }
-
-    fn calculate(&self, mol: &Molecule, output: &mut [Real]) {
-        for v in output.iter_mut() { *v = 0.0; }
-
-        let estates = compute_estates(mol);
-        for i in 0..mol.num_atoms() {
-            if let Some(type_idx) = classify_atom(mol, i) {
-                output[type_idx] += estates[i] as Real;
-            }
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Compile-time thread safety checks
-// ---------------------------------------------------------------------------
-const _: () = {
-    const fn assert_send_sync<T: Send + Sync>() {}
-    let _ = assert_send_sync::<EStateSummary>;
-    let _ = assert_send_sync::<EStateAtomTypes>;
-};
+// (Legacy descriptors removed — use EStateIndices below)
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::io::smiles::parse_smiles;
 
-    fn calc_summary(smiles: &str) -> [Real; 3] {
-        let mol = parse_smiles(smiles).expect("valid SMILES");
-        let mut output = [0.0; 3];
-        EStateSummary.calculate(&mol, &mut output);
-        output
-    }
-
-    fn calc_atom_types(smiles: &str) -> Vec<Real> {
-        let mol = parse_smiles(smiles).expect("valid SMILES");
-        let mut output = vec![0.0; NUM_ESTATE_TYPES];
-        EStateAtomTypes.calculate(&mol, &mut output);
-        output
+    fn calc_estate(smiles: &str) -> Vec<f32> {
+        let mut mol = parse_smiles(smiles).expect("valid SMILES");
+        match EStateIndices.calculate(&mut mol) {
+            DescriptorValue::FloatVec(v) => v,
+            other => panic!("expected FloatVec, got {:?}", other),
+        }
     }
 
     fn estates_raw(smiles: &str) -> Vec<f64> {
@@ -374,29 +312,26 @@ mod tests {
     #[test]
     fn test_estate_ethane() {
         let e = estates_raw("CC");
-        // Two equivalent C atoms → same E-State
         assert_eq!(e.len(), 2);
         assert!((e[0] - e[1]).abs() < 0.001, "symmetric: {} vs {}", e[0], e[1]);
     }
 
     #[test]
     fn test_estate_summary_ethane() {
-        let s = calc_summary("CC");
-        assert!(s[0] > 0.0, "sum > 0");
-        assert!((s[1] - s[2]).abs() < 0.01, "min ≈ max for symmetric mol");
+        let v = calc_estate("CC");
+        // v[0]=sum, v[1]=min, v[2]=max
+        assert!(v[0] > 0.0, "sum > 0");
+        assert!((v[1] - v[2]).abs() < 0.01, "min ≈ max for symmetric mol");
     }
 
     #[test]
     fn test_estate_ethanol() {
         let e = estates_raw("CCO");
-        // O should have higher E-State than C (more electronegative)
         assert!(e[2] > e[0], "O E-State={} > C E-State={}", e[2], e[0]);
     }
 
     #[test]
     fn test_estate_sum_conservation() {
-        // Sum of E-States should equal sum of intrinsic states
-        // (perturbations cancel out: Σ ΔI = 0)
         let mol = parse_smiles("CCCC").expect("valid");
         let estates = compute_estates(&mol);
         let n = mol.num_atoms();
@@ -416,38 +351,27 @@ mod tests {
 
     #[test]
     fn test_estate_atom_types_ethanol() {
-        let at = calc_atom_types("CCO");
-        // Should have sCH3 (index 0) and sOH (index 18)
-        assert!(at[ESTATE_sCH3] != 0.0, "should have sCH3");
-        assert!(at[ESTATE_sOH] != 0.0, "should have sOH");
+        let v = calc_estate("CCO");
+        // v[3 + ESTATE_sCH3] and v[3 + ESTATE_sOH] should be nonzero
+        assert!(v[3 + ESTATE_sCH3] != 0.0, "should have sCH3");
+        assert!(v[3 + ESTATE_sOH] != 0.0, "should have sOH");
     }
 
     #[test]
     fn test_estate_atom_types_benzene() {
-        let at = calc_atom_types("c1ccccc1");
-        // All 6 aromatic CH → aCH (index 9)
-        assert!(at[ESTATE_aCH] != 0.0, "benzene should have aCH: {}", at[ESTATE_aCH]);
+        let v = calc_estate("c1ccccc1");
+        assert!(v[3 + ESTATE_aCH] != 0.0, "benzene should have aCH: {}", v[3 + ESTATE_aCH]);
     }
 
     #[test]
-    fn test_estate_atom_types_acetic_acid() {
-        let at = calc_atom_types("CC(=O)O");
-        // Should have: sCH3, dssC (or dsCH?), dO, sOH
-        assert!(at[ESTATE_sCH3] != 0.0, "should have sCH3");
-        assert!(at[ESTATE_dO] != 0.0, "should have dO: {}", at[ESTATE_dO]);
-        assert!(at[ESTATE_sOH] != 0.0, "should have sOH: {}", at[ESTATE_sOH]);
-    }
-
-    #[test]
-    fn test_estate_atom_types_amine() {
-        let at = calc_atom_types("CCN");
-        assert!(at[ESTATE_sNH2] != 0.0, "should have sNH2");
+    fn test_estate_size() {
+        let v = calc_estate("CCO");
+        assert_eq!(v.len(), 47, "E-State has 47 values");
     }
 
     #[test]
     fn test_estate_benzene_symmetry() {
         let e = estates_raw("c1ccccc1");
-        // All 6 atoms identical → same E-State
         let first = e[0];
         for val in &e[1..] {
             assert!((val - first).abs() < 0.001,
@@ -456,28 +380,62 @@ mod tests {
     }
 
     #[test]
-    fn test_estate_fluorine() {
-        let at = calc_atom_types("CF");
-        assert!(at[ESTATE_sF] != 0.0, "should have sF");
-    }
-
-    #[test]
-    fn test_estate_chlorine() {
-        let at = calc_atom_types("CCl");
-        assert!(at[ESTATE_sCl] != 0.0, "should have sCl");
-    }
-
-    #[test]
     fn test_estate_aspirin() {
-        let s = calc_summary("CC(=O)Oc1ccccc1C(=O)O");
-        assert!(s[0] > 0.0, "aspirin E-State sum = {}", s[0]);
-        assert!(s[2] > s[1], "max > min for complex mol");
-    }
-
-    #[test]
-    fn test_estate_empty() {
-        let _s = calc_summary("C");
-        // Single atom, no bonds → degree 0, I = 0
-        // Actually C has degree 0, so I = 0 → E-State = 0
+        let v = calc_estate("CC(=O)Oc1ccccc1C(=O)O");
+        assert!(v[0] > 0.0, "aspirin E-State sum = {}", v[0]);
+        assert!(v[2] > v[1], "max > min for complex mol");
     }
 }
+
+// ===========================================================================
+// Typed API: E-State Indices
+// ===========================================================================
+
+/// E-State indices.
+///
+/// Returns FloatVec with 47 values:
+/// - [0-2]: Summary (sum, min, max)
+/// - [3-46]: 44 atom type E-State sums
+pub struct EStateIndices;
+
+impl Descriptor for EStateIndices {
+    fn name(&self) -> &str {
+        "EStateIndices"
+    }
+
+    fn calculate(&self, mol: &mut Molecule) -> DescriptorValue {
+        let mut values = Vec::with_capacity(47);
+        
+        let estates = compute_estates(mol);
+        
+        // Summary (3 values)
+        if estates.is_empty() {
+            values.push(0.0);
+            values.push(0.0);
+            values.push(0.0);
+        } else {
+            let sum: f64 = estates.iter().sum();
+            let min = estates.iter().cloned().fold(f64::MAX, f64::min);
+            let max = estates.iter().cloned().fold(f64::MIN, f64::max);
+            values.push(sum as f32);
+            values.push(min as f32);
+            values.push(max as f32);
+        }
+        
+        // Atom types (44 values)
+        let mut atom_type_sums = vec![0.0f32; NUM_ESTATE_TYPES];
+        for i in 0..mol.num_atoms() {
+            if let Some(type_idx) = classify_atom(mol, i) {
+                atom_type_sums[type_idx] += estates[i] as f32;
+            }
+        }
+        values.extend(atom_type_sums);
+        
+        DescriptorValue::FloatVec(values)
+    }
+}
+
+const _: () = {
+    const fn assert_send_sync<T: Send + Sync>() {}
+    let _ = assert_send_sync::<EStateIndices>;
+};

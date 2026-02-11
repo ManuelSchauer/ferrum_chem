@@ -5,21 +5,18 @@
 //! Reference: Bickerton et al. (2012) "Quantifying the chemical beauty of drugs"
 //! Nature Chemistry 4, 90-98.
 
-use super::Descriptor;
+use super::typed::{Descriptor, DescriptorValue};
 use crate::mol::molecule::Molecule;
-use crate::types::Real;
-use crate::desc::molecular_weight::MolecularWeight;
-use crate::desc::logp::LogP;
-use crate::desc::hbond::{HBondAcceptor, HBondDonor};
-use crate::desc::tpsa::Tpsa;
-use crate::desc::bond_count::RotatableBondCount;
-use crate::desc::aromatic_ring_count::AromaticRingCount;
+use crate::desc::molecular_weight::compute_molecular_weight;
+use crate::desc::logp::compute_logp;
+use crate::desc::hbond::{compute_hbond_acceptors, compute_hbond_donors};
+use crate::desc::tpsa::compute_tpsa;
+use crate::desc::bond_count::compute_rotatable_bond_count;
+use crate::desc::aromatic_ring_count::compute_aromatic_ring_count;
 
 /// QED parameters: (mean, sigma, weight) for each property.
 /// From Bickerton et al. Table 1 (weighted version).
 struct QedParam {
-    // Parameters for the asymmetric double sigmoidal desirability function
-    // Each property has: [A, B, C, D, E, F, DMAX]
     ads: [f64; 7],
     weight: f64,
 }
@@ -58,6 +55,34 @@ fn ads(x: f64, params: &[f64; 7]) -> f64 {
     numerator / dmax
 }
 
+/// Compute raw QED score from a molecule.
+fn compute_qed(mol: &Molecule) -> f64 {
+    let mw = compute_molecular_weight(mol) as f64;
+    let logp = compute_logp(mol).0 as f64;
+    let hba = compute_hbond_acceptors(mol) as f64;
+    let hbd = compute_hbond_donors(mol) as f64;
+    let psa = compute_tpsa(mol, false) as f64;
+    let rotb = compute_rotatable_bond_count(mol) as f64;
+    let arom = compute_aromatic_ring_count(mol) as f64;
+
+    let values = [mw, logp, hba, hbd, psa, rotb, arom];
+
+    let mut sum_weights = 0.0;
+    let mut sum_log = 0.0;
+
+    for (i, param) in QED_PARAMS.iter().enumerate() {
+        let d = ads(values[i], &param.ads).max(1e-10);
+        sum_log += param.weight * d.ln();
+        sum_weights += param.weight;
+    }
+
+    if sum_weights > 0.0 {
+        (sum_log / sum_weights).exp().clamp(0.0, 1.0)
+    } else {
+        0.0
+    }
+}
+
 /// QED (Quantitative Estimate of Drug-likeness).
 ///
 /// Computes a weighted geometric mean of desirability functions for 7 molecular properties.
@@ -67,62 +92,18 @@ fn ads(x: f64, params: &[f64; 7]) -> f64 {
 ///
 /// Note: The original QED also uses structural alerts (PAINS-like patterns).
 /// This implementation omits alerts (effectively treats alert count as 0).
+///
+/// # Thread Safety
+/// Stateless and thread-safe (Send + Sync).
 pub struct Qed;
 
 impl Descriptor for Qed {
-    fn name(&self) -> String {
-        "QED".to_string()
+    fn name(&self) -> &str {
+        "QED"
     }
 
-    fn size(&self) -> usize {
-        1
-    }
-
-    fn calculate(&self, mol: &Molecule, output: &mut [Real]) {
-        // Calculate component descriptors
-        let mut val = [0.0 as Real];
-
-        MolecularWeight.calculate(mol, &mut val);
-        let mw = val[0] as f64;
-
-        LogP.calculate(mol, &mut val);
-        let logp = val[0] as f64;
-
-        HBondAcceptor.calculate(mol, &mut val);
-        let hba = val[0] as f64;
-
-        HBondDonor.calculate(mol, &mut val);
-        let hbd = val[0] as f64;
-
-        Tpsa.calculate(mol, &mut val);
-        let psa = val[0] as f64;
-
-        RotatableBondCount.calculate(mol, &mut val);
-        let rotb = val[0] as f64;
-
-        AromaticRingCount.calculate(mol, &mut val);
-        let arom = val[0] as f64;
-
-        let values = [mw, logp, hba, hbd, psa, rotb, arom];
-
-        // Compute weighted geometric mean of ADS desirability scores
-        let mut sum_weights = 0.0;
-        let mut sum_log = 0.0;
-
-        for (i, param) in QED_PARAMS.iter().enumerate() {
-            let d = ads(values[i], &param.ads);
-            let d = d.max(1e-10); // Prevent log(0)
-            sum_log += param.weight * d.ln();
-            sum_weights += param.weight;
-        }
-
-        let qed = if sum_weights > 0.0 {
-            (sum_log / sum_weights).exp()
-        } else {
-            0.0
-        };
-
-        output[0] = qed.clamp(0.0, 1.0) as Real;
+    fn calculate(&self, mol: &mut Molecule) -> DescriptorValue {
+        DescriptorValue::Float(compute_qed(mol) as f32)
     }
 }
 
@@ -136,60 +117,45 @@ mod tests {
     use super::*;
     use crate::io::smiles::parse_smiles;
 
-    fn calc_qed(smiles: &str) -> Real {
-        let mol = parse_smiles(smiles).expect("valid SMILES");
-        let mut output = [0.0];
-        Qed.calculate(&mol, &mut output);
-        output[0]
+    fn calc_qed(smiles: &str) -> f32 {
+        let mut mol = parse_smiles(smiles).expect("valid SMILES");
+        Qed.calculate(&mut mol).as_float()
     }
 
     #[test]
     fn test_qed_range() {
-        let qed = calc_qed("c1ccccc1"); // benzene
+        let qed = calc_qed("c1ccccc1");
         assert!(qed >= 0.0 && qed <= 1.0, "QED should be 0-1, got {}", qed);
     }
 
     #[test]
     fn test_qed_aspirin() {
-        // Aspirin: CC(=O)Oc1ccccc1C(=O)O
-        // RDKit QED ~ 0.55
         let qed = calc_qed("CC(=O)Oc1ccccc1C(=O)O");
-        println!("Aspirin QED: {}", qed);
         assert!(qed > 0.2 && qed < 0.9, "Aspirin QED={}", qed);
     }
 
     #[test]
     fn test_qed_caffeine() {
-        // Caffeine: CN1C=NC2=C1C(=O)N(C(=O)N2C)C
-        // RDKit QED ~ 0.40
         let qed = calc_qed("CN1C=NC2=C1C(=O)N(C(=O)N2C)C");
-        println!("Caffeine QED: {}", qed);
         assert!(qed > 0.1 && qed < 0.8, "Caffeine QED={}", qed);
     }
 
     #[test]
     fn test_qed_drug_like() {
-        // Ibuprofen: CC(C)Cc1ccc(cc1)C(C)C(=O)O
         let qed = calc_qed("CC(C)Cc1ccc(cc1)C(C)C(=O)O");
-        println!("Ibuprofen QED: {}", qed);
         assert!(qed > 0.2 && qed < 0.9);
     }
 
     #[test]
     fn test_qed_methane_low() {
-        // Methane is not drug-like
         let qed = calc_qed("C");
-        println!("Methane QED: {}", qed);
         assert!(qed < 0.5, "Methane should have low QED: {}", qed);
     }
 
     #[test]
     fn test_qed_large_molecule_lower() {
-        // Very large molecule should score lower
         let qed_small = calc_qed("c1ccc(CC(=O)O)cc1");
         let qed_large = calc_qed("CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC");
-        println!("Small drug-like QED: {}, Large chain QED: {}", qed_small, qed_large);
-        // Large chain should be less drug-like
         assert!(qed_large < qed_small || qed_large < 0.5);
     }
 }

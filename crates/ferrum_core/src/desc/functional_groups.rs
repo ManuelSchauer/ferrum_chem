@@ -2,9 +2,8 @@
 //!
 //! Provides counts for common functional groups, acidic groups, and basic groups.
 
-use super::Descriptor;
+use super::typed::{Descriptor, DescriptorValue};
 use crate::mol::molecule::Molecule;
-use crate::types::Real;
 use crate::io::smarts::{parse_smarts, QueryGraph};
 use crate::algo::iso::find_all_matches;
 use once_cell::sync::Lazy;
@@ -84,19 +83,13 @@ fn count_matches(mol: &Molecule, patterns: &[FuncGroupPattern]) -> Vec<(String, 
 pub struct FunctionalGroupCounts;
 
 impl Descriptor for FunctionalGroupCounts {
-    fn name(&self) -> String {
-        "FunctionalGroups".to_string()
-    }
+    fn name(&self) -> &str { "FunctionalGroupCounts" }
 
-    fn size(&self) -> usize {
-        FUNC_GROUP_PATTERNS.len()
-    }
-
-    fn calculate(&self, mol: &Molecule, output: &mut [Real]) {
-        for (i, pattern) in FUNC_GROUP_PATTERNS.iter().enumerate() {
-            let matches = find_all_matches(mol, &pattern.query);
-            output[i] = matches.len() as Real;
-        }
+    fn calculate(&self, mol: &mut Molecule) -> DescriptorValue {
+        let counts: Vec<u16> = FUNC_GROUP_PATTERNS.iter().map(|p| {
+            find_all_matches(mol, &p.query).len() as u16
+        }).collect();
+        DescriptorValue::IntU16Vec(counts)
     }
 }
 
@@ -106,19 +99,13 @@ impl Descriptor for FunctionalGroupCounts {
 pub struct AcidicGroupCount;
 
 impl Descriptor for AcidicGroupCount {
-    fn name(&self) -> String {
-        "AcidicGroupCount".to_string()
-    }
+    fn name(&self) -> &str { "AcidicGroupCount" }
 
-    fn size(&self) -> usize {
-        1
-    }
-
-    fn calculate(&self, mol: &Molecule, output: &mut [Real]) {
+    fn calculate(&self, mol: &mut Molecule) -> DescriptorValue {
         let total: usize = ACIDIC_PATTERNS.iter()
             .map(|p| find_all_matches(mol, &p.query).len())
             .sum();
-        output[0] = total as Real;
+        DescriptorValue::Int(total as u32)
     }
 }
 
@@ -128,19 +115,13 @@ impl Descriptor for AcidicGroupCount {
 pub struct BasicGroupCount;
 
 impl Descriptor for BasicGroupCount {
-    fn name(&self) -> String {
-        "BasicGroupCount".to_string()
-    }
+    fn name(&self) -> &str { "BasicGroupCount" }
 
-    fn size(&self) -> usize {
-        1
-    }
-
-    fn calculate(&self, mol: &Molecule, output: &mut [Real]) {
+    fn calculate(&self, mol: &mut Molecule) -> DescriptorValue {
         let total: usize = BASIC_PATTERNS.iter()
             .map(|p| find_all_matches(mol, &p.query).len())
             .sum();
-        output[0] = total as Real;
+        DescriptorValue::Int(total as u32)
     }
 }
 
@@ -156,98 +137,94 @@ mod tests {
     use super::*;
     use crate::io::smiles::parse_smiles;
 
-    fn calc_fg(smiles: &str) -> Vec<Real> {
-        let mol = parse_smiles(smiles).expect("valid SMILES");
-        let desc = FunctionalGroupCounts;
-        let mut output = vec![0.0; desc.size()];
-        desc.calculate(&mol, &mut output);
-        output
+    fn calc_fg(smiles: &str) -> Vec<u16> {
+        let mut mol = parse_smiles(smiles).expect("valid SMILES");
+        match FunctionalGroupCounts.calculate(&mut mol) {
+            DescriptorValue::IntU16Vec(v) => v,
+            other => panic!("expected IntU16Vec, got {:?}", other),
+        }
     }
 
-    fn calc_acidic(smiles: &str) -> Real {
-        let mol = parse_smiles(smiles).expect("valid SMILES");
-        let mut output = [0.0];
-        AcidicGroupCount.calculate(&mol, &mut output);
-        output[0]
+    fn calc_acidic(smiles: &str) -> u32 {
+        let mut mol = parse_smiles(smiles).expect("valid SMILES");
+        match AcidicGroupCount.calculate(&mut mol) {
+            DescriptorValue::Int(v) => v,
+            other => panic!("expected Int, got {:?}", other),
+        }
     }
 
-    fn calc_basic(smiles: &str) -> Real {
-        let mol = parse_smiles(smiles).expect("valid SMILES");
-        let mut output = [0.0];
-        BasicGroupCount.calculate(&mol, &mut output);
-        output[0]
+    fn calc_basic(smiles: &str) -> u32 {
+        let mut mol = parse_smiles(smiles).expect("valid SMILES");
+        match BasicGroupCount.calculate(&mut mol) {
+            DescriptorValue::Int(v) => v,
+            other => panic!("expected Int, got {:?}", other),
+        }
     }
 
     #[test]
     fn test_fg_ethanol() {
         let fg = calc_fg("CCO");
-        // Hydroxyl should be detected (index 0)
-        assert!(fg[0] >= 1.0, "Ethanol should have hydroxyl: {:?}", fg);
+        assert!(fg[0] >= 1, "Ethanol should have hydroxyl: {:?}", fg);
     }
 
     #[test]
     fn test_fg_acetic_acid() {
         let fg = calc_fg("CC(=O)O");
-        // CarboxylicAcid (index 3) should be detected
-        assert!(fg[3] >= 1.0, "Acetic acid should have COOH: {:?}", fg);
+        assert!(fg[3] >= 1, "Acetic acid should have COOH: {:?}", fg);
     }
 
     #[test]
     fn test_fg_acetone() {
         let fg = calc_fg("CC(=O)C");
-        // Ketone (index 2) should be detected
-        assert!(fg[2] >= 1.0, "Acetone should have ketone: {:?}", fg);
+        assert!(fg[2] >= 1, "Acetone should have ketone: {:?}", fg);
     }
 
     #[test]
     fn test_fg_methylamine() {
         let fg = calc_fg("CN");
-        // PrimaryAmine (index 6)
-        assert!(fg[6] >= 1.0, "Methylamine should have primary amine: {:?}", fg);
+        assert!(fg[6] >= 1, "Methylamine should have primary amine: {:?}", fg);
     }
 
     #[test]
     fn test_fg_chlorobenzene() {
         let fg = calc_fg("c1ccc(Cl)cc1");
-        // Halide (index 15)
-        assert!(fg[15] >= 1.0, "Chlorobenzene should have halide: {:?}", fg);
+        assert!(fg[15] >= 1, "Chlorobenzene should have halide: {:?}", fg);
     }
 
     #[test]
     fn test_fg_benzene_no_groups() {
         let fg = calc_fg("c1ccccc1");
-        // Benzene has no functional groups
-        let total: Real = fg.iter().sum();
-        assert_eq!(total, 0.0, "Benzene should have no functional groups: {:?}", fg);
+        let total: u16 = fg.iter().sum();
+        assert_eq!(total, 0, "Benzene should have no functional groups: {:?}", fg);
     }
 
     #[test]
     fn test_acidic_acetic_acid() {
-        assert!(calc_acidic("CC(=O)O") >= 1.0);
+        assert!(calc_acidic("CC(=O)O") >= 1);
     }
 
     #[test]
     fn test_acidic_phenol() {
-        assert!(calc_acidic("c1ccc(O)cc1") >= 1.0);
+        assert!(calc_acidic("c1ccc(O)cc1") >= 1);
     }
 
     #[test]
     fn test_acidic_ethane() {
-        assert_eq!(calc_acidic("CC"), 0.0);
+        assert_eq!(calc_acidic("CC"), 0);
     }
 
     #[test]
     fn test_basic_methylamine() {
-        assert!(calc_basic("CN") >= 1.0);
+        assert!(calc_basic("CN") >= 1);
     }
 
     #[test]
     fn test_basic_dimethylamine() {
-        assert!(calc_basic("CNC") >= 1.0);
+        assert!(calc_basic("CNC") >= 1);
     }
 
     #[test]
     fn test_basic_benzene() {
-        assert_eq!(calc_basic("c1ccccc1"), 0.0);
+        assert_eq!(calc_basic("c1ccccc1"), 0);
     }
 }
