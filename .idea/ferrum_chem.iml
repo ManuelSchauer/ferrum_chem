@@ -5,6 +5,7 @@
       <sourceFolder url="file://$MODULE_DIR$/crates/ferrum_cli/src" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/crates/ferrum_core/src" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/crates/ferrum_core/examples" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/ferrum_core/tests" isTestSource="true" />
       <excludeFolder url="file://$MODULE_DIR$/target" />
     </content>
     <orderEntry type="inheritedJdk" />

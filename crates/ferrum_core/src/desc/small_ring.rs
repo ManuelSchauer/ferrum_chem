@@ -26,11 +26,13 @@ impl Descriptor for SmallRingDescriptor {
     fn calculate(&self, mol: &mut Molecule) -> DescriptorValue {
         let mut counts = vec![0u16; 11];
         
-        // Find all small rings (3-9 members)
+        // SSSR ring count = M - N + C (bonds - atoms + connected components)
+        // This matches RDKit's RingCount (cyclomatic number)
+        let sssr_count = compute_sssr_count(mol);
+        counts[0] = sssr_count as u16;
+
+        // Find all small rings (3-9 members) for detailed size breakdown
         let rings = find_small_rings(mol, 3, 9);
-        
-        // Count total small rings
-        counts[0] = rings.len() as u16;
         
         // Count rings by size
         let mut size_counts = [0u16; 7]; // indices 0-6 for sizes 3-9
@@ -66,6 +68,28 @@ const _: () = {
     const fn assert_send_sync<T: Send + Sync>() {}
     let _ = assert_send_sync::<SmallRingDescriptor>;
 };
+
+/// Compute SSSR count using the cyclomatic number: M - N + C.
+fn compute_sssr_count(mol: &Molecule) -> usize {
+    let n = mol.num_atoms();
+    if n == 0 { return 0; }
+    let m = mol.bonds.len();
+    // Count connected components via union-find
+    let mut parent: Vec<usize> = (0..n).collect();
+    fn find(parent: &mut [usize], i: usize) -> usize {
+        if parent[i] != i {
+            parent[i] = find(parent, parent[i]);
+        }
+        parent[i]
+    }
+    for bond in &mol.bonds {
+        let a = find(&mut parent, bond.source as usize);
+        let b = find(&mut parent, bond.target as usize);
+        if a != b { parent[a] = b; }
+    }
+    let components = (0..n).filter(|&i| find(&mut parent, i) == i).count();
+    (m + components).saturating_sub(n)
+}
 
 /// Find all small rings in a molecule (sizes min_size to max_size).
 fn find_small_rings(mol: &Molecule, min_size: usize, max_size: usize) -> Vec<Vec<AtomIdx>> {

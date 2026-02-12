@@ -1,30 +1,38 @@
 use super::typed::{DescriptorValue, Descriptor};
 use crate::mol::molecule::Molecule;
 
-/// Compute the number of hydrogen bond donors in a molecule.
+/// Compute the number of hydrogen bond donors (Lipinski definition).
 ///
-/// A hydrogen bond donor is a nitrogen or oxygen atom with at least one
-/// hydrogen attached (N-H or O-H groups). Follows the Lipinski Rule of Five
-/// definition (HBD ≤ 5 for drug-like molecules).
+/// Matches: N with H (v3 or v4+), O/S with exactly 1H, aromatic nH.
+/// SMARTS: [$([N;!H0;v3]),$([N;!H0;+1;v4]),$([O,S;H1;+0]),$([n;H1;+0])]
 pub fn compute_hbond_donors(mol: &Molecule) -> u32 {
-    mol.atoms.iter()
-        .filter(|atom| {
-            (atom.atomic_number == 7 || atom.atomic_number == 8) &&
-            atom.total_h() > 0
-        })
-        .count() as u32
+    use crate::io::smarts::parse_smarts;
+    use crate::algo::iso::count_matches;
+    use once_cell::sync::Lazy;
+
+    static HBD_SMARTS: Lazy<crate::io::smarts::QueryGraph> = Lazy::new(|| {
+        parse_smarts("[$([N;!H0;v3]),$([N;!H0;+1;v4]),$([O,S;H1;+0]),$([n;H1;+0])]")
+            .expect("valid HBD SMARTS")
+    });
+
+    count_matches(mol, &HBD_SMARTS) as u32
 }
 
-/// Compute the number of hydrogen bond acceptors in a molecule.
+/// Compute the number of hydrogen bond acceptors (Lipinski definition).
 ///
-/// A hydrogen bond acceptor is a nitrogen or oxygen atom (has lone pairs).
-/// Follows the Lipinski Rule of Five definition (HBA ≤ 10 for drug-like molecules).
+/// Matches specific N/O/S patterns per RDKit's HAcceptorSmarts.
 pub fn compute_hbond_acceptors(mol: &Molecule) -> u32 {
-    mol.atoms.iter()
-        .filter(|atom| {
-            atom.atomic_number == 7 || atom.atomic_number == 8
-        })
-        .count() as u32
+    use crate::io::smarts::parse_smarts;
+    use crate::algo::iso::count_matches;
+    use once_cell::sync::Lazy;
+
+    static HBA_SMARTS: Lazy<crate::io::smarts::QueryGraph> = Lazy::new(|| {
+        parse_smarts(
+            "[$([O,S;H1;v2;!$([O,S;H1;v2]*=[O,N,P,S])]),$([O,S;H0;v2]),$([O,S;-]),$([N;v3;!$(N-*=!@[O,N,P,S])]),$([nH0,o,s;+0])]"
+        ).expect("valid HBA SMARTS")
+    });
+
+    count_matches(mol, &HBA_SMARTS) as u32
 }
 
 /// Hydrogen bond donor count descriptor.
@@ -73,7 +81,8 @@ mod tests {
     #[test]
     fn test_hbond_donor_water() {
         let mol = parse_smiles("O").unwrap();
-        assert_eq!(compute_hbond_donors(&mol), 1);
+        // Water O has 2H, Lipinski HBD requires exactly H1 for O
+        assert_eq!(compute_hbond_donors(&mol), 0);
     }
 
     #[test]
@@ -130,12 +139,13 @@ mod tests {
         assert_eq!(compute_hbond_donors(&mol), 1);
     }
 
-    // HBondAcceptor Tests
+    // HBondAcceptor Tests (Lipinski definition)
 
     #[test]
     fn test_hbond_acceptor_water() {
         let mol = parse_smiles("O").unwrap();
-        assert_eq!(compute_hbond_acceptors(&mol), 1);
+        // Water is not an HBA in Lipinski definition (no heavy-atom neighbor)
+        assert_eq!(compute_hbond_acceptors(&mol), 0);
     }
 
     #[test]
@@ -159,7 +169,8 @@ mod tests {
     #[test]
     fn test_hbond_acceptor_urea() {
         let mol = parse_smiles("NC(=O)N").unwrap();
-        assert_eq!(compute_hbond_acceptors(&mol), 3);
+        // N-C(=O)-N: the 2 N are v3 but adjacent to C=O → excluded; O is H0,v2 → 1
+        assert_eq!(compute_hbond_acceptors(&mol), 1);
     }
 
     #[test]
@@ -177,7 +188,8 @@ mod tests {
     #[test]
     fn test_hbond_acceptor_glycine() {
         let mol = parse_smiles("NCC(=O)O").unwrap();
-        assert_eq!(compute_hbond_acceptors(&mol), 3);
+        // N(v3) + C=O(H0,v2) = 2 HBA; OH adjacent to C=O excluded
+        assert_eq!(compute_hbond_acceptors(&mol), 2);
     }
 
     #[test]
@@ -189,7 +201,8 @@ mod tests {
     #[test]
     fn test_hbond_acceptor_aspirin() {
         let mol = parse_smiles("CC(=O)Oc1ccccc1C(=O)O").unwrap();
-        assert_eq!(compute_hbond_acceptors(&mol), 4);
+        // 2 C=O (H0,v2) + ester O (H0,v2) = 3; COOH's OH excluded
+        assert_eq!(compute_hbond_acceptors(&mol), 3);
     }
 
     

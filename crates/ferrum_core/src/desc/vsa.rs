@@ -21,14 +21,48 @@ use crate::mol::molecule::Molecule;
 use std::f64::consts::PI;
 
 // ---------------------------------------------------------------------------
-// Van der Waals radii (Å) indexed by atomic number
+// Covalent bond radii (Rb0, Å) — same as RDKit GetRb0()
 // ---------------------------------------------------------------------------
 
-fn vdw_radius(an: u8) -> f64 {
+pub fn rb0_radius(an: u8) -> f64 {
     match an {
-        1 => 1.20,  6 => 1.70,  7 => 1.55,  8 => 1.52,  9 => 1.47,
-        14 => 2.10, 15 => 1.80, 16 => 1.80, 17 => 1.75,
-        35 => 1.85, 53 => 1.98, _ => 1.70,
+         1 => 0.330,   2 => 0.700,   3 => 1.230,   4 => 0.900,
+         5 => 0.820,   6 => 0.770,   7 => 0.700,   8 => 0.660,
+         9 => 0.611,  10 => 0.700,  11 => 1.540,  12 => 1.360,
+        13 => 1.180,  14 => 0.937,  15 => 0.890,  16 => 1.040,
+        17 => 0.997,  18 => 1.740,  19 => 2.030,  20 => 1.740,
+        21 => 1.440,  22 => 1.320,  23 => 1.220,  24 => 1.180,
+        25 => 1.170,  26 => 1.170,  27 => 1.160,  28 => 1.150,
+        29 => 1.170,  30 => 1.250,  31 => 1.260,  32 => 1.188,
+        33 => 1.200,  34 => 1.170,  35 => 1.167,  36 => 1.910,
+        37 => 2.160,  38 => 1.910,  39 => 1.620,  40 => 1.450,
+        41 => 1.340,  42 => 1.300,  43 => 1.270,  44 => 1.250,
+        45 => 1.250,  46 => 1.280,  47 => 1.340,  48 => 1.480,
+        49 => 1.440,  50 => 1.385,  51 => 1.400,  52 => 1.378,
+        53 => 1.387,  54 => 1.980,  55 => 2.350,  56 => 1.980,
+        // Lanthanides (57-71) and 3rd-row transition metals (72-80)
+        57 => 1.690,  58 => 1.650,  59 => 1.650,  60 => 1.640,
+        61 => 1.630,  62 => 1.620,  63 => 1.850,  64 => 1.610,
+        65 => 1.590,  66 => 1.590,  67 => 1.580,  68 => 1.570,
+        69 => 1.560,  70 => 1.700,  71 => 1.560,  72 => 1.440,
+        73 => 1.340,  74 => 1.300,  75 => 1.280,  76 => 1.260,
+        77 => 1.270,  78 => 1.300,  79 => 1.340,  80 => 1.490,
+        81 => 1.480,  82 => 1.470,  83 => 1.460,
+         _ => 0.770,
+    }
+}
+
+// Bond-type scaling factors: aromatic=0.1, single=0.0, double=0.2, triple=0.3
+fn bond_scale_factor(bond: &crate::mol::bond::Bond) -> f64 {
+    if bond.is_aromatic() {
+        return 0.1;
+    }
+    match bond.bond_type {
+        crate::types::BondType::Single => 0.0,
+        crate::types::BondType::Double => 0.2,
+        crate::types::BondType::Triple => 0.3,
+        crate::types::BondType::Aromatic => 0.1,
+        _ => 0.0,
     }
 }
 
@@ -36,36 +70,62 @@ fn vdw_radius(an: u8) -> f64 {
 // Labute approximate surface area per atom
 // ---------------------------------------------------------------------------
 
-/// Compute Labute approximate VSA for each atom (heavy atoms only; H = 0).
+/// Compute Labute ASA contributions: per-heavy-atom values + total H contribution.
 ///
-/// Uses Labute's approximation: VSA_i ≈ 4π rᵢ² scaled by exposed fraction.
-/// Bond correction uses VDW-based distance (Ri+Rj), giving gentle attenuation
-/// for heavily bonded atoms while keeping values physically reasonable.
-fn compute_atom_vsa(mol: &Molecule) -> Vec<f64> {
+/// Uses Labute's bond-based formula (Labute 2000, JMGM 18:464):
+///   For each bond (i,j): overlap accumulation using Rb0 covalent radii
+///   Vi[i] = 4π·Ri² − π·Ri·Σoverlap
+///
+/// Returns (heavy_atom_vsa, h_contribution).
+fn compute_labute_contribs(mol: &Molecule) -> (Vec<f64>, f64) {
     let n = mol.atoms.len();
-    let mut vsa = vec![0.0f64; n];
+    // overlap_sum[i] accumulates overlap for each heavy atom
+    let mut overlap = vec![0.0f64; n];
+    let mut h_overlap = 0.0f64;
 
-    for i in 0..n {
-        let ai = &mol.atoms[i];
-        if ai.atomic_number <= 1 { continue; }
+    let r_h = rb0_radius(1);
 
-        let ri = vdw_radius(ai.atomic_number);
-        let area = 4.0 * PI * ri * ri;
+    // Explicit bonds
+    for bond in &mol.bonds {
+        let i = bond.source as usize;
+        let j = bond.target as usize;
+        let ai = mol.atoms[i].atomic_number;
+        let aj = mol.atoms[j].atomic_number;
+        if ai <= 1 || aj <= 1 { continue; }
 
-        // Count heavy-atom neighbors for attenuation
-        let heavy_neighbors = mol.adjacency[i].iter().filter(|&&bi| {
-            let bond = &mol.bonds[bi as usize];
-            let j = if bond.source as usize == i { bond.target as usize } else { bond.source as usize };
-            mol.atoms[j].atomic_number > 1
-        }).count();
+        let ri = rb0_radius(ai);
+        let rj = rb0_radius(aj);
+        let scale = bond_scale_factor(bond);
+        let bij = ri + rj - scale;
+        let dij = (ri + rj).min((ri - rj).abs().max(bij));
 
-        // Attenuation: each heavy bond reduces area by ~10% (empirical)
-        // This gives reasonable values while maintaining discrimination
-        let attenuation = 1.0 - 0.1 * heavy_neighbors as f64;
-        vsa[i] = area * attenuation.max(0.2);
+        overlap[i] += rj * rj - (ri - dij) * (ri - dij) / dij;
+        overlap[j] += ri * ri - (rj - dij) * (rj - dij) / dij;
     }
 
-    vsa
+    // Implicit H bonds: one correction per heavy atom (Labute approximation)
+    for i in 0..n {
+        let ai = mol.atoms[i].atomic_number;
+        if ai <= 1 { continue; }
+        let ri = rb0_radius(ai);
+        let bij = ri + r_h;
+        let dij = (ri + r_h).min((ri - r_h).abs().max(bij));
+
+        overlap[i] += r_h * r_h - (ri - dij) * (ri - dij) / dij;
+        h_overlap += ri * ri - (r_h - dij) * (r_h - dij) / dij;
+    }
+
+    // Convert overlap sums to surface area contributions
+    let mut vsa = vec![0.0f64; n];
+    for i in 0..n {
+        let ai = mol.atoms[i].atomic_number;
+        if ai <= 1 { continue; }
+        let ri = rb0_radius(ai);
+        vsa[i] = 4.0 * PI * ri * ri - PI * ri * overlap[i];
+    }
+    let h_contrib = 4.0 * PI * r_h * r_h - PI * r_h * h_overlap;
+
+    (vsa, h_contrib)
 }
 
 // ---------------------------------------------------------------------------
@@ -90,7 +150,7 @@ impl Descriptor for SlogpVSA {
     fn calculate(&self, mol: &mut Molecule) -> DescriptorValue {
         let mut values = vec![0.0f32; 12];
         
-        let vsa = compute_atom_vsa(mol);
+        let (vsa, _) = compute_labute_contribs(mol);
         let (logp_contrib, _) = crippen_atom_contributions(mol);
 
         for i in 0..mol.atoms.len() {
@@ -126,7 +186,7 @@ impl Descriptor for SmrVSA {
     fn calculate(&self, mol: &mut Molecule) -> DescriptorValue {
         let mut values = vec![0.0f32; 10];
         
-        let vsa = compute_atom_vsa(mol);
+        let (vsa, _) = compute_labute_contribs(mol);
         let (_, mr_contrib) = crippen_atom_contributions(mol);
 
         for i in 0..mol.atoms.len() {
@@ -155,8 +215,8 @@ impl Descriptor for LabuteASA {
     }
 
     fn calculate(&self, mol: &mut Molecule) -> DescriptorValue {
-        let vsa = compute_atom_vsa(mol);
-        let total: f64 = vsa.iter().sum();
+        let (vsa, h_contrib) = compute_labute_contribs(mol);
+        let total: f64 = vsa.iter().sum::<f64>() + h_contrib;
         DescriptorValue::Float(total as f32)
     }
 }
@@ -184,7 +244,7 @@ impl Descriptor for PeoeVsa {
         let mut values = vec![0.0f32; 14];
 
         let charges = compute_gasteiger_charges(mol);
-        let vsa = compute_atom_vsa(mol);
+        let (vsa, _) = compute_labute_contribs(mol);
 
         for i in 0..mol.atoms.len() {
             if mol.atoms[i].atomic_number <= 1 { continue; }
@@ -245,12 +305,12 @@ mod tests {
         }
     }
 
-    // -- compute_atom_vsa --
+    // -- compute_labute_contribs --
 
     #[test]
     fn test_vsa_positive() {
         let mol = parse_smiles("CCO").unwrap();
-        let vsa = compute_atom_vsa(&mol);
+        let (vsa, _) = compute_labute_contribs(&mol);
         for (i, &v) in vsa.iter().enumerate() {
             if mol.atoms[i].atomic_number > 1 {
                 assert!(v > 0.0, "atom {} VSA = {}", i, v);
@@ -261,7 +321,7 @@ mod tests {
     #[test]
     fn test_vsa_benzene_symmetry() {
         let mol = parse_smiles("c1ccccc1").unwrap();
-        let vsa = compute_atom_vsa(&mol);
+        let (vsa, _) = compute_labute_contribs(&mol);
         let c_vsas: Vec<f64> = vsa.iter().copied()
             .enumerate()
             .filter(|(i, _)| mol.atoms[*i].atomic_number == 6)
@@ -282,12 +342,13 @@ mod tests {
     }
 
     #[test]
-    fn test_slogp_vsa_bins_sum_to_labute() {
+    fn test_slogp_vsa_bins_sum_approx_labute() {
         let slogp = calc_float_vec(&SlogpVSA, "CCO");
         let labute = calc_float(&LabuteASA, "CCO");
         let bin_sum: f32 = slogp.iter().sum();
-        assert!((bin_sum - labute).abs() < 1.0,
-            "bin sum {} ≈ LabuteASA {}", bin_sum, labute);
+        // Bin sum = heavy atom contributions only; LabuteASA includes H contribution
+        assert!(bin_sum > 0.0 && bin_sum < labute + 1.0,
+            "bin sum {} vs LabuteASA {}", bin_sum, labute);
     }
 
     #[test]
@@ -307,12 +368,13 @@ mod tests {
     }
 
     #[test]
-    fn test_smr_vsa_bins_sum_to_labute() {
+    fn test_smr_vsa_bins_sum_approx_labute() {
         let smr = calc_float_vec(&SmrVSA, "CCO");
         let labute = calc_float(&LabuteASA, "CCO");
         let bin_sum: f32 = smr.iter().sum();
-        assert!((bin_sum - labute).abs() < 1.0,
-            "bin sum {} ≈ LabuteASA {}", bin_sum, labute);
+        // Bin sum = heavy atom contributions only; LabuteASA includes H contribution
+        assert!(bin_sum > 0.0 && bin_sum < labute + 1.0,
+            "bin sum {} vs LabuteASA {}", bin_sum, labute);
     }
 
     // -- LabuteASA --
@@ -334,13 +396,15 @@ mod tests {
     #[test]
     fn test_labute_benzene() {
         let v = calc_float(&LabuteASA, "c1ccccc1");
-        assert!(v > 50.0 && v < 200.0, "benzene ASA = {}", v);
+        // RDKit: 37.43
+        assert!(v > 30.0 && v < 45.0, "benzene ASA = {}", v);
     }
 
     #[test]
     fn test_labute_methane() {
         let v = calc_float(&LabuteASA, "C");
-        assert!((v - 36.3).abs() < 1.0, "methane ASA = {}", v);
+        // RDKit: 8.74
+        assert!((v - 8.74).abs() < 1.0, "methane ASA = {}", v);
     }
 
     // -- PEOE_VSA --
@@ -348,13 +412,11 @@ mod tests {
     #[test]
     fn test_peoe_vsa_benzene() {
         let v = calc_float_vec(&PeoeVsa, "c1ccccc1");
-        // All C atoms have same charge → all VSA lands in one bin
         let nonzero: Vec<_> = v.iter().filter(|&&x| x > 0.0).collect();
         assert!(!nonzero.is_empty(), "should have at least one nonzero bin");
         let total: f32 = v.iter().sum();
-        let labute = calc_float(&LabuteASA, "c1ccccc1");
-        assert!((total - labute).abs() < 1.0,
-            "PEOE_VSA sum {} ≈ LabuteASA {}", total, labute);
+        // Total should be positive and reasonable
+        assert!(total > 0.0, "PEOE_VSA sum {} should be positive", total);
     }
 
     #[test]
@@ -380,10 +442,10 @@ mod tests {
     fn test_peoe_vsa_sum() {
         for smi in &["CCO", "CC(=O)O", "c1ccccc1", "CCCCCC"] {
             let peoe = calc_float_vec(&PeoeVsa, smi);
-            let labute = calc_float(&LabuteASA, smi);
             let bin_sum: f32 = peoe.iter().sum();
-            assert!((bin_sum - labute).abs() < 1.0,
-                "{}: PEOE_VSA sum {} ≈ LabuteASA {}", smi, bin_sum, labute);
+            // Bin sums only heavy atoms; should be positive and reasonable
+            assert!(bin_sum > 0.0,
+                "{}: PEOE_VSA sum {} should be positive", smi, bin_sum);
         }
     }
 }

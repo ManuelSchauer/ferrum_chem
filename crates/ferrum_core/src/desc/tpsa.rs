@@ -122,11 +122,26 @@ pub fn compute_tpsa(mol: &Molecule, include_sp: bool) -> f64 {
     tpsa
 }
 
-/// Check if atom is in a 3-membered ring
-/// TODO: Implement proper 3-ring detection when needed
-fn is_in_3_ring(_mol: &Molecule, _atom_idx: usize) -> bool {
-    // 3-membered rings are rare in drug-like molecules
-    // For now, return false - this only affects edge cases like aziridines and epoxides
+/// Check if atom is in a 3-membered ring.
+/// An atom is in a 3-ring if any two of its neighbors are bonded to each other.
+fn is_in_3_ring(mol: &Molecule, atom_idx: usize) -> bool {
+    let nbrs: Vec<usize> = mol.adjacency[atom_idx]
+        .iter()
+        .map(|&bi| {
+            let b = &mol.bonds[bi as usize];
+            if b.source as usize == atom_idx { b.target as usize } else { b.source as usize }
+        })
+        .collect();
+    for i in 0..nbrs.len() {
+        for j in (i + 1)..nbrs.len() {
+            if mol.adjacency[nbrs[i]].iter().any(|&bi| {
+                let b = &mol.bonds[bi as usize];
+                b.source as usize == nbrs[j] || b.target as usize == nbrs[j]
+            }) {
+                return true;
+            }
+        }
+    }
     false
 }
 
@@ -487,6 +502,38 @@ mod tests {
     fn test_tpsa_amide() {
         assert!((tpsa("CC(=O)N") - 43.09).abs() < 0.01);
     }
+
+    #[test]
+    fn test_tpsa_3ring_epoxides() {
+        // Epoxides: O in 3-ring → 12.53 (vs 9.23 for normal ether)
+        assert!((tpsa("C1CO1") - 12.53).abs() < 0.01, "ethylene oxide");
+        assert!((tpsa("CC1CO1") - 12.53).abs() < 0.01, "propylene oxide");
+        assert!((tpsa("c1ccc(C2CO2)cc1") - 12.53).abs() < 0.01, "styrene oxide");
+        // glycidol: epoxide O (12.53) + hydroxyl OH (20.23) = 32.76
+        assert!((tpsa("OCC1CO1") - 32.76).abs() < 0.01, "glycidol");
+    }
+
+    #[test]
+    fn test_tpsa_3ring_aziridines() {
+        // Aziridines: N in 3-ring
+        // -NH- in 3-ring → 21.94 (vs 12.03 for normal secondary amine)
+        assert!((tpsa("C1CN1") - 21.94).abs() < 0.01, "aziridine");
+        assert!((tpsa("CC1CN1") - 21.94).abs() < 0.01, "2-methylaziridine");
+        // >N- in 3-ring → 3.01 (vs 3.24 for normal tertiary amine)
+        assert!((tpsa("CN1CC1") - 3.01).abs() < 0.01, "N-methylaziridine");
+        // aziridine-2-carboxamide: NH-3ring (21.94) + amide C(=O)N (43.09) = 65.03
+        assert!((tpsa("O=C(N)C1CN1") - 65.03).abs() < 0.01, "aziridine-2-carboxamide");
+    }
+
+    #[test]
+    fn test_tpsa_3ring_vs_larger_rings() {
+        // Confirm non-3-ring molecules get normal (non-3-ring) values
+        assert!((tpsa("C1CCO1") - 9.23).abs() < 0.01, "oxetane (4-ring O → 9.23 ether)");
+        assert!((tpsa("C1CCOC1") - 9.23).abs() < 0.01, "THF (5-ring O → 9.23 ether)");
+        assert!((tpsa("C1CCN1") - 12.03).abs() < 0.01, "azetidine (4-ring N → 12.03)");
+        assert!((tpsa("C1CCNCC1") - 12.03).abs() < 0.01, "piperidine (6-ring N → 12.03)");
+        assert!((tpsa("C1COCCN1") - 21.26).abs() < 0.01, "morpholine (O + NH → 9.23 + 12.03)");
+    }
 }
 
 /// Topological Polar Surface Area (TPSA) descriptor.
@@ -526,7 +573,7 @@ impl Descriptor for Tpsa {
     }
 
     fn calculate(&self, mol: &mut Molecule) -> DescriptorValue {
-        let tpsa = compute_tpsa(mol, true) as f32;
+        let tpsa = compute_tpsa(mol, false) as f32;
         DescriptorValue::Float(tpsa)
     }
 }

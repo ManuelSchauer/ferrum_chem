@@ -29,30 +29,61 @@ use crate::algo::rings::find_sssr;
 /// assert!(mol.atoms[0].is_aromatic());  // Benzene carbon
 /// ```
 pub fn perceive_aromaticity(mol: &mut Molecule) {
-    // First, detect rings (SSSR) - now returns all SSSR rings
+    // First, detect rings (SSSR)
     let rings = find_sssr(mol);
 
-    // Check which rings are aromatic BEFORE marking any
-    // This is important for fused ring systems where rings share bonds
+    // Check which rings are aromatic
     let mut aromatic_rings = Vec::new();
     for ring in &rings {
         if is_ring_aromatic(mol, ring) {
             aromatic_rings.push(ring.clone());
         }
     }
-    
-    // Now mark all aromatic rings
-    for ring in aromatic_rings {
-        mark_ring_aromatic(mol, &ring);
+
+    // Collect all atoms that are in at least one aromatic ring
+    let n = mol.num_atoms();
+    let mut in_aromatic_ring = vec![false; n];
+    for ring in &aromatic_rings {
+        for &idx in ring {
+            in_aromatic_ring[idx as usize] = true;
+        }
+    }
+
+    // Strip aromaticity from atoms that SMILES marked aromatic but aren't in any
+    // Hückel-aromatic SSSR ring. This handles fused ring systems like Pyrene where
+    // some SSSR rings (e.g. 5-membered all-C) don't satisfy 4n+2.
+    for i in 0..n {
+        if mol.atoms[i].is_aromatic() && !in_aromatic_ring[i] {
+            mol.atoms[i].set_aromatic(false);
+        }
+    }
+
+    // Kekulize bonds that were Aromatic but now connect to non-aromatic atoms
+    for bond in &mut mol.bonds {
+        if bond.bond_type == BondType::Aromatic {
+            let src_arom = in_aromatic_ring[bond.source as usize];
+            let tgt_arom = in_aromatic_ring[bond.target as usize];
+            if !src_arom && !tgt_arom {
+                // Both non-aromatic → Single
+                bond.bond_type = BondType::Single;
+                bond.set_aromatic(false);
+            } else if !src_arom || !tgt_arom {
+                // Boundary bond (one aromatic, one not) → Double
+                bond.bond_type = BondType::Double;
+                bond.set_aromatic(false);
+            }
+            // Both aromatic → keep as Aromatic
+        }
+    }
+
+    // Mark all atoms/bonds in aromatic rings
+    for ring in &aromatic_rings {
+        mark_ring_aromatic(mol, ring);
     }
 }
 
 /// Check if a ring is aromatic using Hückel's rule.
-///
-/// # Thread Safety
-/// Read-only function, safe to call concurrently.
 fn is_ring_aromatic(mol: &Molecule, ring: &[AtomIdx]) -> bool {
-    // Typically aromatic rings are 5, 6, or 7 membered, but Hückel's rule applies generally
     if ring.len() < 3 {
         return false;
     }
@@ -62,69 +93,97 @@ fn is_ring_aromatic(mol: &Molecule, ring: &[AtomIdx]) -> bool {
         return false;
     }
 
-    // Count π electrons
-    let pi_electrons = count_pi_electrons(mol, ring);
+    // Count π electrons with flexible N handling.
+    // N can contribute 1π (pyridine-like) or 2π (pyrrole-like).
+    // C with exocyclic C=O but no ring double bond contributes 0π (cross-conjugated).
+    // C⁻ (carbanion) contributes 2π (lone pair, like pyrrole N).
+    // C⁺ (carbocation) contributes 0π (empty p-orbital, like tropylium).
+    // Try all N combinations — if ANY gives 4n+2, ring is aromatic.
+    let mut fixed_pi: u8 = 0;
+    let mut n_count: u8 = 0;
 
-    // Apply Hückel rule: 4n+2 π electrons (n = 0, 1, 2, ...)
-    // Common cases: 2, 6, 10, 14, ...
-    is_huckel_aromatic(pi_electrons)
-}
-
-/// Check if ring has a conjugated system (alternating or aromatic bonds).
-fn is_conjugated(mol: &Molecule, ring: &[AtomIdx]) -> bool {
-    // For heterocycles (rings with N, O, S), we use a more relaxed conjugation check
-    // because lone pairs on heteroatoms contribute to conjugation even without
-    // explicit double bonds (e.g., pyrrole, furan, imidazole).
-    
-    let has_heteroatom = ring.iter().any(|&idx| {
-        let atom = &mol.atoms[idx as usize];
-        atom.atomic_number == 7 || atom.atomic_number == 8 || atom.atomic_number == 16
-    });
-    
-    // Check bonds in the ring
-    let mut aromatic_or_double_bonds = 0;
-    let mut has_any_double_or_aromatic = false;
-
-    for i in 0..ring.len() {
-        let from = ring[i];
-        let to = ring[(i + 1) % ring.len()];
-
-        // Find bond between these atoms
-        if let Some(bond_idx) = find_bond_between(mol, from, to) {
-            let bond = &mol.bonds[bond_idx];
-            match bond.bond_type {
-                BondType::Double | BondType::Aromatic => {
-                    aromatic_or_double_bonds += 1;
-                    has_any_double_or_aromatic = true;
+    for &atom_idx in ring {
+        let atom = &mol.atoms[atom_idx as usize];
+        match atom.atomic_number {
+            6 => {
+                let charge = atom.formal_charge;
+                if charge < 0 {
+                    fixed_pi += 2; // Carbanion: lone pair contributes (cyclopentadienyl)
+                } else if charge > 0 {
+                    fixed_pi += 0; // Carbocation: empty p-orbital (tropylium)
+                } else {
+                    // Neutral C: check if it has a double/aromatic bond IN the ring
+                    let has_ring_double = mol.adjacency[atom_idx as usize].iter().any(|&bond_idx| {
+                        let bond = &mol.bonds[bond_idx as usize];
+                        if !matches!(bond.bond_type, BondType::Double | BondType::Aromatic) {
+                            return false;
+                        }
+                        let other = if bond.source == atom_idx { bond.target } else { bond.source };
+                        ring.contains(&other)
+                    });
+                    if has_ring_double {
+                        fixed_pi += 1; // Normal sp2 carbon in ring
+                    } else {
+                        // C with only single bonds in ring (e.g. C=O exocyclic).
+                        fixed_pi += 0;
+                    }
                 }
-                BondType::Single => {
-                    // Single bonds are okay in conjugated systems
-                }
-                _ => return false, // Triple bonds break conjugation
             }
-        } else {
-            return false; // No bond found
+            7 => n_count += 1,
+            8 | 16 => fixed_pi += 2,
+            _ => return false,
         }
     }
 
-    if has_heteroatom {
-        // For heterocycles: more lenient - just need at least one double/aromatic bond
-        // or alternating single/double pattern. The heteroatoms' lone pairs provide
-        // additional π electrons for conjugation.
-        // Examples:
-        // - Pyrrole (C4NH4): 2 double bonds
-        // - Pyridine (C5NH5): 3 double bonds  
-        // - Imidazole (C3N2H4): 2 double bonds
-        // - Purine rings: may have fewer explicit double bonds due to resonance
-        has_any_double_or_aromatic && aromatic_or_double_bonds >= 1
-    } else {
-        // For carbocycles (benzene): need roughly half the bonds to be double/aromatic
-        // - 5-membered: need at least 2
-        // - 6-membered: need at least 3 (benzene)
-        // - 7-membered: need at least 3 (tropylium)
-        let min_required = (ring.len() + 1) / 2;
-        aromatic_or_double_bonds >= min_required
+    // Try all 2^n_count combinations of N contributing 1 or 2 π electrons
+    for mask in 0..(1u32 << n_count) {
+        let mut total = fixed_pi;
+        for i in 0..n_count {
+            total += if mask & (1 << i) != 0 { 2 } else { 1 };
+        }
+        if is_huckel_aromatic(total) {
+            return true;
+        }
     }
+
+    false
+}
+
+/// Check if ring has a conjugated system — every atom must be sp2-capable.
+fn is_conjugated(mol: &Molecule, ring: &[AtomIdx]) -> bool {
+    for i in 0..ring.len() {
+        let from = ring[i];
+        let to = ring[(i + 1) % ring.len()];
+        if let Some(bond_idx) = find_bond_between(mol, from, to) {
+            if mol.bonds[bond_idx].bond_type == BondType::Triple {
+                return false;
+            }
+        } else {
+            return false;
+        }
+    }
+
+    // Every atom must be sp2: has a double/aromatic bond (in-ring or exocyclic),
+    // is a heteroatom (N, O, S) with a lone pair, or is a charged carbon (C⁻/C⁺).
+    for &atom_idx in ring {
+        let atom = &mol.atoms[atom_idx as usize];
+        if matches!(atom.atomic_number, 7 | 8 | 16) {
+            continue;
+        }
+        // Charged carbons are sp2-capable (C⁻ has lone pair, C⁺ has empty p-orbital)
+        if atom.atomic_number == 6 && atom.formal_charge != 0 {
+            continue;
+        }
+        let has_pi_bond = mol.adjacency[atom_idx as usize].iter().any(|&bond_idx| {
+            let bond = &mol.bonds[bond_idx as usize];
+            matches!(bond.bond_type, BondType::Double | BondType::Aromatic)
+        });
+        if !has_pi_bond {
+            return false;
+        }
+    }
+
+    true
 }
 
 /// Find bond between two atoms.
@@ -153,68 +212,62 @@ fn count_pi_electrons(mol: &Molecule, ring: &[AtomIdx]) -> u8 {
                 pi_electrons += 1;
             }
             7 => {
-                // Nitrogen: distinguish pyridine-like vs pyrrole-like
-                // 
-                // Pyridine-like (=N-, imine or amide-like): 
-                //   - Has a double bond (C=N) in the ring, OR
-                //   - Has a neighbor with exocyclic C=O (amide nitrogen)
-                //   - Lone pair is NOT in π system
-                //   - Contributes 1 π electron
+                // Nitrogen: distinguish pyridine-like (1π) vs pyrrole-like (2π)
                 //
-                // Pyrrole-like (-N-, amine in ring):
-                //   - Has only single bonds in the ring
-                //   - No exocyclic carbonyls on neighbors
-                //   - Lone pair is in p orbital (IN π system)
-                //   - Contributes 2 π electrons
+                // Pyridine-like: N with no H, 2 ring neighbors → lone pair NOT in π system
+                // Pyrrole-like: N with H, or N with 3 ring neighbors → lone pair IN π system
+                //
+                // Also check for explicit double bond in ring or amide pattern
                 
-                // Count double bonds involving this nitrogen in the ring
-                let mut has_double_bond_in_ring = false;
-                for &bond_idx in &mol.adjacency[atom_idx as usize] {
+                let h_count = atom.total_h();
+                
+                // Count ring neighbors
+                let ring_neighbor_count = mol.adjacency[atom_idx as usize].iter()
+                    .filter(|&&bond_idx| {
+                        let bond = &mol.bonds[bond_idx as usize];
+                        let other = if bond.source == atom_idx { bond.target } else { bond.source };
+                        ring.contains(&other)
+                    })
+                    .count();
+                
+                // Check for double bond in ring (explicit, not aromatic)
+                let has_double_bond_in_ring = mol.adjacency[atom_idx as usize].iter().any(|&bond_idx| {
                     let bond = &mol.bonds[bond_idx as usize];
                     if bond.bond_type == BondType::Double {
-                        // Check if the other atom is also in the ring
                         let other = if bond.source == atom_idx { bond.target } else { bond.source };
-                        if ring.contains(&other) {
-                            has_double_bond_in_ring = true;
-                            break;
-                        }
+                        ring.contains(&other)
+                    } else {
+                        false
                     }
-                }
+                });
                 
-                // Check if nitrogen is bonded to a carbon with exocyclic C=O (amide)
-                let mut has_carbonyl_neighbor = false;
-                for &bond_idx in &mol.adjacency[atom_idx as usize] {
+                // Check for exocyclic C=O (amide nitrogen)
+                let has_carbonyl_neighbor = mol.adjacency[atom_idx as usize].iter().any(|&bond_idx| {
                     let bond = &mol.bonds[bond_idx as usize];
                     let neighbor = if bond.source == atom_idx { bond.target } else { bond.source };
                     let neighbor_atom = &mol.atoms[neighbor as usize];
-                    
-                    // If neighbor is carbon in the ring, check for exocyclic C=O
                     if neighbor_atom.atomic_number == 6 && ring.contains(&neighbor) {
-                        // Check if this carbon has a C=O bond to oxygen outside the ring
-                        for &bond_idx2 in &mol.adjacency[neighbor as usize] {
+                        mol.adjacency[neighbor as usize].iter().any(|&bond_idx2| {
                             let bond2 = &mol.bonds[bond_idx2 as usize];
                             if bond2.bond_type == BondType::Double {
                                 let other2 = if bond2.source == neighbor { bond2.target } else { bond2.source };
                                 let other_atom2 = &mol.atoms[other2 as usize];
-                                
-                                // Check if it's C=O (oxygen) outside the ring
-                                if other_atom2.atomic_number == 8 && !ring.contains(&other2) {
-                                    has_carbonyl_neighbor = true;
-                                    break;
-                                }
+                                other_atom2.atomic_number == 8 && !ring.contains(&other2)
+                            } else {
+                                false
                             }
-                        }
+                        })
+                    } else {
+                        false
                     }
-                    
-                    if has_carbonyl_neighbor {
-                        break;
-                    }
-                }
+                });
                 
-                if has_double_bond_in_ring || has_carbonyl_neighbor {
-                    pi_electrons += 1; // Pyridine-like or amide
+                // Pyridine-like: no H, exactly 2 ring neighbors, OR has explicit double bond
+                // This covers both Kekulized (C=N-C) and aromatic (c:n:c) representations
+                if has_double_bond_in_ring || has_carbonyl_neighbor || (h_count == 0 && ring_neighbor_count == 2) {
+                    pi_electrons += 1; // Pyridine-like
                 } else {
-                    pi_electrons += 2; // Pyrrole-like (lone pair)
+                    pi_electrons += 2; // Pyrrole-like (lone pair contributes)
                 }
             }
             8 | 16 => {
@@ -367,6 +420,17 @@ mod tests {
         // No atoms should be aromatic (4π electrons, not 4n+2)
         for atom in &mol.atoms {
             assert!(!atom.is_aromatic(), "Cyclopentadiene should not be aromatic (4π e-)");
+        }
+    }
+    
+    #[test]
+    fn test_cyclopentadienyl_anion_aromatic() {
+        // Cyclopentadienyl anion: [cH-]1cccc1 (6 π electrons: 4C×1 + C⁻×2)
+        let mut mol = parse_smiles("[cH-]1cccc1").unwrap();
+        perceive_aromaticity(&mut mol);
+        
+        for atom in &mol.atoms {
+            assert!(atom.is_aromatic(), "Cyclopentadienyl anion should be aromatic (6π e-)");
         }
     }
 }

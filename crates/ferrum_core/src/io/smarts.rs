@@ -80,6 +80,9 @@ pub enum AtomPrimitive {
     /// In ring of specific size [r5], [r6]
     RingSize(u8),
     
+    /// Ring membership count [R1], [R2] — number of SSSR rings containing atom
+    RingMembership(u8),
+    
     /// Valence [v3], [v4]
     Valence(u8),
     
@@ -239,7 +242,6 @@ fn match_primitive(
             if !atom.is_in_ring() {
                 return false;
             }
-            // Find SSSR and check if this atom is in a ring of the requested size
             let mut mol_copy = Molecule {
                 atoms: mol.atoms.clone(),
                 bonds: mol.bonds.clone(),
@@ -251,26 +253,42 @@ fn match_primitive(
             })
         }
         
+        AtomPrimitive::RingMembership(count) => {
+            let mut mol_copy = Molecule {
+                atoms: mol.atoms.clone(),
+                bonds: mol.bonds.clone(),
+                adjacency: mol.adjacency.clone(),
+            };
+            let rings = crate::algo::rings::find_sssr(&mut mol_copy);
+            let membership = rings.iter().filter(|ring| ring.contains(&atom_idx)).count();
+            membership == *count as usize
+        }
+        
         AtomPrimitive::Valence(v) => {
             // Calculate valence: sum of bond orders + implicit hydrogens
-            let mut valence = 0u8;
+            // Use half-integer math (multiply by 2) to handle aromatic bonds (1.5)
+            let mut valence_x2 = 0u16;
             
-            // Add bond orders
             for &bond_idx in &mol.adjacency[atom_idx as usize] {
                 let bond = &mol.bonds[bond_idx as usize];
-                valence += match bond.bond_type {
-                    crate::types::BondType::Single => 1,
-                    crate::types::BondType::Double => 2,
-                    crate::types::BondType::Triple => 3,
-                    crate::types::BondType::Aromatic => 1, // Aromatic bonds count as 1 for valence
-                    crate::types::BondType::Dative => 1,
-                    crate::types::BondType::Unknown => 1,
+                valence_x2 += match bond.bond_type {
+                    crate::types::BondType::Single => 2,
+                    crate::types::BondType::Double => 4,
+                    crate::types::BondType::Triple => 6,
+                    crate::types::BondType::Aromatic => 3, // 1.5 * 2
+                    crate::types::BondType::Dative => {
+                        // Dative: contributes 0 to donor (source), 1 to acceptor (target)
+                        if bond.target == atom_idx { 2 } else { 0 }
+                    }
+                    crate::types::BondType::Unknown => 2,
                 };
             }
             
             // Add hydrogens (implicit + explicit)
-            valence += atom.total_h();
+            valence_x2 += (atom.total_h() as u16) * 2;
             
+            // Round to nearest integer valence
+            let valence = ((valence_x2 + 1) / 2) as u8;
             valence == *v
         }
         
@@ -509,7 +527,7 @@ impl SmartsParser {
                     let atom_idx = self.add_atom(atom);
                     
                     if let Some(prev_idx) = prev_atom_idx {
-                        self.add_bond(prev_idx, atom_idx, bond_type.unwrap_or(QueryBond::Single));
+                        self.add_bond(prev_idx, atom_idx, bond_type.unwrap_or(QueryBond::SingleOrAromatic));
                     }
                     
                     prev_atom_idx = Some(atom_idx);
@@ -538,7 +556,7 @@ impl SmartsParser {
                     let atom_idx = self.add_atom(atom);
                     
                     if let Some(prev_idx) = prev_atom_idx {
-                        self.add_bond(prev_idx, atom_idx, bond_type.unwrap_or(QueryBond::Single));
+                        self.add_bond(prev_idx, atom_idx, bond_type.unwrap_or(QueryBond::SingleOrAromatic));
                     }
                     
                     prev_atom_idx = Some(atom_idx);
@@ -553,7 +571,7 @@ impl SmartsParser {
                     let atom_idx = self.add_atom(atom);
                     
                     if let Some(prev_idx) = prev_atom_idx {
-                        self.add_bond(prev_idx, atom_idx, bond_type.unwrap_or(QueryBond::Single));
+                        self.add_bond(prev_idx, atom_idx, bond_type.unwrap_or(QueryBond::SingleOrAromatic));
                     }
                     
                     prev_atom_idx = Some(atom_idx);
@@ -615,55 +633,83 @@ impl SmartsParser {
     
     /// Parse bracket expression with support for logical operators (,=OR ;=AND !=NOT)
     fn parse_bracket_expression(&mut self) -> std::result::Result<Vec<AtomPrimitive>, String> {
-        let mut and_groups = Vec::new();
+        // SMARTS bracket atom precedence (highest to lowest):
+        // 1. Implicit AND (juxtaposition): [OH] = O AND H1
+        // 2. Comma (OR): [O,S] = O OR S  
+        // 3. Semicolon (low-precedence AND): [O,S;H1] = (O OR S) AND H1
+        //
+        // Strategy: collect `;`-separated AND terms.
+        // Each AND term is a `,`-separated OR of implicit-AND groups.
+        let mut semi_groups: Vec<AtomPrimitive> = Vec::new();
         
-        while self.peek() != Some(']') && self.peek().is_some() {
-            // Check if we're starting an OR group
-            let mut or_group = Vec::new();
+        loop {
+            // Parse one `;`-segment: comma-separated OR of implicit-AND groups
+            let or_prim = self.parse_comma_or_group()?;
+            semi_groups.push(or_prim);
             
-            // Parse primitives separated by commas (OR)
-            loop {
-                let primitive = self.parse_single_primitive()?;
-                or_group.push(primitive);
-                
-                // Check what comes next
-                match self.peek() {
-                    Some(',') => {
-                        // Comma = OR, continue this OR group
-                        self.pos += 1;
-                        continue;
-                    }
-                    Some(';') | Some('&') => {
-                        // Semicolon or & = AND, finalize OR group and continue to next AND term
-                        self.pos += 1;
-                        break;
-                    }
-                    Some(']') | None => {
-                        // End of expression
-                        break;
-                    }
-                    _ => {
-                        // No operator means implicit AND - finalize OR group
-                        break;
-                    }
+            match self.peek() {
+                Some(';') | Some('&') => {
+                    self.pos += 1;
+                    continue;
                 }
-            }
-            
-            // Add the OR group (or single primitive) to AND groups
-            if or_group.len() == 1 {
-                and_groups.push(or_group.into_iter().next().unwrap());
-            } else {
-                and_groups.push(AtomPrimitive::Or(or_group));
+                _ => break,
             }
         }
         
-        // Return single primitive, OR, or AND
-        if and_groups.is_empty() {
+        if semi_groups.is_empty() {
             Ok(vec![AtomPrimitive::AnyAtom])
-        } else if and_groups.len() == 1 {
-            Ok(vec![and_groups.into_iter().next().unwrap()])
+        } else if semi_groups.len() == 1 {
+            Ok(vec![semi_groups.into_iter().next().unwrap()])
         } else {
-            Ok(vec![AtomPrimitive::And(and_groups)])
+            Ok(vec![AtomPrimitive::And(semi_groups)])
+        }
+    }
+    
+    /// Parse a comma-separated OR group (medium precedence).
+    /// Each branch is a sequence of implicitly-ANDed primitives.
+    fn parse_comma_or_group(&mut self) -> std::result::Result<AtomPrimitive, String> {
+        let mut branches: Vec<AtomPrimitive> = Vec::new();
+        
+        loop {
+            // Parse one implicit-AND group (highest precedence)
+            let and_prim = self.parse_implicit_and_group()?;
+            branches.push(and_prim);
+            
+            if self.peek() == Some(',') {
+                self.pos += 1;
+                continue;
+            }
+            break;
+        }
+        
+        if branches.len() == 1 {
+            Ok(branches.into_iter().next().unwrap())
+        } else {
+            Ok(AtomPrimitive::Or(branches))
+        }
+    }
+    
+    /// Parse a sequence of implicitly ANDed primitives (highest precedence).
+    /// Stops at `,`, `;`, `&`, `]`, or end of input.
+    fn parse_implicit_and_group(&mut self) -> std::result::Result<AtomPrimitive, String> {
+        let mut prims: Vec<AtomPrimitive> = Vec::new();
+        
+        loop {
+            match self.peek() {
+                Some(']') | Some(',') | Some(';') | Some('&') | None => break,
+                _ => {
+                    let p = self.parse_single_primitive()?;
+                    prims.push(p);
+                }
+            }
+        }
+        
+        if prims.is_empty() {
+            Ok(AtomPrimitive::AnyAtom)
+        } else if prims.len() == 1 {
+            Ok(prims.into_iter().next().unwrap())
+        } else {
+            Ok(AtomPrimitive::And(prims))
         }
     }
     
@@ -846,11 +892,11 @@ impl SmartsParser {
                             // This is an element, skip to element parsing
                         } else {
                             self.pos += 1;
-                            if let Some(size) = self.parse_digit() {
-                                if size == 0 {
+                            if let Some(count) = self.parse_digit() {
+                                if count == 0 {
                                     return Ok(AtomPrimitive::NotInRing);
                                 } else {
-                                    return Ok(AtomPrimitive::RingSize(size));
+                                    return Ok(AtomPrimitive::RingMembership(count));
                                 }
                             } else {
                                 return Ok(AtomPrimitive::InRing);
@@ -858,11 +904,11 @@ impl SmartsParser {
                         }
                     } else {
                         self.pos += 1;
-                        if let Some(size) = self.parse_digit() {
-                            if size == 0 {
+                        if let Some(count) = self.parse_digit() {
+                            if count == 0 {
                                 return Ok(AtomPrimitive::NotInRing);
                             } else {
-                                return Ok(AtomPrimitive::RingSize(size));
+                                return Ok(AtomPrimitive::RingMembership(count));
                             }
                         } else {
                             return Ok(AtomPrimitive::InRing);
@@ -870,11 +916,11 @@ impl SmartsParser {
                     }
                 } else {
                     self.pos += 1;
-                    if let Some(size) = self.parse_digit() {
-                        if size == 0 {
+                    if let Some(count) = self.parse_digit() {
+                        if count == 0 {
                             return Ok(AtomPrimitive::NotInRing);
                         } else {
-                            return Ok(AtomPrimitive::RingSize(size));
+                            return Ok(AtomPrimitive::RingMembership(count));
                         }
                     } else {
                         return Ok(AtomPrimitive::InRing);
@@ -958,7 +1004,7 @@ impl SmartsParser {
             if is_aromatic {
                 Ok(AtomPrimitive::Aromatic(atomic_number))
             } else {
-                Ok(AtomPrimitive::Element(atomic_number))
+                Ok(AtomPrimitive::Aliphatic(atomic_number))
             }
         }
     }
@@ -995,7 +1041,7 @@ impl SmartsParser {
         let atom = if is_aromatic {
             QueryAtom { primitives: vec![AtomPrimitive::Aromatic(atomic_number)] }
         } else {
-            QueryAtom { primitives: vec![AtomPrimitive::Element(atomic_number)] }
+            QueryAtom { primitives: vec![AtomPrimitive::Aliphatic(atomic_number)] }
         };
         
         Ok((atom, consumed))
@@ -1013,7 +1059,7 @@ impl SmartsParser {
                 // 3. Default to Single only if nothing was specified
                 let final_bond = pending_bond.take()
                     .or(stored_bond)
-                    .unwrap_or(QueryBond::Single);
+                    .unwrap_or(QueryBond::SingleOrAromatic);
                 self.add_bond(prev_idx, atom_idx, final_bond);
             } else {
                 // Opening a ring closure - store the pending bond type for later
@@ -1359,8 +1405,8 @@ mod smarts_advanced_tests {
     
     #[test]
     fn test_ring_bonds_count() {
-        // Test [Cx2] (atom with 2 ring bonds)
-        let query = parse_smarts("[Cx2]").unwrap();
+        // Test [cx2] (aromatic atom with 2 ring bonds)
+        let query = parse_smarts("[cx2]").unwrap();
         
         // Benzene: each carbon has 2 ring bonds
         let mut mol = parse_smiles("c1ccccc1").unwrap();
@@ -1371,7 +1417,7 @@ mod smarts_advanced_tests {
         let _ = crate::algo::rings::find_sssr(&mut mol);
         
         let matches = crate::algo::iso::find_all_matches(&mol, &query);
-        assert_eq!(matches.len(), 6); // all 6 carbons have 2 ring bonds
+        assert_eq!(matches.len(), 6); // all 6 aromatic carbons have 2 ring bonds
     }
     
     #[test]

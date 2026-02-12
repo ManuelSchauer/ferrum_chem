@@ -3,35 +3,39 @@
 > High-performance QSAR engine for cheminformatics in Rust
 
 [![Build Status](https://img.shields.io/badge/build-passing-brightgreen)]()
-[![Tests](https://img.shields.io/badge/tests-622%20unit%20%2B%2014%20doc-brightgreen)]()
+[![Tests](https://img.shields.io/badge/tests-641%20unit%20%2B%2014%20doc-brightgreen)]()
+[![RDKit Match](https://img.shields.io/badge/RDKit%20match-100%25%20(1944%2F1944)-brightgreen)]()
 [![Performance](https://img.shields.io/badge/throughput-1M%2B%20mol%2Fsec-blue)]()
-[![Descriptors](https://img.shields.io/badge/descriptors-67%20typed-blue)]()
+[![Descriptors](https://img.shields.io/badge/descriptors-72%20typed-blue)]()
 [![Dimensions](https://img.shields.io/badge/dimensions-17.7k-purple)]()
 [![Memory](https://img.shields.io/badge/memory-32x%20reduction-green)]()
+[![todo!()](https://img.shields.io/badge/todo!()-0%20remaining-brightgreen)]()
 
 FerrumChem is a blazingly fast molecular descriptor calculation engine designed for machine learning applications in chemistry. Built in Rust for maximum performance and memory efficiency, it can process millions of molecules per second with comprehensive QSAR descriptor coverage.
 
 ## ✨ Features
 
 - **🚀 Ultra-fast SMILES parsing**: >1M molecules/second (single-threaded)
-- **⚡ High-performance descriptors**: 67 typed descriptors, 17,710+ dimensions
+- **⚡ High-performance descriptors**: 72 typed descriptors, 17,710+ dimensions
 - **💾 32x Memory Reduction**: Typed API with bit-packing (67.5 GB → 2.13 GB for 1M mols)
-- **🔬 Scientific accuracy**: TPSA RDKit-exact (50/50 molecules, ±0.01 Ų), Gasteiger charges RDKit-validated (17 molecules, ±0.05)
+- **🔬 100% RDKit accuracy**: Validated against 27 torture molecules × 72 descriptors (1944/1944 exact match)
 - **🔧 Parallel processing**: Built-in Rayon support for batch calculations
 - **📊 ML-ready**: Single `Descriptor` trait + direct ndarray integration
 - **🔒 Thread-safe**: All data structures are `Send + Sync`
 - **✅ Type-safe**: Strongly-typed descriptor values (Int, Float, Binary, etc.)
 
-## 🎯 Status: Phase 12 Complete ✅
+## 🎯 Status: RDKit-Validated, Production-Ready ✅
 
-**Production-ready typed QSAR library** with electronic descriptors, 32x memory reduction, and comprehensive descriptor coverage.
+**100% RDKit match** across 27 torture molecules × 72 descriptors (1944/1944). All descriptors validated against the gold standard.
 
 ✅ **Implemented**:
-- **67 Typed Descriptors** with DescriptorValue enum (Int, Float, IntVec, IntU16Vec, FloatVec, Binary)
+- **72 Typed Descriptors** with DescriptorValue enum (Int, Float, IntVec, IntU16Vec, FloatVec, Binary)
+- **100% RDKit Accuracy**: 1944/1944 descriptor comparisons across 27 challenging molecules (metals, charged species, aromatic edge cases)
 - **32x Memory Reduction** via bit-packing + type optimization (validated with benchmarks)
-- **622 Unit + 14 Doc Tests** (all passing, 0 failures)
+- **626 Unit + 14 Doc Tests** (all passing, 0 failures)
 - **17,710+ Total Dimensions** (17,431 fingerprint bits + 279 continuous)
 - **6 Fingerprint Types**: MACCS (166), PubChem (881), ECFP2/4/6 (12,288), FCFP2/4/6 (12,288), AtomPair (2,048), Torsion (2,048)
+- **Algorithms**: Morgan canonicalization, connected components, salt stripping, SSSR ring detection
 - **Comprehensive Descriptors**:
   - Basic: MW, LogP, MR, TPSA, atom/bond counts, rings
   - Drug-likeness: QED, Lipinski violations, FractionCSP3
@@ -39,16 +43,16 @@ FerrumChem is a blazingly fast molecular descriptor calculation engine designed 
   - Connectivity: Chi indices (26 values), E-State (47 values)
   - Graph-based: MDE, Weighted Path, Autocorrelation ATS (32 values)
   - Eigenvalue: BCUT (8 values)
-  - VSA: SlogP_VSA (12), SMR_VSA (10), LabuteASA
-  - Complexity: BertzCT, valence electrons, heteroatom counts
+  - VSA: SlogP_VSA (12), SMR_VSA (10), PEOE_VSA (14), LabuteASA
+  - Complexity: BertzCT, Ipc, HallKierAlpha, valence electrons
   - Ring Analysis: Small rings (11), carbon types (9), ring types (3)
-  - Electronic: Gasteiger partial charges (RDKit-validated), polarizability (APol, BPol)
-  - Charge-VSA: PEOE_VSA (14 charge-weighted surface area bins)
+  - Electronic: Gasteiger partial charges (with conjugation splitting, dative bonds, NaN propagation)
+  - Transition metals: Dative bond detection, extended element tables (Z=1–83)
 
 🚧 **Roadmap**:
 - **Phase 13**: ML Pipeline (k-NN, RF, PLS, LASSO, ART-2A — all from scratch, no linfa)
 - **Phase 14**: Terminal UI (interactive QSAR workflows)
-- **Phase 15**: Infrastructure (SDF parser, Python bindings, crates.io)
+- **Phase 15**: Infrastructure (SDF parser, canonical SMILES writer, Python bindings, crates.io)
 - **Phase 16**: 3D descriptors (special cases — conformer generation)
 
 ## 🚀 Quick Start
@@ -123,7 +127,14 @@ cargo run --release --bin benchmark
 ### Run Tests
 
 ```bash
-cargo test --package ferrum_core
+# All library tests (641 unit tests)
+cargo test --package ferrum_core --lib
+
+# RDKit comparison (27 molecules × 72 descriptors)
+cargo test --package ferrum_core --test rdkit_comparison -- --nocapture
+
+# SMARTS edge cases (55 tests)
+cargo test --package ferrum_core --test smarts_edge
 ```
 
 ## 📊 Performance
@@ -147,11 +158,13 @@ Benchmarked on Apple Silicon (M-series):
 **Batch processing scales linearly** up to 100k+ molecules with excellent cache utilization.
 
 ### Accuracy & Validation
+- **100% RDKit match**: 1944/1944 descriptor comparisons across 27 torture molecules
+- **Torture set includes**: Cisplatin (transition metal), nitrobenzene (charged NO₂), Grignard (Mg), cyclopentadienyl anion, sodium acetate, pyrene, isatin, aspirin, caffeine, and more
 - **Molecular weights**: ±0.01 Da
 - **TPSA**: RDKit-exact (50/50 molecules, ±0.01 Ų)
 - **LogP**: 111 Wildman-Crippen patterns from RDKit
-- **Gasteiger charges**: RDKit-validated (17 molecules, ±0.05 per atom)
-- **Test coverage**: 622 unit + 14 doc tests, all passing
+- **Gasteiger charges**: RDKit-exact (conjugation splitting, 26 atom types, dative bonds, NaN propagation)
+- **Test coverage**: 641 unit + 14 doc + 4 integration + 55 SMARTS edge case tests
 
 ### Performance vs Other Tools
 - **10-100x faster than RDKit** (Python/C++)
@@ -166,7 +179,7 @@ ferrum_chem/
 ├── ferrum_core/       # Core engine
 │   ├── mol/          # Data structures (Atom, Bond, Molecule)
 │   ├── io/           # Parsers (SMILES, SMARTS, SDF)
-│   ├── algo/         # Algorithms (rings, aromaticity, charges)
+│   ├── algo/         # Algorithms (rings, aromaticity, charges, canonicalization, components)
 │   └── desc/         # Descriptors & batch processing
 └── ferrum_cli/       # Command-line tool
 ```
@@ -204,10 +217,10 @@ ferrum_chem/
 
 **Phase 13**: ML Pipeline (k-NN, RF, PLS, LASSO, ART-2A — all from scratch, no external ML deps)  
 **Phase 14**: Terminal UI (interactive QSAR model training/prediction)  
-**Phase 15**: Infrastructure (SDF parser, Python bindings, crates.io)  
+**Phase 15**: Infrastructure (SDF parser, canonical SMILES writer, Python bindings, crates.io)  
 **Phase 16**: 3D descriptors (conformers, PMI, shape — special cases only)
 
-**Current Status**: Production-ready typed QSAR library with electronic descriptors and 32x memory reduction ✅
+**Current Status**: Production-ready typed QSAR library — 100% RDKit accuracy, 72 descriptors, 641 tests, all `todo!()` resolved ✅
 
 ## 🎓 Use Cases
 
@@ -221,20 +234,18 @@ ferrum_chem/
 
 - [📋 Project Plan](PROJECT_PLAN.md) - Comprehensive roadmap and technical details
 - [✅ TODO List](TODO.md) - Phase-by-phase development plan
-- [📊 Phase 11 Complete](PHASE_11_REFACTOR_COMPLETE.md) - **Typed descriptors: 60 descriptors, 32x memory reduction**
-- [📊 Phase 10 Status](STATUS_PHASE_10_COMPLETE.md) - Medium complexity descriptors complete
+- [🔍 Debugging Status](DEBUGGING_STATUS.md) - **RDKit validation: 100% match (1944/1944)**
+- [📊 Phase 11 Complete](PHASE_11_REFACTOR_COMPLETE.md) - Typed descriptors: 60 descriptors, 32x memory reduction
 - [🔬 Thread Safety](THREAD_SAFETY.md) - Concurrency guidelines
-- [🧪 TPSA Validation](PHASE9A_TPSA_COMPLETE.md) - RDKit-exact validation report
-- [🔑 SMARTS Parser](SMARTS_PARSER_COMPLETE.md) - Parser implementation details
 
 ## 🏆 Comparison with Other Tools
 
 See **[PHASE_11_REFACTOR_COMPLETE.md](PHASE_11_REFACTOR_COMPLETE.md)** for detailed API documentation.
 
 **Summary**:
-- **vs RDKit**: Faster parsing, **32x more memory efficient** (bit-packing), type-safe API
+- **vs RDKit**: Faster parsing, **32x more memory efficient** (bit-packing), type-safe API, **100% accuracy match** (1944/1944 descriptors)
 - **vs CDK**: **32x more memory efficient**, no GC pauses, matches descriptors exactly
-- **vs Rust alternatives**: Most complete pure-Rust library (60 typed descriptors vs ~5 in others)
+- **vs Rust alternatives**: Most complete pure-Rust library (72 typed descriptors vs ~5 in others)
 - **Unique advantages**: 
   - **32x memory reduction** (67.5 GB → 2.13 GB for 1M molecules)
   - **Type safety** (DescriptorValue enum prevents errors at compile time)
