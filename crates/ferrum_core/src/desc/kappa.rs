@@ -39,12 +39,16 @@ impl Descriptor for KappaIndices {
             return DescriptorValue::FloatVec(vec![0.0, 0.0, 0.0]);
         }
 
-        let nf = n as f64;
+        let a = n as f64;
 
-        // p₁ = number of bonds (paths of length 1)
+        // Hall-Kier alpha correction
+        let alpha = crate::desc::extra_counts::compute_hall_kier_alpha_f64(mol);
+        let a_alpha = a + alpha;
+
+        // P₁ = number of bonds
         let p1 = mol.num_bonds() as f64;
 
-        // p₂ = sum of C(degree_i, 2) for each atom
+        // P₂ = sum of C(degree_i, 2) for each atom
         let p2: f64 = (0..n)
             .map(|i| {
                 let d = mol.get_degree(i as u16) as f64;
@@ -52,7 +56,7 @@ impl Descriptor for KappaIndices {
             })
             .sum();
 
-        // p₃ = sum over all bonds of (deg_i - 1)(deg_j - 1)
+        // P₃ = sum over all bonds of (deg_i - 1)(deg_j - 1)
         let p3: f64 = mol.bonds.iter()
             .map(|bond| {
                 let di = mol.get_degree(bond.source) as f64;
@@ -61,28 +65,29 @@ impl Descriptor for KappaIndices {
             })
             .sum();
 
-        // κ₁ = n(n-1)² / p₁²
-        let kappa1 = if p1 > 0.0 {
-            (nf * (nf - 1.0).powi(2) / p1.powi(2)) as f32
+        // κ₁ = (A + α)(A + α - 1)² / (P1 + α)²
+        let denom1 = p1 + alpha;
+        let kappa1 = if denom1.abs() > 1e-10 {
+            (a_alpha * (a_alpha - 1.0).powi(2) / denom1.powi(2)) as f32
         } else {
             0.0
         };
 
-        // κ₂ = (n-1)(n-2)² / p₂²
-        let kappa2 = if p2 > 0.0 && n >= 3 {
-            ((nf - 1.0) * (nf - 2.0).powi(2) / p2.powi(2)) as f32
+        // κ₂ = (A + α - 1)(A + α - 2)² / (P2 + α)²
+        let denom2 = p2 + alpha;
+        let kappa2 = if denom2.abs() > 1e-10 {
+            ((a_alpha - 1.0) * (a_alpha - 2.0).powi(2) / denom2.powi(2)) as f32
         } else {
             0.0
         };
 
-        // κ₃: depends on parity of n
-        let kappa3 = if p3 > 0.0 && n >= 4 {
+        // κ₃ depends on parity of A
+        let denom3 = p3 + alpha;
+        let kappa3 = if denom3.abs() > 1e-10 {
             if n % 2 == 1 {
-                // odd n: (n-1)(n-3)² / p₃²
-                ((nf - 1.0) * (nf - 3.0).powi(2) / p3.powi(2)) as f32
+                ((a_alpha - 1.0) * (a_alpha - 3.0).powi(2) / denom3.powi(2)) as f32
             } else {
-                // even n: (n-3)(n-2)² / p₃²
-                ((nf - 3.0) * (nf - 2.0).powi(2) / p3.powi(2)) as f32
+                ((a_alpha - 2.0) * (a_alpha - 3.0).powi(2) / denom3.powi(2)) as f32
             }
         } else {
             0.0

@@ -163,27 +163,107 @@ impl Descriptor for AromaticAtomFraction {
 
 /// Hall-Kier alpha: molecular flexibility/shape modifier.
 ///
-/// α = Σ (αᵢ) where αᵢ = (rᵢᶜ - rᶜ_C) / rᶜ_C
-/// rᵢᶜ = covalent radius of atom i, rᶜ_C = covalent radius of carbon (0.77 Å).
+/// Uses hybridization-dependent lookup table for C/N/O/S/P/F/Cl/Br/I/H.
+/// For other elements: α = Rb0(element)/Rb0(C) - 1.
 pub struct HallKierAlpha;
 
-fn covalent_radius(atomic_number: u8) -> f64 {
-    match atomic_number {
-        1 => 0.32, 5 => 0.82, 6 => 0.77, 7 => 0.75, 8 => 0.73,
-        9 => 0.71, 14 => 1.11, 15 => 1.06, 16 => 1.02, 17 => 0.99,
-        35 => 1.14, 53 => 1.33, _ => 0.77,
+fn compute_hall_kier_alpha(mol: &Molecule) -> f32 {
+    use crate::algo::electronic::effective_hybridization_pub;
+    use crate::types::Hybridization;
+
+    let mut alpha_sum = 0.0f64;
+    let rb0_c = 0.77f64;
+
+    // Lookup table: [SP, SP2, SP3] alpha values per element.
+    // None means use the last non-None value.
+    for (i, atom) in mol.atoms.iter().enumerate() {
+        if atom.atomic_number == 0 { continue; }
+        if atom.atomic_number == 1 { continue; } // H contributes 0
+
+        let hyb = effective_hybridization_pub(mol, i);
+        // hyb index: SP=0, SP2=1, SP3=2
+        let hyb_idx = match hyb {
+            Hybridization::SP => 0usize,
+            Hybridization::SP2 => 1,
+            _ => 2, // SP3 and others
+        };
+
+        let alpha = match atom.atomic_number {
+            6 => {  // C: [-0.22, -0.13, 0.0]
+                [-0.22, -0.13, 0.0][hyb_idx]
+            }
+            7 => {  // N: [-0.29, -0.20, -0.04]
+                [-0.29, -0.20, -0.04][hyb_idx]
+            }
+            8 => {  // O: [None, -0.20, -0.04] → SP uses -0.04
+                match hyb_idx {
+                    1 => -0.20,
+                    _ => -0.04,
+                }
+            }
+            16 => {  // S: [None, 0.22, 0.35]
+                match hyb_idx {
+                    1 => 0.22,
+                    _ => 0.35,
+                }
+            }
+            15 => {  // P: [None, 0.30, 0.43]
+                match hyb_idx {
+                    1 => 0.30,
+                    _ => 0.43,
+                }
+            }
+            9 => -0.07,     // F: always -0.07
+            17 => 0.29,     // Cl: always 0.29
+            35 => 0.48,     // Br: always 0.48
+            53 => 0.73,     // I: always 0.73
+            _ => {
+                // Fallback: Rb0(element)/Rb0(C) - 1
+                let ra = crate::desc::vsa::rb0_radius(atom.atomic_number);
+                ra / rb0_c - 1.0
+            }
+        };
+        alpha_sum += alpha;
     }
+    alpha_sum as f32
 }
 
-fn compute_hall_kier_alpha(mol: &Molecule) -> f32 {
-    let rc_c = 0.77f64;
-    let mut alpha = 0.0f64;
-    for atom in &mol.atoms {
-        if atom.atomic_number <= 1 { continue; }
-        let rc = covalent_radius(atom.atomic_number);
-        alpha += (rc - rc_c) / rc_c;
+/// Public f64 accessor for Kappa index computation.
+pub fn compute_hall_kier_alpha_f64(mol: &Molecule) -> f64 {
+    use crate::algo::electronic::effective_hybridization_pub;
+    use crate::types::Hybridization;
+
+    let mut alpha_sum = 0.0f64;
+    let rb0_c = 0.77f64;
+
+    for (i, atom) in mol.atoms.iter().enumerate() {
+        if atom.atomic_number == 0 || atom.atomic_number == 1 { continue; }
+
+        let hyb = effective_hybridization_pub(mol, i);
+        let hyb_idx = match hyb {
+            Hybridization::SP => 0usize,
+            Hybridization::SP2 => 1,
+            _ => 2,
+        };
+
+        let alpha = match atom.atomic_number {
+            6 => [-0.22, -0.13, 0.0][hyb_idx],
+            7 => [-0.29, -0.20, -0.04][hyb_idx],
+            8 => match hyb_idx { 1 => -0.20, _ => -0.04 },
+            16 => match hyb_idx { 1 => 0.22, _ => 0.35 },
+            15 => match hyb_idx { 1 => 0.30, _ => 0.43 },
+            9 => -0.07,
+            17 => 0.29,
+            35 => 0.48,
+            53 => 0.73,
+            _ => {
+                let ra = crate::desc::vsa::rb0_radius(atom.atomic_number);
+                ra / rb0_c - 1.0
+            }
+        };
+        alpha_sum += alpha;
     }
-    alpha as f32
+    alpha_sum
 }
 
 impl Descriptor for HallKierAlpha {
@@ -200,45 +280,137 @@ impl Descriptor for HallKierAlpha {
 
 /// Bertz complexity index CT.
 ///
-/// CT = Σ 2^bᵢ × log₂(2^bᵢ) + Σ elements × log₂(elements)
+/// Consists of a sum of two terms:
+/// 1. Connection entropy: complexity of the bonding (using symmetry classes)
+/// 2. Atom type entropy: complexity of the heteroatom distribution
 ///
-/// Simplified Bertz: counts bond types, element types, and symmetry.
-/// Higher CT → more complex molecule.
+/// Uses bond-order-weighted distance matrix for symmetry class assignment.
+/// Aromatic bonds are treated as order 1.5.
+///
+/// Reference: S. H. Bertz, J. Am. Chem. Soc., 103, 3599-3601 (1981)
 pub struct BertzCT;
 
 fn compute_bertz_ct(mol: &Molecule) -> f32 {
-    if mol.num_atoms() == 0 { return 0.0; }
-
     let n = mol.num_atoms();
-    let mut degree_counts = [0u32; 10];
-    for i in 0..n {
-        let d = mol.get_degree(i as AtomIdx).min(9);
-        degree_counts[d] += 1;
-    }
-    let conn_complexity = shannon_entropy(&degree_counts) * mol.num_bonds() as f64;
+    if n < 2 { return 0.0; }
 
-    let mut element_counts = [0u32; 120];
-    for atom in &mol.atoms {
-        if atom.atomic_number > 0 {
-            element_counts[atom.atomic_number as usize] += 1;
+    // Step 1: Build neighbor list and bond order lookup
+    let num_bonds = mol.num_bonds();
+    let mut degrees = vec![0usize; n];
+    let mut neighbors: Vec<Vec<usize>> = vec![vec![]; n];
+    // bond_orders[(min,max)] = order
+    let mut bond_orders = std::collections::HashMap::new();
+
+    for bond in &mol.bonds {
+        let a1 = bond.source as usize;
+        let a2 = bond.target as usize;
+        let (lo, hi) = if a1 < a2 { (a1, a2) } else { (a2, a1) };
+        let bo: f64 = if bond.is_aromatic() || bond.bond_type == BondType::Aromatic {
+            1.5
+        } else {
+            match bond.bond_type {
+                BondType::Double => 2.0,
+                BondType::Triple => 3.0,
+                BondType::Dative => 17.0, // Matches RDKit: float(BondType.DATIVE) = 17
+                _ => 1.0,
+            }
+        };
+        bond_orders.insert((lo, hi), bo);
+        if !neighbors[a1].contains(&a2) { neighbors[a1].push(a2); }
+        if !neighbors[a2].contains(&a1) { neighbors[a2].push(a1); }
+        degrees[a1] += 1;
+        degrees[a2] += 1;
+    }
+    for nbrs in &mut neighbors {
+        nbrs.sort();
+    }
+
+    // Step 2: Symmetry classes from bond-order-weighted distance matrix
+    let bo_dist = super::balaban::compute_distance_matrix(mol, true);
+    let mut sym_classes = vec![0usize; n];
+    let mut keys_seen: Vec<Vec<String>> = vec![];
+    for i in 0..n {
+        let mut dv: Vec<f64> = (0..n).map(|j| bo_dist[i * n + j]).collect();
+        dv.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        let key: Vec<String> = dv.iter().map(|x| format!("{:.4}", x)).collect();
+        if let Some(idx) = keys_seen.iter().position(|k| k == &key) {
+            sym_classes[i] = idx + 1;
+        } else {
+            keys_seen.push(key);
+            sym_classes[i] = keys_seen.len();
         }
     }
-    let elem_complexity = shannon_entropy(&element_counts) * n as f64;
 
-    let mut bond_type_counts = [0u32; 6];
-    for bond in &mol.bonds {
-        let idx = match bond.bond_type {
-            BondType::Single => 0,
-            BondType::Double => 1,
-            BondType::Triple => 2,
-            BondType::Aromatic => 3,
-            _ => 4,
-        };
-        bond_type_counts[idx] += 1;
+    // Step 3: Connection counting
+    let mut connection_dict: std::collections::HashMap<Vec<usize>, f64> = std::collections::HashMap::new();
+    let mut atom_type_counts: std::collections::HashMap<u8, u32> = std::collections::HashMap::new();
+
+    for atom_idx in 0..n {
+        let z = mol.atoms[atom_idx].atomic_number;
+        *atom_type_counts.entry(z).or_insert(0) += 1;
+
+        let hinge_class = sym_classes[atom_idx];
+        let nbrs = &neighbors[atom_idx];
+        let num_nbrs = nbrs.len();
+
+        for i in 0..num_nbrs {
+            let ni = nbrs[i];
+            let ni_class = sym_classes[ni];
+            let (lo_i, hi_i) = if atom_idx < ni { (atom_idx, ni) } else { (ni, atom_idx) };
+            let bo_i = *bond_orders.get(&(lo_i, hi_i)).unwrap_or(&1.0);
+
+            // Extra connections from multi-order bonds
+            if bo_i > 1.0 && ni > atom_idx {
+                let num_conn = bo_i * (bo_i - 1.0) / 2.0;
+                let key = vec![ni_class.min(hinge_class), ni_class.max(hinge_class)];
+                *connection_dict.entry(key).or_insert(0.0) += num_conn;
+            }
+
+            // Pairs of neighbors through hinge
+            for j in (i + 1)..num_nbrs {
+                let nj = nbrs[j];
+                let nj_class = sym_classes[nj];
+                let (lo_j, hi_j) = if atom_idx < nj { (atom_idx, nj) } else { (nj, atom_idx) };
+                let bo_j = *bond_orders.get(&(lo_j, hi_j)).unwrap_or(&1.0);
+                let num_conn = bo_i * bo_j;
+                let key = vec![ni_class.min(nj_class), hinge_class, ni_class.max(nj_class)];
+                *connection_dict.entry(key).or_insert(0.0) += num_conn;
+            }
+        }
     }
-    let bond_complexity = shannon_entropy(&bond_type_counts) * mol.num_bonds() as f64;
 
-    (conn_complexity + elem_complexity + bond_complexity) as f32
+    if connection_dict.is_empty() {
+        connection_dict.insert(vec![0], 1.0);
+    }
+
+    // Step 4: Calculate entropies
+    let conn_values: Vec<f64> = connection_dict.values().copied().collect();
+    let tot_conn: f64 = conn_values.iter().sum();
+    let conn_ie = if tot_conn > 0.0 {
+        let ie = info_entropy(&conn_values);
+        tot_conn * (ie + tot_conn.log2())
+    } else {
+        0.0
+    };
+
+    let atom_values: Vec<f64> = atom_type_counts.values().map(|&v| v as f64).collect();
+    let atom_ie = n as f64 * info_entropy(&atom_values);
+
+    (conn_ie + atom_ie) as f32
+}
+
+/// Shannon information entropy: H = -sum(p_i * log2(p_i))
+fn info_entropy(counts: &[f64]) -> f64 {
+    let total: f64 = counts.iter().sum();
+    if total <= 0.0 { return 0.0; }
+    let mut h = 0.0;
+    for &c in counts {
+        if c > 0.0 {
+            let p = c / total;
+            h -= p * p.log2();
+        }
+    }
+    h
 }
 
 impl Descriptor for BertzCT {
@@ -266,45 +438,79 @@ fn shannon_entropy(counts: &[u32]) -> f64 {
 // Ipc - Information Content
 // ---------------------------------------------------------------------------
 
-/// Information content (Bonchev-Trinajstić).
+/// Information content of the characteristic polynomial (Bonchev-Trinajstić).
 ///
-/// Based on the partition of edges by equivalence classes.
-/// Ipc = N × log₂(N) - Σ nᵢ × log₂(nᵢ)
+/// Ipc = sum(|coeffs|) * InfoEntropy(|coeffs|)
+/// where coeffs are the characteristic polynomial coefficients of the adjacency matrix,
+/// computed via the Le Verrier-Faddeev-Frame method.
 ///
-/// Simplified: uses bond-type × endpoint-degree as class key.
+/// Reference: D. Bonchev & N. Trinajstic, J. Chem. Phys. 67, 4517-4533 (1977)
 pub struct Ipc;
 
 fn compute_ipc(mol: &Molecule) -> f32 {
-    let m = mol.num_bonds();
-    if m == 0 { return 0.0; }
+    let n = mol.num_atoms();
+    if n < 2 { return 0.0; }
 
-    let mut class_counts: std::collections::HashMap<(u8, usize, usize), u32> =
-        std::collections::HashMap::new();
-
-    for bond in &mol.bonds {
-        let d1 = mol.get_degree(bond.source);
-        let d2 = mol.get_degree(bond.target);
-        let (lo, hi) = if d1 <= d2 { (d1, d2) } else { (d2, d1) };
-        let bt = match bond.bond_type {
-            BondType::Single => 1,
-            BondType::Double => 2,
-            BondType::Triple => 3,
-            BondType::Aromatic => 4,
-            _ => 0,
-        };
-        *class_counts.entry((bt, lo, hi)).or_insert(0) += 1;
+    // Build adjacency matrix from topological distance matrix
+    let topo_dist = super::balaban::compute_distance_matrix(mol, false);
+    let mut adj = vec![0.0f64; n * n];
+    for i in 0..n {
+        for j in 0..n {
+            if (topo_dist[i * n + j] - 1.0).abs() < 0.01 {
+                adj[i * n + j] = 1.0;
+            }
+        }
     }
 
-    let mf = m as f64;
-    let total_info = mf * mf.log2();
-    let class_info: f64 = class_counts.values()
-        .map(|&c| {
-            let cf = c as f64;
-            cf * cf.log2()
-        })
-        .sum();
+    // Characteristic polynomial via Le Verrier-Faddeev-Frame
+    let mut cpoly = vec![0.0f64; n + 1];
+    cpoly[0] = 1.0;
 
-    (total_info - class_info) as f32
+    // an = current matrix power (A^n in the recurrence)
+    let mut an = adj.clone();
+
+    for k in 1..=n {
+        // res[k] = (1/k) * trace(an)
+        let mut trace = 0.0f64;
+        for i in 0..n {
+            trace += an[i * n + i];
+        }
+        cpoly[k] = trace / k as f64;
+
+        // bn = an - cpoly[k] * I
+        let mut bn = an.clone();
+        for i in 0..n {
+            bn[i * n + i] -= cpoly[k];
+        }
+
+        // an = A * bn (matrix multiplication)
+        if k < n {
+            let mut next = vec![0.0f64; n * n];
+            for i in 0..n {
+                for j in 0..n {
+                    let mut s = 0.0f64;
+                    for l in 0..n {
+                        s += adj[i * n + l] * bn[l * n + j];
+                    }
+                    next[i * n + j] = s;
+                }
+            }
+            an = next;
+        }
+    }
+
+    // Negate coefficients 1..n (as per the algorithm)
+    for i in 1..=n {
+        cpoly[i] = -cpoly[i];
+    }
+
+    // Take absolute values
+    let abs_cpoly: Vec<f64> = cpoly.iter().map(|&x| x.abs()).collect();
+
+    // Ipc = sum(|coeffs|) * InfoEntropy(|coeffs|)
+    let total: f64 = abs_cpoly.iter().sum();
+    let ie = info_entropy(&abs_cpoly);
+    (total * ie) as f32
 }
 
 impl Descriptor for Ipc {
@@ -520,7 +726,8 @@ mod tests {
     #[test]
     fn test_bertz_benzene() {
         let v = calc_float(&BertzCT, "c1ccccc1");
-        assert!(v.abs() < 0.01, "benzene CT = {}", v);
+        // RDKit: 71.961
+        assert!((v - 71.96).abs() < 0.1, "benzene CT = {}", v);
     }
 
     // -- Ipc --
@@ -528,7 +735,8 @@ mod tests {
     #[test]
     fn test_ipc_ethane() {
         let v = calc_float(&Ipc, "CC");
-        assert!(v.abs() < 0.01, "ethane Ipc = {}", v);
+        // RDKit: 2.0
+        assert!((v - 2.0).abs() < 0.01, "ethane Ipc = {}", v);
     }
 
     #[test]

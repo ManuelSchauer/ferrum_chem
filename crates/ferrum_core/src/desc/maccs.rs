@@ -83,29 +83,23 @@ impl Descriptor for MaccsKeys {
 
 /// Calculate special keys that don't use SMARTS patterns or need custom logic.
 fn calculate_special_key(mol: &Molecule, key_number: usize) -> bool {
-    use crate::algo::rings::find_sssr;
-    use crate::types::AtomIdx;
-    
     match key_number {
         // Key 1: ISOTOPE - Not implemented (requires isotope information in Atom struct)
         1 => false,
         
         // Key 125: Aromatic Ring > 1
-        // Check if molecule has more than 1 aromatic ring
         125 => {
-            // Need mutable reference for find_sssr, but we only have immutable
-            // For now, return false (would need refactoring to support this)
-            // TODO: Store SSSR in molecule or make find_sssr work with &Molecule
-            false
+            let mut mol_clone = mol.clone();
+            let rings = crate::algo::rings::find_sssr(&mut mol_clone);
+            let n_arom = rings.iter().filter(|ring| {
+                ring.iter().all(|&idx| mol_clone.atoms[idx as usize].is_aromatic())
+            }).count();
+            n_arom > 1
         },
         
         // Key 166: Fragments > 1
-        // Check if molecule has more than 1 disconnected fragment
         166 => {
-            // Simple check: if there's no path between some atoms, it's fragmented
-            // For a proper implementation, we'd need a connectivity check
-            // For now, assume single fragment (most common case)
-            false
+            crate::algo::components::num_fragments(mol) > 1
         },
         
         _ => false,

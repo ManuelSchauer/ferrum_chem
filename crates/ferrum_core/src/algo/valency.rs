@@ -1,5 +1,5 @@
 use crate::mol::molecule::Molecule;
-use crate::mol::elements::get_valences;
+use crate::mol::elements::{get_valences, get_aromatic_valences};
 use crate::types::BondType;
 use crate::error::{Result, FerrumError};
 
@@ -10,26 +10,17 @@ use crate::error::{Result, FerrumError};
 /// Each molecule can be processed independently in parallel.
 ///
 /// # Algorithm
-/// For each atom:
+/// For non-aromatic atoms:
 /// 1. Calculate bond order sum (connectivity)
 /// 2. Look up possible valences for the element
 /// 3. Find the smallest valence >= connectivity
-/// 4. Implicit H = valence - connectivity - formal_charge - explicit_h
+/// 4. Implicit H = valence - connectivity
 ///
-/// # Valence Rules
-/// - C: 4 (sp3, sp2, sp)
-/// - N: 3, 5 (amine vs nitro)
-/// - O: 2 (alcohol, ether, carbonyl)
-/// - S: 2, 4, 6 (sulfide, sulfoxide, sulfone)
-/// - P: 3, 5 (phosphine vs phosphate)
-/// - Halogens: 1
-///
-/// # Example
-/// ```ignore
-/// let mut mol = parse_smiles("CCO").unwrap();
-/// assign_implicit_hydrogens(&mut mol)?;
-/// // C: 3H, C: 2H, O: 1H
-/// ```
+/// For aromatic atoms (OpenSMILES approach):
+/// 1. Count degree (number of neighbors) + non-aromatic bond order extras
+/// 2. Look up aromatic valences for the element
+/// 3. Find the smallest aromatic valence >= degree
+/// 4. Implicit H = aromatic_valence - degree
 pub fn assign_implicit_hydrogens(mol: &mut Molecule) -> Result<()> {
     for atom_idx in 0..mol.atoms.len() {
         let atom = &mol.atoms[atom_idx];
@@ -41,47 +32,112 @@ pub fn assign_implicit_hydrogens(mol: &mut Molecule) -> Result<()> {
             continue;
         }
 
-        // Get possible valences for this element
-        let valences = get_valences(atom.atomic_number);
-        if valences.is_empty() {
-            // Unknown element or metal - assume no implicit H
-            mol.atoms[atom_idx].num_implicit_h = 0;
-            continue;
-        }
+        if atom.is_aromatic() {
+            // Aromatic atoms: use degree-based approach with aromatic valences
+            let aromatic_valences = get_aromatic_valences(atom.atomic_number);
+            if aromatic_valences.is_empty() {
+                mol.atoms[atom_idx].num_implicit_h = 0;
+                continue;
+            }
 
-        // Calculate bond order sum (connectivity)
-        let connectivity = calculate_connectivity(mol, atom_idx as u16);
+            // Degree = number of neighbors (each bond counts as 1 regardless of order)
+            let degree = mol.get_degree(atom_idx as u16) as i16;
 
-        // Adjust for formal charge
-        // Positive charge reduces valence, negative increases
-        let charge_adjustment = atom.formal_charge as i16;
+            // Adjust for formal charge
+            let charge_adj = atom.formal_charge as i16;
 
-        // Find the smallest valence that can accommodate the connectivity
-        let mut best_valence: Option<i16> = None;
-        for &v in valences {
-            let adjusted = (v as i16) - charge_adjustment;
-            if adjusted >= connectivity as i16 {
-                if best_valence.is_none() || adjusted < best_valence.unwrap() {
-                    best_valence = Some(adjusted);
+            let mut best: Option<i16> = None;
+            for &v in aromatic_valences {
+                let adjusted = (v as i16) - charge_adj;
+                if adjusted >= degree {
+                    if best.is_none() || adjusted < best.unwrap() {
+                        best = Some(adjusted);
+                    }
                 }
             }
-        }
 
-        if let Some(valence) = best_valence {
-            let implicit_h = valence - (connectivity as i16);
-            if implicit_h >= 0 {
-                mol.atoms[atom_idx].num_implicit_h = implicit_h as u8;
+            if let Some(valence) = best {
+                let h = valence - degree;
+                mol.atoms[atom_idx].num_implicit_h = if h > 0 { h as u8 } else { 0 };
             } else {
-                // Valence exceeded - this might be an error or unusual structure
                 mol.atoms[atom_idx].num_implicit_h = 0;
             }
         } else {
-            // No suitable valence found - might be hypervalent or error
-            mol.atoms[atom_idx].num_implicit_h = 0;
+            // Non-aromatic atoms: use bond-order-based approach
+            let valences = get_valences(atom.atomic_number);
+            if valences.is_empty() {
+                mol.atoms[atom_idx].num_implicit_h = 0;
+                continue;
+            }
+
+            let connectivity = calculate_connectivity(mol, atom_idx as u16);
+            let charge_adj = atom.formal_charge as i16;
+
+            let mut best: Option<i16> = None;
+            for &v in valences {
+                let adjusted = (v as i16) - charge_adj;
+                if adjusted >= connectivity as i16 {
+                    if best.is_none() || adjusted < best.unwrap() {
+                        best = Some(adjusted);
+                    }
+                }
+            }
+
+            if let Some(valence) = best {
+                let h = valence - (connectivity as i16);
+                mol.atoms[atom_idx].num_implicit_h = if h > 0 { h as u8 } else { 0 };
+            } else {
+                mol.atoms[atom_idx].num_implicit_h = 0;
+            }
         }
     }
 
     Ok(())
+}
+
+/// Detect and assign dative (coordinate) bonds for transition metal complexes.
+///
+/// RDKit's sanitization converts bonds between donor atoms (N, O, S, P with lone
+/// pairs and no formal charge) and transition metals (no default valence) to dative
+/// bonds. Dative bonds don't contribute to the donor atom's valence, allowing
+/// correct implicit H calculation (e.g., NH3 in Cisplatin keeps 3H).
+///
+/// Must be called AFTER `assign_implicit_hydrogens` so that donor atoms already
+/// have their implicit H computed relative to dative bonds not counting.
+pub fn assign_dative_bonds(mol: &mut Molecule) {
+    use crate::mol::elements::is_transition_metal;
+
+    for bond_idx in 0..mol.bonds.len() {
+        let bond = &mol.bonds[bond_idx];
+        if bond.bond_type != BondType::Single {
+            continue;
+        }
+        let src = bond.source as usize;
+        let tgt = bond.target as usize;
+        let z_src = mol.atoms[src].atomic_number;
+        let z_tgt = mol.atoms[tgt].atomic_number;
+
+        // Check if one end is a transition metal and the other is a donor atom
+        let is_dative = (is_transition_metal(z_src) && is_donor_atom(z_tgt))
+            || (is_transition_metal(z_tgt) && is_donor_atom(z_src));
+
+        if is_dative {
+            mol.bonds[bond_idx].bond_type = BondType::Dative;
+            // Ensure direction: source = donor, target = metal (acceptor)
+            // Dative contributes 0 to source valence, 1 to target valence
+            if is_transition_metal(z_src) && is_donor_atom(z_tgt) {
+                // Metal is source, donor is target → swap
+                let old_src = mol.bonds[bond_idx].source;
+                mol.bonds[bond_idx].source = mol.bonds[bond_idx].target;
+                mol.bonds[bond_idx].target = old_src;
+            }
+        }
+    }
+}
+
+/// Donor atoms: N, O, S, P — can donate lone pairs to metals.
+fn is_donor_atom(z: u8) -> bool {
+    matches!(z, 7 | 8 | 15 | 16)
 }
 
 /// Calculate the sum of bond orders for an atom.
@@ -142,10 +198,17 @@ fn calculate_connectivity(mol: &Molecule, atom_idx: u16) -> u8 {
         connectivity += bond_order;
     }
 
-    // For aromatic systems: each aromatic bond contributes 1.5
-    // So 2 aromatic bonds = 3 connectivity
-    // We use: connectivity = aromatic_bonds + aromatic_bonds/2
-    connectivity += aromatic_bonds + (aromatic_bonds / 2);
+    // For aromatic systems, compute the aromatic bond contribution.
+    // Most atoms: each aromatic bond contributes ~1.5 (Kekulé alternation).
+    // Chalcogens (O, S, Se, Te): each aromatic bond contributes 1, because
+    // they donate a lone pair to the π system, and both bonds are effectively single.
+    if aromatic_bonds > 0 && atom.is_aromatic()
+        && matches!(atom.atomic_number, 8 | 16 | 34 | 52)
+    {
+        connectivity += aromatic_bonds;
+    } else {
+        connectivity += aromatic_bonds + (aromatic_bonds / 2);
+    }
 
     connectivity
 }

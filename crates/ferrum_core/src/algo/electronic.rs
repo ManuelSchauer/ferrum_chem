@@ -50,8 +50,21 @@ const CL: ENParams = ENParams { a: 11.00, b: 9.69, c: 1.35, d: 22.04 };
 const BR: ENParams = ENParams { a: 10.08, b: 8.47, c: 1.16, d: 19.71 };
 const I_PARAMS: ENParams = ENParams { a: 9.90, b: 7.96, c: 0.96, d: 18.82 };
 const S_SP3: ENParams = ENParams { a: 10.14, b: 9.13, c: 1.38, d: 20.65 };
+const S_SO: ENParams = ENParams { a: 10.14, b: 9.13, c: 1.38, d: 20.65 };
+const S_SO2: ENParams = ENParams { a: 12.00, b: 10.81, c: 1.20, d: 24.01 };
 const S_SP2: ENParams = ENParams { a: 10.88, b: 9.49, c: 1.33, d: 21.70 };
 const P_SP3: ENParams = ENParams { a: 8.90, b: 8.24, c: 0.96, d: 18.10 };
+const P_SP2: ENParams = ENParams { a: 9.665, b: 8.530, c: 0.735, d: 18.93 };
+// Additional params from RDKit's additionalParamData (PyBabel-derived)
+const SI_SP3: ENParams = ENParams { a: 7.30, b: 6.567, c: 0.657, d: 14.524 };
+const SI_SP2: ENParams = ENParams { a: 7.905, b: 6.748, c: 0.443, d: 15.096 };
+const MG_SP3: ENParams = ENParams { a: 3.300, b: 5.587, c: 2.447, d: 11.334 };
+const MG_SP2: ENParams = ENParams { a: 3.565, b: 5.572, c: 2.197, d: 11.334 };
+const MG_SP: ENParams = ENParams { a: 4.040, b: 5.472, c: 1.823, d: 11.335 };
+const AL_SP3: ENParams = ENParams { a: 5.375, b: 4.953, c: 0.867, d: 11.195 };
+const AL_SP2: ENParams = ENParams { a: 5.795, b: 5.020, c: 0.695, d: 11.510 };
+const B_SP3: ENParams = ENParams { a: 5.980, b: 6.820, c: 1.605, d: 14.405 };
+const B_SP2: ENParams = ENParams { a: 6.420, b: 6.807, c: 1.322, d: 14.549 };
 
 const NUM_ITERATIONS: usize = 12;
 
@@ -115,6 +128,11 @@ fn effective_hybridization(mol: &Molecule, idx: usize) -> Hybridization {
         return Hybridization::SP;
     }
     if has_double || has_aromatic_bond {
+        // Hypervalent atoms (S, P) with high coordination are SP3, not SP2.
+        // e.g., sulfone S(=O)(=O) has 4 bonds → SP3 despite double bonds.
+        if matches!(atom.atomic_number, 15 | 16) && heavy_degree >= 3 {
+            return Hybridization::SP3;
+        }
         return Hybridization::SP2;
     }
 
@@ -146,22 +164,37 @@ fn effective_hybridization(mol: &Molecule, idx: usize) -> Hybridization {
 fn outer_shell_electrons(atomic_num: u8) -> i32 {
     match atomic_num {
         1 => 1,
+        5 => 3,  // B
         6 => 4,
         7 => 5,
         8 => 6,
         9 | 17 | 35 | 53 => 7,
+        12 => 2, // Mg
+        13 => 3, // Al
+        14 => 4, // Si
         15 => 5,
         16 => 6,
         _ => 4, // fallback
     }
 }
 
+/// Public accessor for effective hybridization, used by HallKierAlpha.
+pub fn effective_hybridization_pub(mol: &Molecule, idx: usize) -> Hybridization {
+    effective_hybridization(mol, idx)
+}
+
 /// Assign Gasteiger electronegativity parameters based on element and hybridization.
+/// Follows RDKit's GasteigerParams.cpp lookup: element + hybridization state,
+/// with special handling for sulfur (so/so2 modes based on bonded oxygen count).
 fn get_params(mol: &Molecule, idx: usize) -> Option<ENParams> {
     let atom = &mol.atoms[idx];
     let hyb = effective_hybridization(mol, idx);
     match atom.atomic_number {
         1 => Some(H),
+        5 => match hyb {
+            Hybridization::SP2 => Some(B_SP2),
+            _ => Some(B_SP3),
+        },
         6 => match hyb {
             Hybridization::SP => Some(C_SP),
             Hybridization::SP2 => Some(C_SP2),
@@ -177,15 +210,105 @@ fn get_params(mol: &Molecule, idx: usize) -> Option<ENParams> {
             _ => Some(O_SP3),
         },
         9 => Some(F_PARAMS),
-        15 => Some(P_SP3),
-        16 => match hyb {
-            Hybridization::SP2 => Some(S_SP2),
-            _ => Some(S_SP3),
+        12 => match hyb {
+            Hybridization::SP => Some(MG_SP),
+            Hybridization::SP2 => Some(MG_SP2),
+            _ => Some(MG_SP3),
+        },
+        13 => match hyb {
+            Hybridization::SP2 => Some(AL_SP2),
+            _ => Some(AL_SP3),
+        },
+        14 => match hyb {
+            Hybridization::SP2 => Some(SI_SP2),
+            _ => Some(SI_SP3),
+        },
+        15 => match hyb {
+            Hybridization::SP2 => Some(P_SP2),
+            _ => Some(P_SP3),
+        },
+        16 => {
+            // RDKit special handling: S with unassigned hybridization checks
+            // bonded oxygen count for sulfoxide (so) / sulfone (so2) modes.
+            // When hybridization IS assigned (SP/SP2/SP3), use that directly.
+            match hyb {
+                Hybridization::SP2 => Some(S_SP2),
+                Hybridization::SP3 => Some(S_SP3),
+                Hybridization::SP => Some(S_SP3), // fallback
+                _ => {
+                    // Count bonded oxygens for so/so2 detection
+                    let n_o = mol.adjacency[idx].iter().filter(|&&bi| {
+                        let b = &mol.bonds[bi as usize];
+                        let other = if b.source as usize == idx { b.target as usize } else { b.source as usize };
+                        mol.atoms[other].atomic_number == 8
+                    }).count();
+                    match n_o {
+                        2.. => Some(S_SO2),
+                        1 => Some(S_SO),
+                        _ => Some(S_SP3),
+                    }
+                }
+            }
         },
         17 => Some(CL),
         35 => Some(BR),
         53 => Some(I_PARAMS),
-        _ => Some(C_SP3), // fallback
+        _ => None,
+    }
+}
+
+/// Distribute formal charges among same-element atoms in conjugated systems.
+/// Matches RDKit's splitChargeConjugated: before Gasteiger iteration, if an atom
+/// has a non-zero formal charge, find all atoms of the same element reachable
+/// through conjugated bonds (2-bond hops) and split the total formal charge equally.
+fn split_charge_conjugated(mol: &Molecule, charges: &mut [f64]) {
+    let n = mol.num_atoms();
+    // Precompute which atoms have pi bonds (double, triple, or aromatic).
+    let has_pi: Vec<bool> = (0..n).map(|idx| {
+        mol.adjacency[idx].iter().any(|&bi| {
+            let ob = &mol.bonds[bi as usize];
+            matches!(ob.bond_type, crate::types::BondType::Double | crate::types::BondType::Triple | crate::types::BondType::Aromatic)
+                || ob.is_aromatic()
+        })
+    }).collect();
+
+    // A bond is conjugated if at least one endpoint has a pi bond.
+    let bond_is_conjugated: Vec<bool> = mol.bonds.iter().map(|b| {
+        has_pi[b.source as usize] || has_pi[b.target as usize]
+    }).collect();
+
+    for i in 0..n {
+        let fc = mol.atoms[i].formal_charge;
+        if fc == 0 || charges[i].abs() > 1e-12 {
+            continue; // Only process atoms with formal charge and no charge assigned yet
+        }
+        let anum = mol.atoms[i].atomic_number;
+        let mut marker = vec![i];
+        let mut total_formal = fc as f64;
+
+        // Walk 2 conjugated bonds: i → neighbor aax → yax
+        for &bi in &mol.adjacency[i] {
+            if !bond_is_conjugated[bi as usize] { continue; }
+            let bond = &mol.bonds[bi as usize];
+            let aax = if bond.source as usize == i { bond.target as usize } else { bond.source as usize };
+
+            for &bi2 in &mol.adjacency[aax] {
+                if bi2 == bi { continue; } // Skip the bond we came from
+                if !bond_is_conjugated[bi2 as usize] { continue; }
+                let bond2 = &mol.bonds[bi2 as usize];
+                let yax = if bond2.source as usize == aax { bond2.target as usize } else { bond2.source as usize };
+                if yax == i { continue; } // Skip self
+                if mol.atoms[yax].atomic_number == anum && !marker.contains(&yax) {
+                    total_formal += mol.atoms[yax].formal_charge as f64;
+                    marker.push(yax);
+                }
+            }
+        }
+
+        let split = total_formal / marker.len() as f64;
+        for &idx in &marker {
+            charges[idx] = split;
+        }
     }
 }
 
@@ -205,15 +328,44 @@ pub fn compute_gasteiger_charges(mol: &Molecule) -> Vec<f64> {
     // Resolve parameters for each atom; None means skip.
     let params: Vec<Option<ENParams>> = (0..n).map(|i| get_params(mol, i)).collect();
 
+    // RDKit behavior: if an atom with no Gasteiger parameters has bonds,
+    // NaN propagates to all atoms in the same connected fragment.
+    // Isolated atoms without params keep their formal charge.
+    let mut nan_atoms = vec![false; n];
+    for i in 0..n {
+        if params[i].is_none() {
+            // Check if this atom has any bonds
+            let has_bonds = !mol.adjacency[i].is_empty();
+            if has_bonds {
+                // Flood-fill NaN to all atoms in this connected component
+                let mut stack = vec![i];
+                while let Some(idx) = stack.pop() {
+                    if nan_atoms[idx] { continue; }
+                    nan_atoms[idx] = true;
+                    for &bond_idx in &mol.adjacency[idx] {
+                        let bond = &mol.bonds[bond_idx as usize];
+                        let other = if bond.source as usize == idx { bond.target as usize } else { bond.source as usize };
+                        if !nan_atoms[other] { stack.push(other); }
+                    }
+                }
+            }
+        }
+    }
+
     // Number of implicit H per heavy atom.
     let n_h: Vec<u8> = mol.atoms.iter().map(|a| a.total_h()).collect();
 
-    // Initialize charges from formal charges.
-    let mut q: Vec<f64> = mol.atoms.iter().map(|a| a.formal_charge as f64).collect();
+    // Initialize charges to 0, then distribute formal charges via conjugation splitting.
+    let mut q: Vec<f64> = vec![0.0; n];
+    split_charge_conjugated(mol, &mut q);
+    // Atoms not covered by split_charge_conjugated keep formal charge directly.
+    for i in 0..n {
+        if q[i].abs() < 1e-12 && mol.atoms[i].formal_charge != 0 {
+            q[i] = mol.atoms[i].formal_charge as f64;
+        }
+    }
 
-    // Per-heavy-atom implicit H charge accumulator. Stores the TOTAL charge
-    // across all implicit H on that atom (matching RDKit convention: gqH
-    // accumulates nH * dif, and hChi = f(gqH) uses this total).
+    // Per-heavy-atom implicit H charge accumulator.
     let mut q_h: Vec<f64> = vec![0.0; n];
 
     let mut chi = vec![0.0_f64; n];
@@ -223,17 +375,17 @@ pub fn compute_gasteiger_charges(mol: &Molecule) -> Vec<f64> {
 
         // Compute electronegativity for each atom.
         for i in 0..n {
+            if nan_atoms[i] { continue; }
             if let Some(p) = &params[i] {
                 chi[i] = p.a + p.b * q[i] + p.c * q[i] * q[i];
             }
         }
 
         // Charge transfer along each explicit bond.
-        // RDKit convention: divide by d (= ionX = a+b+c) of the LESS
-        // electronegative atom in the pair.
         for bond in &mol.bonds {
             let i = bond.source as usize;
             let j = bond.target as usize;
+            if nan_atoms[i] || nan_atoms[j] { continue; }
 
             let (pi, pj) = match (&params[i], &params[j]) {
                 (Some(a), Some(b)) => (a, b),
@@ -252,6 +404,7 @@ pub fn compute_gasteiger_charges(mol: &Molecule) -> Vec<f64> {
 
         // Charge transfer between each heavy atom and its implicit H atoms.
         for i in 0..n {
+            if nan_atoms[i] { continue; }
             let nh = n_h[i] as usize;
             if nh == 0 {
                 continue;
@@ -260,20 +413,23 @@ pub fn compute_gasteiger_charges(mol: &Molecule) -> Vec<f64> {
                 Some(p) => p,
                 None => continue,
             };
-            // Per-H charge for chi computation (RDKit: qHs = hChrg / niHs).
             let per_h = q_h[i] / nh as f64;
             let chi_h = H.a + H.b * per_h + H.c * per_h * per_h;
             let mut dif = chi[i] - chi_h;
-            // Divide by d of the LESS electronegative atom.
-            // RDKit uses IONXH (20.02) for hydrogen's ionX, not H.d (12.85).
             let denom = if dif > 0.0 { IONXH } else { pi.d };
             if denom.abs() < 1e-15 {
                 continue;
             }
             dif = dif / denom * damping;
-            // Each implicit H transfers the same dif; accumulate total in q_h.
             q[i] -= dif * nh as f64;
             q_h[i] += dif * nh as f64;
+        }
+    }
+
+    // Set NaN for atoms in flagged fragments
+    for i in 0..n {
+        if nan_atoms[i] {
+            q[i] = f64::NAN;
         }
     }
 
@@ -557,5 +713,30 @@ mod tests {
         let min = q.iter().copied().fold(f64::INFINITY, f64::min);
         assert_close(max, 0.0402, TOL, "ethanol MaxPartialCharge");
         assert_close(min, -0.3967, TOL, "ethanol MinPartialCharge");
+    }
+
+    #[test]
+    fn test_cyclopentadienyl_charges() {
+        let mol = parse_smiles("[CH-]1C=CC=C1").unwrap();
+        let q = compute_gasteiger_charges(&mol);
+        println!("Cyclopentadienyl charges: {:?}", q);
+        for (i, &c) in q.iter().enumerate() {
+            assert!(c < 0.0, "Atom {} should be negative: {}", i, c);
+        }
+    }
+
+    #[test]
+    fn test_nitrobenzene_charges() {
+        let mol = parse_smiles("c1ccc(cc1)[N+](=O)[O-]").unwrap();
+        let q = compute_gasteiger_charges(&mol);
+        println!("Nitrobenzene charges: {:?}", q);
+    }
+
+    #[test]
+    fn test_grignard_charges() {
+        let mol = parse_smiles("[Mg](Br)CC").unwrap();
+        let q = compute_gasteiger_charges(&mol);
+        println!("Grignard charges: {:?}", q);
+        assert!(q[0] > 0.3, "Mg should be positive: {}", q[0]);
     }
 }

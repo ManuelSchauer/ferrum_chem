@@ -183,13 +183,15 @@ See [`THREAD_SAFETY.md`](THREAD_SAFETY.md) for guidelines.
 
 **Status**: 60 descriptors, 17,696 dimensions, 568 tests ✅
 
-## 🧬 Phase 12: Electronic Descriptors ✅ COMPLETE
+## 🧬 Phase 12: Electronic Descriptors & RDKit Validation ✅ COMPLETE
 
 ### Gasteiger Partial Charges ✅
-- [x] Gasteiger-Marsili iterative algorithm (12 iterations, geometric damping)
-- [x] 15 atom types: H, C×3 (sp/sp2/sp3), N×3 (sp/sp2/sp3), O×2, F, Cl, Br, I, S×2, P
-- [x] Hybridization from bond types + RDKit conjugation logic (IONXH = 20.02)
-- [x] RDKit cross-validated: 17 molecules within ±0.05 per atom, 28 tests
+- [x] Gasteiger-Marsili iterative algorithm (12 iterations, geometric damping 0.5^(k+1))
+- [x] 26 atom types: H, C×3, N×3, O×2, F, Cl, Br, I, S×4 (sp2/sp3/so/so2), P×2, Si×2, Mg×3, Al×2, B×2
+- [x] Conjugation-aware charge splitting (`split_charge_conjugated`) — NO₂, carboxylate, cyclopentadienyl
+- [x] Dative bond detection for transition metal complexes (Cisplatin, etc.)
+- [x] Per-fragment NaN propagation for atoms without parameters
+- [x] Extended element tables: covalent radii & outer electrons Z=1–83, `is_transition_metal()`
 
 ### Charge-Derived Descriptors ✅
 - [x] MaxPartialCharge, MinPartialCharge, MaxAbsPartialCharge, MinAbsPartialCharge
@@ -197,7 +199,36 @@ See [`THREAD_SAFETY.md`](THREAD_SAFETY.md) for guidelines.
 - [x] APol (sum atomic polarizabilities), BPol (bond polarizability differences)
 - [x] PEOE_VSA (14 charge-weighted surface area bins)
 
-**Status**: 67 descriptors, 622 unit + 14 doc tests ✅
+### RDKit Validation ✅
+- [x] **100% accuracy: 1944/1944** descriptor comparisons across 27 torture molecules
+- [x] Validated: scalar (594/594), VSA (972/972), Chi/Kappa (270/270), ring (108/108)
+- [x] Torture set: Cisplatin, nitrobenzene, Grignard, cyclopentadienyl, sodium acetate, pyrene, etc.
+- [x] 626 unit + 14 doc + 4 integration + 55 SMARTS edge case tests
+
+**Status**: 72 descriptors, 100% RDKit match ✅
+
+## 🧬 Phase 12.5: Algorithm Completions ✅ COMPLETE
+
+### Connected Components (algo/components.rs) ✅
+- [x] `connected_components()` — BFS graph traversal, returns component labels
+- [x] `num_fragments()` — count of disconnected fragments
+- [x] `keep_largest_fragment()` — salt/solvent stripping with index remapping
+- [x] 6 tests (single/multi fragment, keep largest, salt strip)
+
+### Morgan Canonicalization (algo/canon.rs) ✅
+- [x] `rank_atoms()` — Morgan iterative algorithm (polynomial hash refinement)
+- [x] `reorder_molecule()` — permutes atoms/bonds/adjacency by rank
+- [x] 6 tests (methane, ethane symmetry, propane, ethanol, reorder, benzene)
+
+### MACCS Keys 125 & 166 ✅
+- [x] Key 125 (Aromatic Ring > 1): clones mol, calls find_sssr, counts aromatic rings
+- [x] Key 166 (Fragments > 1): calls num_fragments() > 1
+- [x] All TODO comments removed from maccs.rs
+
+### algo/mod.rs ✅
+- [x] Made `canon` and `components` modules public
+
+**Status**: All `todo!()` calls removed except `sdf.rs` (deferred to Phase 15). 641 tests passing ✅
 
 ## 🤖 Phase 13: ML Pipeline — All From Scratch 🔵
 
@@ -243,8 +274,9 @@ See [`THREAD_SAFETY.md`](THREAD_SAFETY.md) for guidelines.
 
 ## 🔧 Phase 15: Infrastructure & Ecosystem 🔵
 
-- [ ] SDF/MOL V2000/V3000 parser
-- [ ] Morgan canonicalization (canonical SMILES)
+- [ ] SDF/MOL V2000/V3000 parser (sdf.rs stub exists with `todo!()`)
+- [x] Morgan canonicalization (rank_atoms + reorder_molecule implemented in algo/canon.rs)
+- [ ] Canonical SMILES writer (uses canon.rs ranking)
 - [ ] PyO3 Python bindings
 - [ ] crates.io publish
 - [ ] Full API documentation + benchmarks vs RDKit
@@ -275,11 +307,12 @@ See [`THREAD_SAFETY.md`](THREAD_SAFETY.md) for guidelines.
 ### Architecture
 - [x] Typed descriptor API (single Descriptor trait, DescriptorValue enum)
 - [x] Memory-efficient fingerprints (BitVec)
+- [x] Morgan canonicalization (rank_atoms + reorder_molecule in algo/canon.rs)
+- [x] Connected components / fragment handling (algo/components.rs)
 - [ ] Consider adding 3D coordinates to Atom
 - [ ] Add conformer support to Molecule
-- [ ] SDF/MOL V2000/V3000 parser
+- [ ] SDF/MOL V2000/V3000 parser (sdf.rs stub exists)
 - [ ] InChI generation
-- [ ] Morgan canonicalization
 
 ### ML Integration (Phase 13)
 - [ ] QsarDataset + Scalers + Feature Selection
@@ -298,8 +331,9 @@ See [`THREAD_SAFETY.md`](THREAD_SAFETY.md) for guidelines.
 - ✅ SMARTS matching: ~50k mol/sec (VF2 algorithm)
 - ✅ LogP: ~500k-5M mol/sec (pre-parsed patterns)
 - ✅ TPSA: RDKit-exact (50/50 molecules ±0.01 Ų)
-- ✅ Total tests: 622 unit + 14 doc tests passing
-- ✅ Total descriptors: 67 implementations, 17,710+ dimensions
+- ✅ Total tests: 641 unit + 14 doc + 4 integration + 55 SMARTS edge tests
+- ✅ Total descriptors: 72 implementations, 17,710+ dimensions
+- ✅ RDKit accuracy: 100% (1944/1944 across 27 torture molecules)
 - ✅ Fingerprints: MACCS (166), PubChem (881), ECFP (6144), FCFP (6144), AtomPair (2048), Torsion (2048)
 
 ## 🎯 Milestones
@@ -314,8 +348,9 @@ See [`THREAD_SAFETY.md`](THREAD_SAFETY.md) for guidelines.
 - [x] Typed descriptor refactoring (single API, 32x memory reduction)
 
 ### v0.8.0 - Phase 12 ✅ Complete
-- [x] Gasteiger partial charges (RDKit-validated)
+- [x] Gasteiger partial charges (26 atom types, conjugation splitting, dative bonds)
 - [x] Charge-derived descriptors (polarizability, PEOE_VSA)
+- [x] 100% RDKit validation (1944/1944 across 27 torture molecules)
 
 ### v0.9.0 - Phase 13: ML Pipeline
 - [ ] QsarDataset + Scalers + Feature Selection
@@ -334,10 +369,10 @@ See [`THREAD_SAFETY.md`](THREAD_SAFETY.md) for guidelines.
 
 ---
 
-**Last Updated**: February 11, 2026  
-**Status**: Phase 12 ✅ Complete — Gasteiger Charges + Electronic Descriptors  
-**Tests**: 622 unit + 14 doc tests passing ✅  
-**Descriptors**: 67 implementations, 17,710+ dimensions  
+**Last Updated**: February 12, 2026  
+**Status**: Phase 12.5 ✅ Complete — All todo!() removed (except sdf.rs), 641 tests passing  
+**Tests**: 641 unit + 14 doc + 4 integration + 55 SMARTS edge tests ✅  
+**Descriptors**: 72 implementations, 17,710+ dimensions  
 **API**: Single `Descriptor` trait with `DescriptorValue` enum returns  
 **Next Priority**: Phase 13 — ML Pipeline → Phase 14 — TUI
 

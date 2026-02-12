@@ -163,7 +163,45 @@ pub const fn get_valences(atomic_number: u8) -> &'static [u8] {
     }
 }
 
+/// Aromatic valences per the OpenSMILES specification.
+///
+/// For aromatic atoms, implicit H is calculated using degree (number of neighbors)
+/// and this aromatic valence table, NOT standard bond-order-based valences.
+///
+/// The aromatic valence represents the maximum number of σ-bonds (including H)
+/// the atom can form while participating in the aromatic π system.
+///
+/// Examples:
+/// - Aromatic C (benzene): aromatic valence 3 → degree 2 + 1 H
+/// - Aromatic N (pyridine): aromatic valence 2 → degree 2 + 0 H
+/// - Aromatic N (pyrrole): aromatic valence 3 → degree 2 + 1 H (but [nH] is explicit)
+/// - Aromatic S (thiophene): aromatic valence 2 → degree 2 + 0 H
+#[inline]
+pub const fn get_aromatic_valences(atomic_number: u8) -> &'static [u8] {
+    match atomic_number {
+        5 => &[3],           // B
+        6 => &[3],           // C: 1 π electron, 3 σ bonds
+        7 => &[2, 3],        // N: pyridine-type (2) or pyrrole-type (3)
+        8 => &[2],           // O: lone pair contributes 2 π electrons
+        15 => &[2, 3, 5],    // P
+        16 => &[2],          // S: lone pair contributes 2 π electrons
+        34 => &[2],          // Se
+        52 => &[2],          // Te
+        _ => &[],            // Non-aromatic or unknown
+    }
+}
+
 /// Number of valence (outer shell) electrons for an element.
+/// Returns `true` if this element is a transition metal with no default valence.
+/// These elements can form dative/coordinate bonds with donor atoms (N, O, S, P).
+#[inline]
+pub const fn is_transition_metal(atomic_number: u8) -> bool {
+    matches!(
+        atomic_number,
+        21..=30 | 39..=48 | 57..=80 | 89..=99
+    )
+}
+
 /// Used for calculating total valence electron count in molecules.
 ///
 /// # Examples
@@ -214,6 +252,21 @@ pub const fn outer_electrons(atomic_number: u8) -> u8 {
         52 => 6,  // Te
         53 => 7,  // I
         54 => 8,  // Xe
+        // 3rd-row transition metals (Hf-Hg): 5d + 6s electrons
+        55 => 1,  // Cs
+        56 => 2,  // Ba
+        72 => 4,  // Hf
+        73 => 5,  // Ta
+        74 => 6,  // W
+        75 => 7,  // Re
+        76 => 8,  // Os
+        77 => 9,  // Ir
+        78 => 10, // Pt (5d9 6s1 → 10 outer)
+        79 => 11, // Au (5d10 6s1 → 11 outer)
+        80 => 2,  // Hg
+        81 => 3,  // Tl
+        82 => 4,  // Pb
+        83 => 5,  // Bi
         // For other elements, use simplified model
         _ => if atomic_number % 10 < 8 { atomic_number % 10 } else { 8 },
     }

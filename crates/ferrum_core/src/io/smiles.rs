@@ -45,6 +45,11 @@ pub fn parse_smiles(smiles: &str) -> Result<Molecule> {
     // This ensures molecules are always complete and ready to use
     crate::algo::valency::assign_implicit_hydrogens(&mut mol)?;
 
+    // ✅ Detect dative (coordinate) bonds for transition metal complexes
+    // Must run after implicit H so that donor atoms (N, O, S, P) bonded to metals
+    // have their bonds correctly typed as Dative (which don't count toward valence)
+    crate::algo::valency::assign_dative_bonds(&mut mol);
+
     // ✅ Automatically perceive aromaticity
     // Required for correct SMARTS matching and descriptors (TPSA, LogP, etc.)
     crate::algo::aromaticity::perceive_aromaticity(&mut mol);
@@ -208,9 +213,11 @@ impl<'a> SmilesParser<'a> {
         }
 
         // Parse element symbol (1 or 2 chars)
+        // In SMILES organic subset, only Br and Cl are two-letter elements.
+        // All other multi-letter elements require bracket notation [Cn], [Fe], etc.
         let symbol = if self.pos + 1 < self.input.len() {
             let two_char = &self.input[start..start + 2];
-            if symbol_to_atomic_number(two_char).is_some() {
+            if matches!(two_char, "Br" | "Cl") {
                 self.pos += 2;
                 two_char
             } else {

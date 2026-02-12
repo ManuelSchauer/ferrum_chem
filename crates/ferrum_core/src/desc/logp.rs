@@ -10,6 +10,7 @@
 use crate::mol::molecule::Molecule;
 use crate::io::smarts::{parse_smarts, QueryGraph};
 use crate::algo::iso::find_all_matches;
+use crate::types::BondType;
 use once_cell::sync::Lazy;
 use super::typed::Descriptor;
 
@@ -43,7 +44,8 @@ struct ParsedPattern {
 /// Returns two vectors: `(logp_contributions, mr_contributions)`,
 /// one entry per heavy atom (indexed by atom index in the molecule).
 /// Unassigned atoms get 0.0. Implicit H contributions are added
-/// to the parent atom.
+/// Returns pure heavy-atom contributions WITHOUT H contributions.
+/// Used by VSA bin descriptors for atom classification.
 pub fn crippen_atom_contributions(mol: &Molecule) -> (Vec<f64>, Vec<f64>) {
     let n = mol.atoms.len();
     let mut logp = vec![0.0f64; n];
@@ -64,28 +66,129 @@ pub fn crippen_atom_contributions(mol: &Molecule) -> (Vec<f64>, Vec<f64>) {
         }
     }
 
-    // Add implicit H contributions to parent atom
-    for i in 0..n {
-        if assigned[i] {
-            let ih = mol.atoms[i].num_implicit_h as f64;
-            if ih > 0.0 {
-                logp[i] += 0.123 * ih;
-                mr[i] += 1.057 * ih;
+    (logp, mr)
+}
+
+/// Classify implicit H type based on parent atom context (matching RDKit C++ Crippen).
+///
+/// Returns (logp, mr) contribution per H atom. Classification follows the Crippen
+/// H pattern priority: H1 > H2 > H3 > H4 > HS.
+fn classify_implicit_h(mol: &Molecule, atom_idx: usize) -> (f64, f64) {
+    let atom = &mol.atoms[atom_idx];
+    let anum = atom.atomic_number;
+
+    // H1: [#1][#6,#1] — H on carbon or hydrogen
+    if anum == 6 || anum == 1 {
+        return (0.123, 1.057);
+    }
+
+    // H2 patterns (parent is O with specific neighbors, or parent is not C/N/O)
+    if anum == 8 && !atom.is_aromatic() {
+        // H2a: [#1]O[CX4,c] — O has sp3-C or aromatic-c neighbor
+        for &bidx in mol.adjacency[atom_idx].iter() {
+            let bond = &mol.bonds[bidx as usize];
+            let nbr_idx = if bond.source == atom_idx as u16 { bond.target } else { bond.source };
+            let nbr = &mol.atoms[nbr_idx as usize];
+            if nbr.atomic_number == 6 {
+                if nbr.is_aromatic() {
+                    return (-0.2677, 1.395);
+                }
+                // CX4: total degree 4 (heavy neighbors + total H count)
+                let nbr_deg = mol.get_degree(nbr_idx) as u8;
+                let total_x = nbr_deg + nbr.total_h();
+                if total_x == 4 {
+                    return (-0.2677, 1.395);
+                }
+            }
+        }
+
+        // H2b: [#1]O[!C;!N;!O;!S] — O has neighbor not C/N/O/S (any aromaticity)
+        // When Hs are explicit, other Hs on same O count as non-CNOS neighbors
+        if atom.total_h() >= 2 {
+            return (-0.2677, 1.395);
+        }
+        for &bidx in mol.adjacency[atom_idx].iter() {
+            let bond = &mol.bonds[bidx as usize];
+            let nbr_idx = if bond.source == atom_idx as u16 { bond.target } else { bond.source };
+            let nbr = &mol.atoms[nbr_idx as usize];
+            let na = nbr.atomic_number;
+            if na != 6 && na != 7 && na != 8 && na != 16 {
+                return (-0.2677, 1.395);
             }
         }
     }
 
-    (logp, mr)
+    // H2c: [#1][!C;!N;!O] — parent is not C, N, or O (any aromaticity)
+    // In RDKit C++, !C/!N/!O means not ANY carbon/nitrogen/oxygen
+    if anum != 6 && anum != 7 && anum != 8 {
+        return (-0.2677, 1.395);
+    }
+
+    // H3: [#1][#7] or [#1]O[#7] — H on N, or H on O with N neighbor
+    if anum == 7 {
+        return (0.2142, 0.9627);
+    }
+    if anum == 8 {
+        for &bidx in mol.adjacency[atom_idx].iter() {
+            let bond = &mol.bonds[bidx as usize];
+            let nbr_idx = if bond.source == atom_idx as u16 { bond.target } else { bond.source };
+            if mol.atoms[nbr_idx as usize].atomic_number == 7 {
+                return (0.2142, 0.9627);
+            }
+        }
+    }
+
+    // H4: [#1]OC=[#6,#7,O,S] or [#1]O[O,S] — H on O-C=X or O-O/O-S
+    if anum == 8 {
+        for &bidx in mol.adjacency[atom_idx].iter() {
+            let bond = &mol.bonds[bidx as usize];
+            let nbr_idx = if bond.source == atom_idx as u16 { bond.target } else { bond.source };
+            let nbr = &mol.atoms[nbr_idx as usize];
+            // [#1]OC=[#6,#7,O,S]: O bonded to C that has double bond to C/N/O/S
+            if nbr.atomic_number == 6 {
+                for &bidx2 in mol.adjacency[nbr_idx as usize].iter() {
+                    let bond2 = &mol.bonds[bidx2 as usize];
+                    if bond2.bond_type == BondType::Double {
+                        let nbr2_idx = if bond2.source == nbr_idx { bond2.target } else { bond2.source };
+                        let na2 = mol.atoms[nbr2_idx as usize].atomic_number;
+                        if na2 == 6 || na2 == 7 || na2 == 8 || na2 == 16 {
+                            return (0.298, 1.805);
+                        }
+                    }
+                }
+            }
+            // [#1]O[O,S]: O bonded to O or S
+            if nbr.atomic_number == 8 || nbr.atomic_number == 16 {
+                return (0.298, 1.805);
+            }
+        }
+    }
+
+    // HS: fallback
+    (0.1125, 1.112)
 }
 
 /// Compute total LogP and Molar Refractivity for a molecule.
 ///
-/// Returns `(logp, mr)` using Wildman-Crippen atom contributions.
+/// Returns `(logp, mr)` using Wildman-Crippen atom contributions plus H contributions.
 /// This is the main computation entry point used by the typed descriptors
 /// and other modules (lipinski, qed, etc.).
 pub fn compute_logp(mol: &Molecule) -> (f64, f64) {
     let (logp_contribs, mr_contribs) = crippen_atom_contributions(mol);
-    (logp_contribs.iter().sum(), mr_contribs.iter().sum())
+    let mut total_logp: f64 = logp_contribs.iter().sum();
+    let mut total_mr: f64 = mr_contribs.iter().sum();
+    
+    // Add H contributions using proper classification
+    for i in 0..mol.atoms.len() {
+        let ih = mol.atoms[i].total_h();
+        if ih > 0 {
+            let (h_logp, h_mr) = classify_implicit_h(mol, i);
+            total_logp += h_logp * ih as f64;
+            total_mr += h_mr * ih as f64;
+        }
+    }
+    
+    (total_logp, total_mr)
 }
 
 /// Wildman-Crippen LogP descriptor.
@@ -452,8 +555,8 @@ mod tests {
         // Caffeine: CN1C=NC2=C1C(=O)N(C(=O)N2C)C
         let logp = calculate_logp("CN1C=NC2=C1C(=O)N(C(=O)N2C)C");
         println!("Caffeine LogP: {}", logp);
-        // RDKit: -0.07
-        assert!(logp > -1.0 && logp < 1.0);
+        // RDKit: -1.0293
+        assert!(logp > -1.2 && logp < -0.8);
     }
     
     #[test]
