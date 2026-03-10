@@ -1,8 +1,8 @@
 use crate::error::{FerrumError, Result};
-use crate::mol::molecule::Molecule;
-use crate::mol::elements::{symbol_to_atomic_number, is_aromatic_symbol};
-use crate::types::BondType;
 use crate::io::builder::MoleculeBuilder;
+use crate::mol::elements::{is_aromatic_symbol, symbol_to_atomic_number};
+use crate::mol::molecule::Molecule;
+use crate::types::BondType;
 
 /// Parses a SMILES string into a complete Molecule with implicit hydrogens calculated.
 ///
@@ -69,8 +69,8 @@ struct SmilesParser<'a> {
     mol: Molecule,
     // Stack for branch points
     stack: Vec<u16>,
-    // Ring closures: ring_number -> atom_idx
-    rings: [Option<u16>; 100],
+    // Ring closures: ring_number -> (atom_idx, explicit bond if provided at opening side)
+    rings: [Option<(u16, Option<BondType>)>; 100],
     // Last atom added
     last_atom: Option<u16>,
     // Pending bond type (for next atom connection)
@@ -98,9 +98,10 @@ impl<'a> SmilesParser<'a> {
         // Validate all ring closures are matched
         for (i, ring) in self.rings.iter().enumerate() {
             if ring.is_some() {
-                return Err(FerrumError::ParseError(
-                    format!("Unclosed ring closure: {}", i)
-                ));
+                return Err(FerrumError::ParseError(format!(
+                    "Unclosed ring closure: {}",
+                    i
+                )));
             }
         }
 
@@ -118,7 +119,7 @@ impl<'a> SmilesParser<'a> {
                     self.pos += 1;
                 } else {
                     return Err(FerrumError::ParseError(
-                        "Branch without preceding atom".to_string()
+                        "Branch without preceding atom".to_string(),
                     ));
                 }
             }
@@ -127,7 +128,7 @@ impl<'a> SmilesParser<'a> {
                 self.last_atom = self.stack.pop();
                 if self.last_atom.is_none() {
                     return Err(FerrumError::ParseError(
-                        "Unmatched closing parenthesis".to_string()
+                        "Unmatched closing parenthesis".to_string(),
                     ));
                 }
                 self.pos += 1;
@@ -170,20 +171,20 @@ impl<'a> SmilesParser<'a> {
                 self.parse_bracket_atom()?;
             }
             // Organic subset atoms
-            'B' | 'C' | 'N' | 'O' | 'P' | 'S' | 'F' | 'I' |
-            'b' | 'c' | 'n' | 'o' | 'p' | 's' => {
+            'B' | 'C' | 'N' | 'O' | 'P' | 'S' | 'F' | 'I' | 'b' | 'c' | 'n' | 'o' | 'p' | 's' => {
                 self.parse_organic_atom()?;
             }
             // Two-letter elements
-            'A' | 'G' | 'H' | 'K' | 'L' | 'M' | 'R' | 'T' |
-            'U' | 'V' | 'W' | 'X' | 'Y' | 'Z' | 'D' | 'E' => {
+            'A' | 'G' | 'H' | 'K' | 'L' | 'M' | 'R' | 'T' | 'U' | 'V' | 'W' | 'X' | 'Y' | 'Z'
+            | 'D' | 'E' => {
                 // Check if it's Br or Cl (most common)
                 if self.peek_two_letter_element() {
                     self.parse_organic_atom()?;
                 } else {
-                    return Err(FerrumError::ParseError(
-                        format!("Unknown element at position {}", self.pos)
-                    ));
+                    return Err(FerrumError::ParseError(format!(
+                        "Unknown element at position {}",
+                        self.pos
+                    )));
                 }
             }
             '.' => {
@@ -193,9 +194,10 @@ impl<'a> SmilesParser<'a> {
                 self.pos += 1;
             }
             _ => {
-                return Err(FerrumError::ParseError(
-                    format!("Unexpected character '{}' at position {}", c, self.pos)
-                ));
+                return Err(FerrumError::ParseError(format!(
+                    "Unexpected character '{}' at position {}",
+                    c, self.pos
+                )));
             }
         }
 
@@ -229,10 +231,9 @@ impl<'a> SmilesParser<'a> {
             &self.input[start..start + 1]
         };
 
-        let atomic_num = symbol_to_atomic_number(symbol)
-            .ok_or_else(|| FerrumError::ParseError(
-                format!("Unknown element symbol: {}", symbol)
-            ))?;
+        let atomic_num = symbol_to_atomic_number(symbol).ok_or_else(|| {
+            FerrumError::ParseError(format!("Unknown element symbol: {}", symbol))
+        })?;
 
         self.add_atom(atomic_num, is_aromatic, 0, 0, 0, false)?;
         Ok(())
@@ -260,6 +261,14 @@ impl<'a> SmilesParser<'a> {
         if is_aromatic_symbol(c) {
             is_aromatic = true;
             self.pos += 1;
+            // Aromatic two-letter bracket atoms supported by RDKit/OpenSMILES.
+            // Examples: [se], [as], [te]
+            if self.pos < self.input.len() && self.input.as_bytes()[self.pos].is_ascii_lowercase() {
+                let candidate = &self.input[start..self.pos + 1];
+                if matches!(candidate, "se" | "as" | "te") {
+                    self.pos += 1;
+                }
+            }
         } else if c.is_ascii_uppercase() {
             self.pos += 1;
             // Check for second lowercase letter
@@ -267,16 +276,16 @@ impl<'a> SmilesParser<'a> {
                 self.pos += 1;
             }
         } else {
-            return Err(FerrumError::ParseError(
-                format!("Invalid atom symbol in bracket at position {}", self.pos)
-            ));
+            return Err(FerrumError::ParseError(format!(
+                "Invalid atom symbol in bracket at position {}",
+                self.pos
+            )));
         }
 
         let symbol = &self.input[start..self.pos];
-        let atomic_num = symbol_to_atomic_number(symbol)
-            .ok_or_else(|| FerrumError::ParseError(
-                format!("Unknown element symbol: {}", symbol)
-            ))?;
+        let atomic_num = symbol_to_atomic_number(symbol).ok_or_else(|| {
+            FerrumError::ParseError(format!("Unknown element symbol: {}", symbol))
+        })?;
 
         // Parse @/@@ for chirality (skip for now)
         if self.pos < self.input.len() && self.current_char()? == '@' {
@@ -322,7 +331,7 @@ impl<'a> SmilesParser<'a> {
         // Expect closing bracket
         if self.pos >= self.input.len() || self.current_char()? != ']' {
             return Err(FerrumError::ParseError(
-                "Missing closing bracket for atom".to_string()
+                "Missing closing bracket for atom".to_string(),
             ));
         }
         self.pos += 1;
@@ -331,8 +340,15 @@ impl<'a> SmilesParser<'a> {
         Ok(())
     }
 
-    fn add_atom(&mut self, atomic_num: u8, is_aromatic: bool, isotope: u16,
-                charge: i8, h_count: u8, is_bracket: bool) -> Result<()> {
+    fn add_atom(
+        &mut self,
+        atomic_num: u8,
+        is_aromatic: bool,
+        isotope: u16,
+        charge: i8,
+        h_count: u8,
+        is_bracket: bool,
+    ) -> Result<()> {
         let new_idx = self.mol.add_atom(atomic_num);
 
         if is_aromatic {
@@ -378,10 +394,10 @@ impl<'a> SmilesParser<'a> {
         let c = self.current_char()?;
         if !c.is_ascii_digit() {
             return Err(FerrumError::ParseError(
-                "Expected single digit ring number".to_string()
+                "Expected single digit ring number".to_string(),
             ));
         }
-        
+
         self.pos += 1;
         Ok((c as u8 - b'0') as usize)
     }
@@ -390,41 +406,55 @@ impl<'a> SmilesParser<'a> {
         // SMILES spec: multi-digit ring closures use % prefix
         // After %, read exactly 2 digits for ring numbers 10-99
         let start = self.pos;
-        
+
         // Read up to 2 digits
         let mut count = 0;
-        while count < 2 && self.pos < self.input.len() && 
-              self.input.as_bytes()[self.pos].is_ascii_digit() {
+        while count < 2
+            && self.pos < self.input.len()
+            && self.input.as_bytes()[self.pos].is_ascii_digit()
+        {
             self.pos += 1;
             count += 1;
         }
 
         if count == 0 {
             return Err(FerrumError::ParseError(
-                "Expected ring number after %".to_string()
+                "Expected ring number after %".to_string(),
             ));
         }
 
         let num_str = &self.input[start..self.pos];
-        num_str.parse::<usize>().map_err(|_|
-            FerrumError::ParseError(format!("Invalid ring number: {}", num_str))
-        )
+        num_str
+            .parse::<usize>()
+            .map_err(|_| FerrumError::ParseError(format!("Invalid ring number: {}", num_str)))
     }
 
     fn handle_ring_closure(&mut self, ring_num: usize) -> Result<()> {
         if ring_num >= 100 {
-            return Err(FerrumError::ParseError(
-                format!("Ring number {} exceeds maximum (99)", ring_num)
-            ));
+            return Err(FerrumError::ParseError(format!(
+                "Ring number {} exceeds maximum (99)",
+                ring_num
+            )));
         }
 
-        let current_atom = self.last_atom.ok_or_else(||
-            FerrumError::ParseError("Ring closure without atom".to_string())
-        )?;
+        let current_atom = self
+            .last_atom
+            .ok_or_else(|| FerrumError::ParseError("Ring closure without atom".to_string()))?;
 
-        if let Some(ring_atom) = self.rings[ring_num] {
+        if let Some((ring_atom, opening_bond)) = self.rings[ring_num] {
             // Close the ring
-            let bond_type = self.pending_bond.unwrap_or_else(|| {
+            let closing_bond = self.pending_bond.take();
+
+            if let (Some(ob), Some(cb)) = (opening_bond, closing_bond) {
+                if ob != cb {
+                    return Err(FerrumError::ParseError(format!(
+                        "Inconsistent ring closure bond types for ring {}",
+                        ring_num
+                    )));
+                }
+            }
+
+            let bond_type = closing_bond.or(opening_bond).unwrap_or_else(|| {
                 // Default: aromatic if both atoms are aromatic
                 let a1_arom = self.mol.atoms[ring_atom as usize].is_aromatic();
                 let a2_arom = self.mol.atoms[current_atom as usize].is_aromatic();
@@ -436,19 +466,19 @@ impl<'a> SmilesParser<'a> {
             });
             self.mol.add_bond(ring_atom, current_atom, bond_type);
             self.rings[ring_num] = None;
-            self.pending_bond = None;
         } else {
             // Open the ring
-            self.rings[ring_num] = Some(current_atom);
+            self.rings[ring_num] = Some((current_atom, self.pending_bond.take()));
         }
 
         Ok(())
     }
 
     fn current_char(&self) -> Result<char> {
-        self.input.chars().nth(self.pos).ok_or_else(||
-            FerrumError::ParseError("Unexpected end of input".to_string())
-        )
+        self.input
+            .chars()
+            .nth(self.pos)
+            .ok_or_else(|| FerrumError::ParseError("Unexpected end of input".to_string()))
     }
 
     fn peek_two_letter_element(&self) -> bool {
@@ -521,6 +551,16 @@ mod tests {
         assert_eq!(mol.num_atoms(), 3);
         assert_eq!(mol.atoms[0].isotope, 2);
         assert_eq!(mol.atoms[2].isotope, 2);
+
+        // Aromatic bracket atoms with two-letter aromatic symbols
+        let mol = parse_smiles("[se]1cccc1").unwrap();
+        assert_eq!(mol.atoms[0].atomic_number, 34);
+
+        let mol = parse_smiles("[as]1cccc1").unwrap();
+        assert_eq!(mol.atoms[0].atomic_number, 33);
+
+        let mol = parse_smiles("[te]1cccc1").unwrap();
+        assert_eq!(mol.atoms[0].atomic_number, 52);
     }
 
     #[test]
@@ -529,5 +569,17 @@ mod tests {
         let mol = parse_smiles("[CH4]").unwrap();
         assert_eq!(mol.num_atoms(), 1);
         assert_eq!(mol.atoms[0].num_explicit_h, 4);
+    }
+
+    #[test]
+    fn test_ring_closure_bond_consistency() {
+        // Ring opening and closing specify different explicit bond types.
+        // RDKit rejects this and we should too.
+        let err = parse_smiles("C-1CC=1").unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("Inconsistent ring closure bond types"),
+            "unexpected error: {err}"
+        );
     }
 }

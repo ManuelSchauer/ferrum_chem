@@ -1,0 +1,31 @@
+SMILES,Name,Category
+c1ccc2ccccc2c1,Naphthalene,Aromaticity (Fused 6+6)
+c1ccc2cccc2c1,Azulene,Aromaticity (Fused 5+7)
+c1ccc2[nH]ccc2c1,Indole,Aromaticity (Heteroatom N)
+c1ccc2ncccc2c1,Quinoline,Aromaticity (Pyridine-like N)
+c1ccc2cnccc2c1,Isoquinoline,Aromaticity (Pyridine-like N)
+c1nc2c(n1)nc[nH]2,Purine,Aromaticity (Multiple N types)
+C1=Cc2ccc3cc4ccc(cc1[nH]2)n43,Porphin,Aromaticity (Macrocycle)
+c1cc2ccc3ccc4ccc1c4c32,Pyrene,Aromaticity (Fused 4-ring)
+C1=CC=CC=CC=C1,Cyclooctatetraene,Not Aromatic (8 pi electrons)
+[cH-]1cccc1,Cyclopentadienyl Anion,Aromatic (Charge driven)
+c1cc[nH]c1,Pyrrole,Implicit H (Aromatic N)
+c1ccoc1,Furan,Implicit H (Aromatic O)
+c1ccsc1,Thiophene,Implicit H (Aromatic S)
+[O-][n+]1ccccc1,Pyridine N-oxide,Charges
+c1ccccc1[N+](=O)[O-],Nitrobenzene,Valence/Charge
+CS(=O)(=O)C,Dimethyl sulfone,Hypervalence
+CP(C)C,Trimethylphosphine,Phosphorus Valence
+O=C1C=CC(=O)C=C1,Quinone,Not Aromatic (Exocyclic double bonds)
+O=c1[nH]cccc1,2-Pyridone,Tautomer/Aromaticity edge case
+C=C1C=CC=C1,Fulvene,Not Aromatic (Exocyclic double bond)
+N[C@@H](C)C(=O)O,L-Alanine,Chirality
+N[C@H](C)C(=O)O,D-Alanine,Chirality
+C/C=C\C,Cis-2-Butene,Isomerism
+C/C=C/C,Trans-2-Butene,Isomerism
+CC(=O)[O-].[Na+],Sodium Acetate,Salt/Disconnected
+[NH3][Pt]([NH3])(Cl)Cl,Cisplatin,Metal Complex
+C[Mg]Br,Grignard Reagent,Organometallic
+O,Water,Single Atom
+C,Methane,Single Atom
+Cn1cnc2c1c(=O)n(C)c(=O)n2C,Caffeine,The Final Boss

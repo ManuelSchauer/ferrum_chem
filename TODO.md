@@ -10,6 +10,25 @@
 
 See [`THREAD_SAFETY.md`](THREAD_SAFETY.md) for guidelines.
 
+## 📌 March 2026 RDKit Parity Snapshot
+
+All parity validation should be run in `--release` mode.
+
+- Scalar parity: **10976/11000 = 99.78%**
+- Ring parity: **1919/2000 = 95.95%**
+- VSA parity: **17975/18000 = 99.86%**
+- Chi/Kappa parity: **4905/5000 = 98.10%**
+- Exact on the 500-row RDKit slice: **AromaticAtomCount, AromaticRingCount, AromaticRings(RT), HBondAcceptor, NumAmideBonds, QED, RotatableBonds**
+- Highest-value remaining gaps: **Ipc, AliphaticRings, SaturatedRings, TotalRings, Chi3v, Chi4v, Kappa3**
+
+## 🎯 Active Descriptor Backlog
+
+- [ ] Close the remaining **Ipc** mismatches (current: **476/500**)
+- [ ] Align independent ring descriptor semantics: **AliphaticRings 470/500**, **SaturatedRings 479/500**, **TotalRings 470/500**
+- [ ] Fix higher-order connectivity descriptors: **Chi3v 470/500**, **Chi4v 464/500**, **Kappa3 471/500**
+- [ ] Polish the last non-perfect **PEOE VSA** buckets while preserving the current high-parity baseline
+- [ ] Resume **Phase 14 / TUI** work after the descriptor parity cleanup stabilizes
+
 ## ✅ Phase 1-8: Complete (Core Functionality + MACCS Keys)
 
 ### Phase 1-3: Core Algorithms & Descriptors ✅
@@ -183,6 +202,50 @@ See [`THREAD_SAFETY.md`](THREAD_SAFETY.md) for guidelines.
 
 **Status**: 60 descriptors, 17,696 dimensions, 568 tests ✅
 
+## 🧬 Phase 12.6: Hybridization Refinement & HallKierAlpha 100% ✅ COMPLETE
+
+### Root Cause Analysis
+- Systematic HallKierAlpha mismatches traced to `effective_hybridization()` norbs==4 branch
+- Three separate rounds of refinement to reach 100%:
+
+### Round 1 — O/S conjugation: P=O/S=O exclusion ✅
+- **Problem**: O in phosphate (P=O neighbour) was SP2; should be SP3
+- **Fix**: Added adjacency-based scan in norbs==4 O/S arm, excluding hypervalent P/S neighbours
+- **Result**: 54.2% → 97.8% pass rate (489/500)
+- [x] Ester bridging O (C=O nbr, C non-hypervalent) → SP2 ✓
+- [x] Carboxylic-acid OH → SP2 ✓
+- [x] Phosphate OH (P=O nbr, P excluded) → SP3 ✓
+- [x] Phosphate bridging O (P excluded) → SP3 ✓
+
+### Round 2 — S always SP3 in norbs==4 ✅
+- **Problem**: Thioether S adjacent to aromatic ring / C=N called SP2 (α=+0.22 vs correct +0.35)
+  - All 0.13-diff failures: `CSc1ccccc1`-type S, `N=C(...)S`-type S in heterocycles
+- **Fix**: Pulled S out of the O/S shared arm → `16 => false` (always SP3)
+  - S is only SP2 via `has_double` (direct C=S) or `is_aromatic()` (thiophene)
+- [x] Thioanisole S (aromatic-C nbr) → SP3 ✓
+- [x] Thiazolidine S (C=N nbr) → SP3 ✓
+
+### Round 3 — Sulfonamide N SP3 ✅
+- **Problem**: N bonded to S(=O)₂ had `neighbor_has_pi=true` (from S=O bonds) → wrongly SP2 (α=−0.20 vs correct −0.04)
+  - All 0.16-diff failures: `CN(S(=O)(=O)...)` sulfonamide N
+- **Fix**: N in norbs==4 now uses same adjacency-based P/S-excluding check as O: `7 => o_n_conjugated(idx)`
+  - Amide N (N–C=O), aniline N, enamine N remain SP2 ✓
+- [x] Sulfonamide N (N–S(=O)₂) → SP3 ✓
+- [x] Amide N (N–C=O) → SP2 ✓ (regression test)
+- [x] Aniline N (aromatic-C nbr) → SP2 ✓ (regression test)
+
+### Tests Added
+- [x] `test_hyb_thioanisole_s_sp3` — S adjacent to aromatic ring
+- [x] `test_hyb_thiazolidine_s_sp3` — S adjacent to C=N
+- [x] `test_hyb_sulfonamide_n_sp3` — N–S(=O)₂
+- [x] `test_hyb_amide_n_sp2` — N–C=O regression
+- [x] `test_hyb_aniline_n_sp2` — N–C(aromatic) regression
+- [x] HallKierAlpha exact-value tests updated (methyl acetate → −0.53)
+
+**Result**: HallKierAlpha **100.0% (500/500)** ✅ — zero regressions across all other descriptors
+
+---
+
 ## 🧬 Phase 12: Electronic Descriptors & RDKit Validation ✅ COMPLETE
 
 ### Gasteiger Partial Charges ✅
@@ -230,39 +293,40 @@ See [`THREAD_SAFETY.md`](THREAD_SAFETY.md) for guidelines.
 
 **Status**: All `todo!()` calls removed except `sdf.rs` (deferred to Phase 15). 641 tests passing ✅
 
-## 🤖 Phase 13: ML Pipeline — All From Scratch 🔵
+## 🤖 Phase 13: ML Pipeline — All From Scratch ✅ COMPLETE
 
-### 13A: Data Infrastructure
-- [ ] `QsarDataset` struct (f64 ndarray, targets, feature names, f32→f64 boundary)
-- [ ] `StandardScaler` (Z-score: μ/σ persistence for inference)
-- [ ] `MinMaxScaler` (alternative scaling)
-- [ ] Feature selection: variance threshold, correlation filter (r > 0.95)
-- [ ] PCA dimensionality reduction (reuse Jacobi eigendecomp from BCUT)
-- [ ] Train/test splitting: random, stratified, **scaffold-based**
+### 13A: Data Infrastructure ✅
+- [x] `QsarDataset` struct (f64 ndarray, targets, feature names, f32→f64 boundary)
+- [x] `StandardScaler` (Z-score: μ/σ persistence for inference)
+- [x] `MinMaxScaler` (alternative scaling)
+- [x] Feature selection: variance threshold, correlation filter (r > 0.95)
+- [x] PCA dimensionality reduction (Jacobi eigendecomp from scratch)
+- [x] Train/test splitting: random, stratified, **scaffold-based**
 
-### 13B: Supervised Models — From Scratch (~1150 lines)
-- [ ] **k-NN** (~100 lines) — Tanimoto for fingerprints, Euclidean for descriptors
-- [ ] **Random Forest** (~600 lines) — decision tree + bagging, binary feature optimization
-- [ ] **PLS Regression** (~200 lines, NIPALS) — handles collinearity
-- [ ] **Elastic Net / LASSO** (~250 lines, coordinate descent) — automatic feature selection
-- [ ] **Classification variants** — RF classifier, k-NN classifier
+### 13B: Supervised Models — From Scratch ✅
+- [x] **k-NN** (~240 lines) — Tanimoto for fingerprints, Euclidean for descriptors
+- [x] **Random Forest** (~465 lines) — decision tree + bagging, binary feature optimization
+- [x] **PLS Regression** (~246 lines, NIPALS) — handles collinearity
+- [x] **Elastic Net / LASSO** (~295 lines, coordinate descent) — automatic feature selection
+- [x] **Classification variants** — RF classifier, k-NN classifier
 
-### 13C: Custom ART-2A (~200 lines)
-- [ ] ART-2A: vigilance ρ, learning rate η, L2-normalized input
-- [ ] Chemical space clustering, applicability domain
+### 13C: Custom ART-2A ✅
+- [x] ART-2A: vigilance ρ, learning rate η, L2-normalized input
+- [x] Chemical space clustering, applicability domain
 
-### 13D: Pipeline, Inference & Optimization
-- [ ] `QsarPipeline` serializable struct (scaler + PCA + model + AD + metadata)
-- [ ] Hand-tunable hyperparameters + built-in grid search optimization
-- [ ] `AutoQsar` — train all models, compare via CV, report best
-- [ ] Applicability Domain trait: k-NN distance AD, leverage AD, ART-2A AD
-- [ ] Conformal prediction (uncertainty quantification)
-- [ ] K-Fold CV, Leave-One-Out, scaffold-based CV
-- [ ] Evaluation metrics: R², Q², RMSE, MAE, MCC, AUC-ROC
-- [ ] Y-randomization validation
-- [ ] Batch prediction (parallel, 1M+ molecules)
+### 13D: Pipeline, Inference & Optimization ✅
+- [x] `QsarPipeline` serializable struct (scaler + PCA + model + AD + metadata)
+- [x] Hand-tunable hyperparameters + built-in grid search optimization (via AutoQsar)
+- [x] `AutoQsar` — train all models, compare via CV, report best
+- [x] Applicability Domain trait: k-NN distance AD, leverage AD
+- [ ] Conformal prediction (uncertainty quantification) — deferred to future enhancement
+- [x] K-Fold CV, Leave-One-Out, scaffold-based CV
+- [x] Evaluation metrics: R², Q², RMSE, MAE, MCC, AUC-ROC
+- [x] Y-randomization validation
+- [x] Batch prediction (parallel, 1M+ molecules)
 
-**Dependencies**: `ndarray` 0.16 only — no linfa
+**Dependencies**: `ndarray` 0.16 only — no linfa  
+**Status**: ✅ Complete — All core ML pipeline components implemented from scratch
 
 ## 🖥️ Phase 14: Terminal UI (TUI) 🔵
 
@@ -314,26 +378,27 @@ See [`THREAD_SAFETY.md`](THREAD_SAFETY.md) for guidelines.
 - [ ] SDF/MOL V2000/V3000 parser (sdf.rs stub exists)
 - [ ] InChI generation
 
-### ML Integration (Phase 13)
-- [ ] QsarDataset + Scalers + Feature Selection
-- [ ] k-NN, RF, PLS, Elastic Net (all from scratch, no linfa)
-- [ ] ART 2A clustering + applicability domain
-- [ ] QsarPipeline + AutoQsar + grid search optimization
-- [ ] K-Fold CV + evaluation metrics
+### ML Integration (Phase 13) ✅
+- [x] QsarDataset + Scalers + Feature Selection
+- [x] k-NN, RF, PLS, Elastic Net (all from scratch, no linfa)
+- [x] ART 2A clustering + applicability domain
+- [x] QsarPipeline + AutoQsar + grid search optimization
+- [x] K-Fold CV + evaluation metrics
 - [ ] PyO3 Python bindings (Phase 15)
 
 ## 📊 Performance
 
-### Current (Phase 11 Complete)
+### Current (March 2026 parity snapshot)
 - ✅ SMILES parsing: 1-6M mol/sec
 - ✅ MW calculation: 1B calc/sec
 - ✅ Memory: ~22 bytes/atom, 32x reduction via typed descriptors
 - ✅ SMARTS matching: ~50k mol/sec (VF2 algorithm)
 - ✅ LogP: ~500k-5M mol/sec (pre-parsed patterns)
 - ✅ TPSA: RDKit-exact (50/50 molecules ±0.01 Ų)
-- ✅ Total tests: 641 unit + 14 doc + 4 integration + 55 SMARTS edge tests
+- ✅ Release-mode validation is the default for parity runs
 - ✅ Total descriptors: 72 implementations, 17,710+ dimensions
-- ✅ RDKit accuracy: 100% (1944/1944 across 27 torture molecules)
+- ✅ RDKit torture-set validation: 1944/1944 exact matches across 27 molecules
+- ✅ RDKit 500-row parity: scalar 99.78%, ring 95.95%, VSA 99.86%, Chi/Kappa 98.10%
 - ✅ Fingerprints: MACCS (166), PubChem (881), ECFP (6144), FCFP (6144), AtomPair (2048), Torsion (2048)
 
 ## 🎯 Milestones
@@ -352,11 +417,24 @@ See [`THREAD_SAFETY.md`](THREAD_SAFETY.md) for guidelines.
 - [x] Charge-derived descriptors (polarizability, PEOE_VSA)
 - [x] 100% RDKit validation (1944/1944 across 27 torture molecules)
 
-### v0.9.0 - Phase 13: ML Pipeline
-- [ ] QsarDataset + Scalers + Feature Selection
-- [ ] k-NN, Random Forest, PLS, Elastic Net (all from scratch)
-- [ ] ART-2A + Applicability Domain
-- [ ] QsarPipeline + AutoQsar + Grid Search + Metrics
+### v0.8.1 - Phase 12.6 ✅ Complete
+- [x] Hybridization refinement: S norbs==4 always SP3; sulfonamide N uses P/S-excluding adjacency check
+- [x] HallKierAlpha: 54.2% → 97.8% → **100.0%** (500/500) on 500-molecule COCONUT set
+- [x] 5 new hybridization unit tests (thioanisole S, thiazolidine S, sulfonamide N, amide N, aniline N)
+- [x] 740 unit tests passing, zero regressions
+
+### v0.9.0 - Phase 13: ML Pipeline ✅ COMPLETE
+- [x] QsarDataset + Scalers + Feature Selection
+- [x] k-NN, Random Forest, PLS, Elastic Net (all from scratch)
+- [x] ART-2A + Applicability Domain
+- [x] QsarPipeline + AutoQsar + Grid Search + Metrics
+
+### v0.9.1 - RDKit Parity Push ✅ CURRENT
+- [x] SMARTS composite bond constraints and disconnected components aligned with RDKit
+- [x] Aromatic atom/ring metrics closed at 500/500 on the 500-row slice
+- [x] QED, NumAmideBonds, and RotatableBonds closed at 500/500
+- [x] Scalar parity raised to **10976/11000 = 99.78%**
+- [ ] Finish descriptor-local cleanup for Ipc, independent ring semantics, and higher-order Chi/Kappa
 
 ### v0.10.0 - Phase 14: TUI
 - [ ] Interactive model training wizard
@@ -369,11 +447,12 @@ See [`THREAD_SAFETY.md`](THREAD_SAFETY.md) for guidelines.
 
 ---
 
-**Last Updated**: February 12, 2026  
-**Status**: Phase 12.5 ✅ Complete — All todo!() removed (except sdf.rs), 641 tests passing  
-**Tests**: 641 unit + 14 doc + 4 integration + 55 SMARTS edge tests ✅  
+**Last Updated**: March 2026  
+**Status**: RDKit parity push in progress — scalar **99.78%**, ring **95.95%**, VSA **99.86%**, Chi/Kappa **98.10%**  
+**Validation**: release-mode parser / SMARTS / QED / rotatable tests plus scalar, ring, VSA, and Chi/Kappa parity suites ✅  
 **Descriptors**: 72 implementations, 17,710+ dimensions  
+**RDKit 500-row wins**: AromaticAtomCount 100% · AromaticRingCount 100% · AromaticRings(RT) 100% · HBondAcceptor 100% · NumAmideBonds 100% · QED 100% · RotatableBonds 100%  
+**ML Pipeline**: QsarDataset, Scalers, PCA, k-NN, RF, PLS, ElasticNet, ART-2A, AD, QsarPipeline, AutoQsar, CV, Metrics  
 **API**: Single `Descriptor` trait with `DescriptorValue` enum returns  
-**Next Priority**: Phase 13 — ML Pipeline → Phase 14 — TUI
-
+**Next Priority**: Descriptor-local cleanup for **Ipc**, **Aliphatic/Saturated/TotalRings**, and **Chi3v/Chi4v/Kappa3**
 
