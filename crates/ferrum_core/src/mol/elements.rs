@@ -4,142 +4,142 @@
 /// Standard atomic masses (in Daltons) indexed by atomic number.
 /// Index 0 is unused, elements 1-118 are defined.
 pub const ATOMIC_MASSES: [f32; 119] = [
-    0.0,     // 0: placeholder
-    1.008,   // 1: H
-    4.003,   // 2: He
-    6.941,   // 3: Li
-    9.012,   // 4: Be
-    10.81,   // 5: B
-    12.011,  // 6: C
-    14.007,  // 7: N
-    15.999,  // 8: O
-    18.998,  // 9: F
-    20.180,  // 10: Ne
-    22.990,  // 11: Na
-    24.305,  // 12: Mg
-    26.982,  // 13: Al
-    28.085,  // 14: Si
-    30.974,  // 15: P
-    32.06,   // 16: S
-    35.45,   // 17: Cl
-    39.948,  // 18: Ar
-    39.098,  // 19: K
-    40.078,  // 20: Ca
-    44.956,  // 21: Sc
-    47.867,  // 22: Ti
-    50.942,  // 23: V
-    51.996,  // 24: Cr
-    54.938,  // 25: Mn
-    55.845,  // 26: Fe
-    58.933,  // 27: Co
-    58.693,  // 28: Ni
-    63.546,  // 29: Cu
-    65.38,   // 30: Zn
-    69.723,  // 31: Ga
-    72.630,  // 32: Ge
-    74.922,  // 33: As
-    78.971,  // 34: Se
-    79.904,  // 35: Br
-    83.798,  // 36: Kr
-    85.468,  // 37: Rb
-    87.62,   // 38: Sr
-    88.906,  // 39: Y
-    91.224,  // 40: Zr
-    92.906,  // 41: Nb
-    95.95,   // 42: Mo
-    98.0,    // 43: Tc
-    101.07,  // 44: Ru
-    102.91,  // 45: Rh
-    106.42,  // 46: Pd
-    107.87,  // 47: Ag
-    112.41,  // 48: Cd
-    114.82,  // 49: In
-    118.71,  // 50: Sn
-    121.76,  // 51: Sb
-    127.60,  // 52: Te
-    126.90,  // 53: I
-    131.29,  // 54: Xe
-    132.91,  // 55: Cs
-    137.33,  // 56: Ba
-    138.91,  // 57: La
-    140.12,  // 58: Ce
-    140.91,  // 59: Pr
-    144.24,  // 60: Nd
-    145.0,   // 61: Pm
-    150.36,  // 62: Sm
-    151.96,  // 63: Eu
-    157.25,  // 64: Gd
-    158.93,  // 65: Tb
-    162.50,  // 66: Dy
-    164.93,  // 67: Ho
-    167.26,  // 68: Er
-    168.93,  // 69: Tm
-    173.05,  // 70: Yb
-    174.97,  // 71: Lu
-    178.49,  // 72: Hf
-    180.95,  // 73: Ta
-    183.84,  // 74: W
-    186.21,  // 75: Re
-    190.23,  // 76: Os
-    192.22,  // 77: Ir
-    195.08,  // 78: Pt
-    196.97,  // 79: Au
-    200.59,  // 80: Hg
-    204.38,  // 81: Tl
-    207.2,   // 82: Pb
-    208.98,  // 83: Bi
-    209.0,   // 84: Po
-    210.0,   // 85: At
-    222.0,   // 86: Rn
-    223.0,   // 87: Fr
-    226.0,   // 88: Ra
-    227.0,   // 89: Ac
-    232.04,  // 90: Th
-    231.04,  // 91: Pa
-    238.03,  // 92: U
-    237.0,   // 93: Np
-    244.0,   // 94: Pu
-    243.0,   // 95: Am
-    247.0,   // 96: Cm
-    247.0,   // 97: Bk
-    251.0,   // 98: Cf
-    252.0,   // 99: Es
-    257.0,   // 100: Fm
-    258.0,   // 101: Md
-    259.0,   // 102: No
-    262.0,   // 103: Lr
-    267.0,   // 104: Rf
-    268.0,   // 105: Db
-    271.0,   // 106: Sg
-    272.0,   // 107: Bh
-    270.0,   // 108: Hs
-    276.0,   // 109: Mt
-    281.0,   // 110: Ds
-    280.0,   // 111: Rg
-    285.0,   // 112: Cn
-    284.0,   // 113: Nh
-    289.0,   // 114: Fl
-    288.0,   // 115: Mc
-    293.0,   // 116: Lv
-    294.0,   // 117: Ts
-    294.0,   // 118: Og
+    0.0,    // 0: placeholder
+    1.008,  // 1: H
+    4.003,  // 2: He
+    6.941,  // 3: Li
+    9.012,  // 4: Be
+    10.81,  // 5: B
+    12.011, // 6: C
+    14.007, // 7: N
+    15.999, // 8: O
+    18.998, // 9: F
+    20.180, // 10: Ne
+    22.990, // 11: Na
+    24.305, // 12: Mg
+    26.982, // 13: Al
+    28.085, // 14: Si
+    30.974, // 15: P
+    32.067, // 16: S
+    35.453, // 17: Cl
+    39.948, // 18: Ar
+    39.098, // 19: K
+    40.078, // 20: Ca
+    44.956, // 21: Sc
+    47.867, // 22: Ti
+    50.942, // 23: V
+    51.996, // 24: Cr
+    54.938, // 25: Mn
+    55.845, // 26: Fe
+    58.933, // 27: Co
+    58.693, // 28: Ni
+    63.546, // 29: Cu
+    65.38,  // 30: Zn
+    69.723, // 31: Ga
+    72.630, // 32: Ge
+    74.922, // 33: As
+    78.971, // 34: Se
+    79.904, // 35: Br
+    83.798, // 36: Kr
+    85.468, // 37: Rb
+    87.62,  // 38: Sr
+    88.906, // 39: Y
+    91.224, // 40: Zr
+    92.906, // 41: Nb
+    95.95,  // 42: Mo
+    98.0,   // 43: Tc
+    101.07, // 44: Ru
+    102.91, // 45: Rh
+    106.42, // 46: Pd
+    107.87, // 47: Ag
+    112.41, // 48: Cd
+    114.82, // 49: In
+    118.71, // 50: Sn
+    121.76, // 51: Sb
+    127.60, // 52: Te
+    126.90, // 53: I
+    131.29, // 54: Xe
+    132.91, // 55: Cs
+    137.33, // 56: Ba
+    138.91, // 57: La
+    140.12, // 58: Ce
+    140.91, // 59: Pr
+    144.24, // 60: Nd
+    145.0,  // 61: Pm
+    150.36, // 62: Sm
+    151.96, // 63: Eu
+    157.25, // 64: Gd
+    158.93, // 65: Tb
+    162.50, // 66: Dy
+    164.93, // 67: Ho
+    167.26, // 68: Er
+    168.93, // 69: Tm
+    173.05, // 70: Yb
+    174.97, // 71: Lu
+    178.49, // 72: Hf
+    180.95, // 73: Ta
+    183.84, // 74: W
+    186.21, // 75: Re
+    190.23, // 76: Os
+    192.22, // 77: Ir
+    195.08, // 78: Pt
+    196.97, // 79: Au
+    200.59, // 80: Hg
+    204.38, // 81: Tl
+    207.2,  // 82: Pb
+    208.98, // 83: Bi
+    209.0,  // 84: Po
+    210.0,  // 85: At
+    222.0,  // 86: Rn
+    223.0,  // 87: Fr
+    226.0,  // 88: Ra
+    227.0,  // 89: Ac
+    232.04, // 90: Th
+    231.04, // 91: Pa
+    238.03, // 92: U
+    237.0,  // 93: Np
+    244.0,  // 94: Pu
+    243.0,  // 95: Am
+    247.0,  // 96: Cm
+    247.0,  // 97: Bk
+    251.0,  // 98: Cf
+    252.0,  // 99: Es
+    257.0,  // 100: Fm
+    258.0,  // 101: Md
+    259.0,  // 102: No
+    262.0,  // 103: Lr
+    267.0,  // 104: Rf
+    268.0,  // 105: Db
+    271.0,  // 106: Sg
+    272.0,  // 107: Bh
+    270.0,  // 108: Hs
+    276.0,  // 109: Mt
+    281.0,  // 110: Ds
+    280.0,  // 111: Rg
+    285.0,  // 112: Cn
+    284.0,  // 113: Nh
+    289.0,  // 114: Fl
+    288.0,  // 115: Mc
+    293.0,  // 116: Lv
+    294.0,  // 117: Ts
+    294.0,  // 118: Og
 ];
 
 /// Element symbols indexed by atomic number.
 pub const ELEMENT_SYMBOLS: [&str; 119] = [
-    "*",  // 0: wildcard/unknown
-    "H", "He", "Li", "Be", "B", "C", "N", "O", "F", "Ne",  // 1-10
-    "Na", "Mg", "Al", "Si", "P", "S", "Cl", "Ar", "K", "Ca",  // 11-20
-    "Sc", "Ti", "V", "Cr", "Mn", "Fe", "Co", "Ni", "Cu", "Zn",  // 21-30
-    "Ga", "Ge", "As", "Se", "Br", "Kr", "Rb", "Sr", "Y", "Zr",  // 31-40
-    "Nb", "Mo", "Tc", "Ru", "Rh", "Pd", "Ag", "Cd", "In", "Sn",  // 41-50
-    "Sb", "Te", "I", "Xe", "Cs", "Ba", "La", "Ce", "Pr", "Nd",  // 51-60
-    "Pm", "Sm", "Eu", "Gd", "Tb", "Dy", "Ho", "Er", "Tm", "Yb",  // 61-70
-    "Lu", "Hf", "Ta", "W", "Re", "Os", "Ir", "Pt", "Au", "Hg",  // 71-80
-    "Tl", "Pb", "Bi", "Po", "At", "Rn", "Fr", "Ra", "Ac", "Th",  // 81-90
-    "Pa", "U", "Np", "Pu", "Am", "Cm", "Bk", "Cf", "Es", "Fm",  // 91-100
-    "Md", "No", "Lr", "Rf", "Db", "Sg", "Bh", "Hs", "Mt", "Ds",  // 101-110
-    "Rg", "Cn", "Nh", "Fl", "Mc", "Lv", "Ts", "Og",  // 111-118
+    "*", // 0: wildcard/unknown
+    "H", "He", "Li", "Be", "B", "C", "N", "O", "F", "Ne", // 1-10
+    "Na", "Mg", "Al", "Si", "P", "S", "Cl", "Ar", "K", "Ca", // 11-20
+    "Sc", "Ti", "V", "Cr", "Mn", "Fe", "Co", "Ni", "Cu", "Zn", // 21-30
+    "Ga", "Ge", "As", "Se", "Br", "Kr", "Rb", "Sr", "Y", "Zr", // 31-40
+    "Nb", "Mo", "Tc", "Ru", "Rh", "Pd", "Ag", "Cd", "In", "Sn", // 41-50
+    "Sb", "Te", "I", "Xe", "Cs", "Ba", "La", "Ce", "Pr", "Nd", // 51-60
+    "Pm", "Sm", "Eu", "Gd", "Tb", "Dy", "Ho", "Er", "Tm", "Yb", // 61-70
+    "Lu", "Hf", "Ta", "W", "Re", "Os", "Ir", "Pt", "Au", "Hg", // 71-80
+    "Tl", "Pb", "Bi", "Po", "At", "Rn", "Fr", "Ra", "Ac", "Th", // 81-90
+    "Pa", "U", "Np", "Pu", "Am", "Cm", "Bk", "Cf", "Es", "Fm", // 91-100
+    "Md", "No", "Lr", "Rf", "Db", "Sg", "Bh", "Hs", "Mt", "Ds", // 101-110
+    "Rg", "Cn", "Nh", "Fl", "Mc", "Lv", "Ts", "Og", // 111-118
 ];
 
 /// Typical valences for organic elements (for implicit hydrogen calculation).
@@ -147,19 +147,19 @@ pub const ELEMENT_SYMBOLS: [&str; 119] = [
 #[inline]
 pub const fn get_valences(atomic_number: u8) -> &'static [u8] {
     match atomic_number {
-        1 => &[1],           // H
-        5 => &[3],           // B
-        6 => &[4],           // C
-        7 => &[3, 5],        // N
-        8 => &[2],           // O
-        9 => &[1],           // F
-        14 => &[4],          // Si
-        15 => &[3, 5],       // P
-        16 => &[2, 4, 6],    // S
-        17 => &[1],          // Cl
-        35 => &[1],          // Br
-        53 => &[1],          // I
-        _ => &[],            // Unknown/metal
+        1 => &[1],        // H
+        5 => &[3],        // B
+        6 => &[4],        // C
+        7 => &[3, 5],     // N
+        8 => &[2],        // O
+        9 => &[1],        // F
+        14 => &[4],       // Si
+        15 => &[3, 5],    // P
+        16 => &[2, 4, 6], // S
+        17 => &[1],       // Cl
+        35 => &[1],       // Br
+        53 => &[1],       // I
+        _ => &[],         // Unknown/metal
     }
 }
 
@@ -179,15 +179,15 @@ pub const fn get_valences(atomic_number: u8) -> &'static [u8] {
 #[inline]
 pub const fn get_aromatic_valences(atomic_number: u8) -> &'static [u8] {
     match atomic_number {
-        5 => &[3],           // B
-        6 => &[3],           // C: 1 π electron, 3 σ bonds
-        7 => &[2, 3],        // N: pyridine-type (2) or pyrrole-type (3)
-        8 => &[2],           // O: lone pair contributes 2 π electrons
-        15 => &[2, 3, 5],    // P
-        16 => &[2],          // S: lone pair contributes 2 π electrons
-        34 => &[2],          // Se
-        52 => &[2],          // Te
-        _ => &[],            // Non-aromatic or unknown
+        5 => &[3],        // B
+        6 => &[3],        // C: 1 π electron, 3 σ bonds
+        7 => &[2, 3],     // N: pyridine-type (2) or pyrrole-type (3)
+        8 => &[2],        // O: lone pair contributes 2 π electrons
+        15 => &[2, 3, 5], // P
+        16 => &[2],       // S: lone pair contributes 2 π electrons
+        34 => &[2],       // Se
+        52 => &[2],       // Te
+        _ => &[],         // Non-aromatic or unknown
     }
 }
 
@@ -212,46 +212,62 @@ pub const fn is_transition_metal(atomic_number: u8) -> bool {
 #[inline]
 pub const fn outer_electrons(atomic_number: u8) -> u8 {
     match atomic_number {
-        1 => 1,   // H
-        2 => 2,   // He
-        3 => 1,   // Li
-        4 => 2,   // Be
-        5 => 3,   // B
-        6 => 4,   // C
-        7 => 5,   // N
-        8 => 6,   // O
-        9 => 7,   // F
-        10 => 8,  // Ne
-        11 => 1,  // Na
-        12 => 2,  // Mg
-        13 => 3,  // Al
-        14 => 4,  // Si
-        15 => 5,  // P
-        16 => 6,  // S
-        17 => 7,  // Cl
-        18 => 8,  // Ar
-        19 => 1,  // K
-        20 => 2,  // Ca
+        1 => 1,  // H
+        2 => 2,  // He
+        3 => 1,  // Li
+        4 => 2,  // Be
+        5 => 3,  // B
+        6 => 4,  // C
+        7 => 5,  // N
+        8 => 6,  // O
+        9 => 7,  // F
+        10 => 8, // Ne
+        11 => 1, // Na
+        12 => 2, // Mg
+        13 => 3, // Al
+        14 => 4, // Si
+        15 => 5, // P
+        16 => 6, // S
+        17 => 7, // Cl
+        18 => 8, // Ar
+        19 => 1, // K
+        20 => 2, // Ca
         // Transition metals (Sc-Zn)
-        21 => 3, 22 => 4, 23 => 5, 24 => 6, 25 => 7,
-        26 => 8, 27 => 9, 28 => 10, 29 => 2, 30 => 2,
-        31 => 3,  // Ga
-        32 => 4,  // Ge
-        33 => 5,  // As
-        34 => 6,  // Se
-        35 => 7,  // Br
-        36 => 8,  // Kr
-        37 => 1,  // Rb
-        38 => 2,  // Sr
+        21 => 3,
+        22 => 4,
+        23 => 5,
+        24 => 6,
+        25 => 7,
+        26 => 8,
+        27 => 9,
+        28 => 10,
+        29 => 2,
+        30 => 2,
+        31 => 3, // Ga
+        32 => 4, // Ge
+        33 => 5, // As
+        34 => 6, // Se
+        35 => 7, // Br
+        36 => 8, // Kr
+        37 => 1, // Rb
+        38 => 2, // Sr
         // Transition metals (Y-Cd)
-        39 => 3, 40 => 4, 41 => 5, 42 => 6, 43 => 7,
-        44 => 8, 45 => 9, 46 => 10, 47 => 2, 48 => 2,
-        49 => 3,  // In
-        50 => 4,  // Sn
-        51 => 5,  // Sb
-        52 => 6,  // Te
-        53 => 7,  // I
-        54 => 8,  // Xe
+        39 => 3,
+        40 => 4,
+        41 => 5,
+        42 => 6,
+        43 => 7,
+        44 => 8,
+        45 => 9,
+        46 => 10,
+        47 => 2,
+        48 => 2,
+        49 => 3, // In
+        50 => 4, // Sn
+        51 => 5, // Sb
+        52 => 6, // Te
+        53 => 7, // I
+        54 => 8, // Xe
         // 3rd-row transition metals (Hf-Hg): 5d + 6s electrons
         55 => 1,  // Cs
         56 => 2,  // Ba
@@ -268,7 +284,13 @@ pub const fn outer_electrons(atomic_number: u8) -> u8 {
         82 => 4,  // Pb
         83 => 5,  // Bi
         // For other elements, use simplified model
-        _ => if atomic_number % 10 < 8 { atomic_number % 10 } else { 8 },
+        _ => {
+            if atomic_number % 10 < 8 {
+                atomic_number % 10
+            } else {
+                8
+            }
+        }
     }
 }
 
@@ -401,6 +423,9 @@ pub fn symbol_to_atomic_number(symbol: &str) -> Option<u8> {
         "s" => Some(16),  // aromatic sulfur
         "p" => Some(15),  // aromatic phosphorus
         "b" => Some(5),   // aromatic boron
+        "as" => Some(33), // aromatic arsenic (bracket form)
+        "se" => Some(34), // aromatic selenium (bracket form)
+        "te" => Some(52), // aromatic tellurium (bracket form)
         _ => None,
     }
 }
@@ -408,7 +433,7 @@ pub fn symbol_to_atomic_number(symbol: &str) -> Option<u8> {
 /// Check if character is an aromatic SMILES atom symbol.
 #[inline]
 pub fn is_aromatic_symbol(c: char) -> bool {
-    matches!(c, 'b' | 'c' | 'n' | 'o' | 'p' | 's')
+    matches!(c, 'a' | 'b' | 'c' | 'n' | 'o' | 'p' | 's' | 't')
 }
 
 #[cfg(test)]
@@ -417,7 +442,7 @@ mod tests {
 
     #[test]
     fn test_atomic_masses() {
-        assert_eq!(ATOMIC_MASSES[1], 1.008);  // H
+        assert_eq!(ATOMIC_MASSES[1], 1.008); // H
         assert_eq!(ATOMIC_MASSES[6], 12.011); // C
         assert_eq!(ATOMIC_MASSES[8], 15.999); // O
     }
@@ -427,15 +452,15 @@ mod tests {
         assert_eq!(symbol_to_atomic_number("C"), Some(6));
         assert_eq!(symbol_to_atomic_number("N"), Some(7));
         assert_eq!(symbol_to_atomic_number("Cl"), Some(17));
-        assert_eq!(symbol_to_atomic_number("c"), Some(6));  // aromatic
+        assert_eq!(symbol_to_atomic_number("c"), Some(6)); // aromatic
+        assert_eq!(symbol_to_atomic_number("te"), Some(52)); // aromatic bracket tellurium
         assert_eq!(symbol_to_atomic_number("Xx"), None);
     }
 
     #[test]
     fn test_valences() {
-        assert_eq!(get_valences(6), &[4]);      // C
-        assert_eq!(get_valences(7), &[3, 5]);   // N
+        assert_eq!(get_valences(6), &[4]); // C
+        assert_eq!(get_valences(7), &[3, 5]); // N
         assert_eq!(get_valences(16), &[2, 4, 6]); // S
     }
 }
-

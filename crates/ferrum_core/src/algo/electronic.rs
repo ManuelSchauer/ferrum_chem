@@ -36,35 +36,175 @@ struct ENParams {
     d: f64, // a + b + c
 }
 
-const H: ENParams = ENParams { a: 7.17, b: 6.24, c: -0.56, d: 12.85 };
-const C_SP3: ENParams = ENParams { a: 7.98, b: 9.18, c: 1.88, d: 19.04 };
-const C_SP2: ENParams = ENParams { a: 8.79, b: 9.32, c: 1.51, d: 19.62 };
-const C_SP: ENParams = ENParams { a: 10.39, b: 9.45, c: 0.73, d: 20.57 };
-const N_SP3: ENParams = ENParams { a: 11.54, b: 10.82, c: 1.36, d: 23.72 };
-const N_SP2: ENParams = ENParams { a: 12.87, b: 11.15, c: 0.85, d: 24.87 };
-const N_SP: ENParams = ENParams { a: 15.68, b: 11.70, c: -0.27, d: 27.11 };
-const O_SP3: ENParams = ENParams { a: 14.18, b: 12.92, c: 1.39, d: 28.49 };
-const O_SP2: ENParams = ENParams { a: 17.07, b: 13.79, c: 0.47, d: 31.33 };
-const F_PARAMS: ENParams = ENParams { a: 14.66, b: 13.85, c: 2.31, d: 30.82 };
-const CL: ENParams = ENParams { a: 11.00, b: 9.69, c: 1.35, d: 22.04 };
-const BR: ENParams = ENParams { a: 10.08, b: 8.47, c: 1.16, d: 19.71 };
-const I_PARAMS: ENParams = ENParams { a: 9.90, b: 7.96, c: 0.96, d: 18.82 };
-const S_SP3: ENParams = ENParams { a: 10.14, b: 9.13, c: 1.38, d: 20.65 };
-const S_SO: ENParams = ENParams { a: 10.14, b: 9.13, c: 1.38, d: 20.65 };
-const S_SO2: ENParams = ENParams { a: 12.00, b: 10.81, c: 1.20, d: 24.01 };
-const S_SP2: ENParams = ENParams { a: 10.88, b: 9.49, c: 1.33, d: 21.70 };
-const P_SP3: ENParams = ENParams { a: 8.90, b: 8.24, c: 0.96, d: 18.10 };
-const P_SP2: ENParams = ENParams { a: 9.665, b: 8.530, c: 0.735, d: 18.93 };
+const H: ENParams = ENParams {
+    a: 7.17,
+    b: 6.24,
+    c: -0.56,
+    d: 12.85,
+};
+const C_SP3: ENParams = ENParams {
+    a: 7.98,
+    b: 9.18,
+    c: 1.88,
+    d: 19.04,
+};
+const C_SP2: ENParams = ENParams {
+    a: 8.79,
+    b: 9.32,
+    c: 1.51,
+    d: 19.62,
+};
+const C_SP: ENParams = ENParams {
+    a: 10.39,
+    b: 9.45,
+    c: 0.73,
+    d: 20.57,
+};
+const N_SP3: ENParams = ENParams {
+    a: 11.54,
+    b: 10.82,
+    c: 1.36,
+    d: 23.72,
+};
+const N_SP2: ENParams = ENParams {
+    a: 12.87,
+    b: 11.15,
+    c: 0.85,
+    d: 24.87,
+};
+const N_SP: ENParams = ENParams {
+    a: 15.68,
+    b: 11.70,
+    c: -0.27,
+    d: 27.11,
+};
+const O_SP3: ENParams = ENParams {
+    a: 14.18,
+    b: 12.92,
+    c: 1.39,
+    d: 28.49,
+};
+const O_SP2: ENParams = ENParams {
+    a: 17.07,
+    b: 13.79,
+    c: 0.47,
+    d: 31.33,
+};
+const F_PARAMS: ENParams = ENParams {
+    a: 14.66,
+    b: 13.85,
+    c: 2.31,
+    d: 30.82,
+};
+const CL: ENParams = ENParams {
+    a: 11.00,
+    b: 9.69,
+    c: 1.35,
+    d: 22.04,
+};
+const BR: ENParams = ENParams {
+    a: 10.08,
+    b: 8.47,
+    c: 1.16,
+    d: 19.71,
+};
+const I_PARAMS: ENParams = ENParams {
+    a: 9.90,
+    b: 7.96,
+    c: 0.96,
+    d: 18.82,
+};
+const S_SP3: ENParams = ENParams {
+    a: 10.14,
+    b: 9.13,
+    c: 1.38,
+    d: 20.65,
+};
+const S_SO: ENParams = ENParams {
+    a: 10.14,
+    b: 9.13,
+    c: 1.38,
+    d: 20.65,
+};
+const S_SO2: ENParams = ENParams {
+    a: 12.00,
+    b: 10.81,
+    c: 1.20,
+    d: 24.01,
+};
+const S_SP2: ENParams = ENParams {
+    a: 10.88,
+    b: 9.49,
+    c: 1.33,
+    d: 21.70,
+};
+const P_SP3: ENParams = ENParams {
+    a: 8.90,
+    b: 8.24,
+    c: 0.96,
+    d: 18.10,
+};
+const P_SP2: ENParams = ENParams {
+    a: 9.665,
+    b: 8.530,
+    c: 0.735,
+    d: 18.93,
+};
 // Additional params from RDKit's additionalParamData (PyBabel-derived)
-const SI_SP3: ENParams = ENParams { a: 7.30, b: 6.567, c: 0.657, d: 14.524 };
-const SI_SP2: ENParams = ENParams { a: 7.905, b: 6.748, c: 0.443, d: 15.096 };
-const MG_SP3: ENParams = ENParams { a: 3.300, b: 5.587, c: 2.447, d: 11.334 };
-const MG_SP2: ENParams = ENParams { a: 3.565, b: 5.572, c: 2.197, d: 11.334 };
-const MG_SP: ENParams = ENParams { a: 4.040, b: 5.472, c: 1.823, d: 11.335 };
-const AL_SP3: ENParams = ENParams { a: 5.375, b: 4.953, c: 0.867, d: 11.195 };
-const AL_SP2: ENParams = ENParams { a: 5.795, b: 5.020, c: 0.695, d: 11.510 };
-const B_SP3: ENParams = ENParams { a: 5.980, b: 6.820, c: 1.605, d: 14.405 };
-const B_SP2: ENParams = ENParams { a: 6.420, b: 6.807, c: 1.322, d: 14.549 };
+const SI_SP3: ENParams = ENParams {
+    a: 7.30,
+    b: 6.567,
+    c: 0.657,
+    d: 14.524,
+};
+const SI_SP2: ENParams = ENParams {
+    a: 7.905,
+    b: 6.748,
+    c: 0.443,
+    d: 15.096,
+};
+const MG_SP3: ENParams = ENParams {
+    a: 3.300,
+    b: 5.587,
+    c: 2.447,
+    d: 11.334,
+};
+const MG_SP2: ENParams = ENParams {
+    a: 3.565,
+    b: 5.572,
+    c: 2.197,
+    d: 11.334,
+};
+const MG_SP: ENParams = ENParams {
+    a: 4.040,
+    b: 5.472,
+    c: 1.823,
+    d: 11.335,
+};
+const AL_SP3: ENParams = ENParams {
+    a: 5.375,
+    b: 4.953,
+    c: 0.867,
+    d: 11.195,
+};
+const AL_SP2: ENParams = ENParams {
+    a: 5.795,
+    b: 5.020,
+    c: 0.695,
+    d: 11.510,
+};
+const B_SP3: ENParams = ENParams {
+    a: 5.980,
+    b: 6.820,
+    c: 1.605,
+    d: 14.405,
+};
+const B_SP2: ENParams = ENParams {
+    a: 6.420,
+    b: 6.807,
+    c: 1.322,
+    d: 14.549,
+};
 
 const NUM_ITERATIONS: usize = 12;
 
@@ -108,14 +248,29 @@ fn effective_hybridization(mol: &Molecule, idx: usize) -> Hybridization {
             _ => {}
         }
         // Check if neighbor participates in pi bonding (for conjugation).
+        // We track two flavours:
+        //   neighbor_has_pi        – neighbour is aromatic OR has any pi bond
+        //   neighbor_is_aromatic   – neighbour atom is itself aromatic
+        //
+        // For C and N atoms the full neighbor_has_pi drives the SP3→SP2
+        // demotion (phenol C, aniline N, enol C, etc.).
+        // For O and S we only allow the demotion when the neighbour is
+        // aromatic (phenol O → SP2) but NOT when it merely has a double bond
+        // to a third atom (ester bridging O, phosphate OH → stay SP3).
+        // This matches RDKit's setHybridization behaviour and fixes the
+        // systematic HallKierAlpha over-negativity caused by ester/phosphate
+        // oxygens being mis-classified as SP2.
         let nbr = &mol.atoms[nbr_idx];
         if nbr.is_aromatic() {
             neighbor_has_pi = true;
         } else {
             for b2 in &mol.bonds {
                 let touches = (b2.source as usize == nbr_idx) || (b2.target as usize == nbr_idx);
-                if touches && matches!(b2.bond_type,
-                    crate::types::BondType::Double | crate::types::BondType::Aromatic)
+                if touches
+                    && matches!(
+                        b2.bond_type,
+                        crate::types::BondType::Double | crate::types::BondType::Aromatic
+                    )
                 {
                     neighbor_has_pi = true;
                     break;
@@ -142,7 +297,11 @@ fn effective_hybridization(mol: &Molecule, idx: usize) -> Hybridization {
     let outer_electrons = outer_shell_electrons(atom.atomic_number);
     let total_valence = total_degree as i32; // each bond uses 1 valence
     let free_electrons = outer_electrons - total_valence - atom.formal_charge as i32;
-    let lone_pairs = if free_electrons > 0 { free_electrons / 2 } else { 0 };
+    let lone_pairs = if free_electrons > 0 {
+        free_electrons / 2
+    } else {
+        0
+    };
     let norbs = total_degree as i32 + lone_pairs;
 
     match norbs {
@@ -150,7 +309,89 @@ fn effective_hybridization(mol: &Molecule, idx: usize) -> Hybridization {
         2 => Hybridization::SP,
         3 => Hybridization::SP2,
         4 => {
-            if total_degree <= 3 && neighbor_has_pi {
+            // RDKit norbs==4 conjugation rules — three separate cases:
+            //
+            // O (atomic_number 8):
+            //   SP2 when any neighbour participates in a pi system, EXCEPT
+            //   hypervalent P and S neighbours are excluded (P=O / S=O do not
+            //   conjugate the O lone pair).
+            //   phenol O      (aromatic C nbr)             → SP2
+            //   anisole O     (aromatic C nbr)             → SP2
+            //   ester O       (C=O nbr, C not hypervalent) → SP2
+            //   COOH-OH       (C=O nbr)                    → SP2
+            //   vinyl ether O (C=C nbr)                    → SP2
+            //   phosphate OH  (P=O nbr, P excluded)        → SP3
+            //   plain ether O (sp3 C nbrs, no pi)          → SP3
+            //
+            // S (atomic_number 16):
+            //   Always SP3 in norbs==4.  S is only SP2 when it directly carries
+            //   a double bond (handled by the has_double branch above) or is in
+            //   an aromatic ring (handled by is_aromatic() at the top).
+            //   Thioether S adjacent to aromatic rings or C=N/C=C systems does
+            //   NOT conjugate in RDKit (confirmed by HallKierAlpha comparison —
+            //   all 0.13-diff failures were thioether S wrongly called SP2).
+            //
+            // N (atomic_number 7):
+            //   Same adjacency-based logic as O, also excluding hypervalent P/S
+            //   neighbours.  Sulfonamide N (N–S(=O)₂) and phosphonamide N are
+            //   SP3; amide N (N–C=O), aniline N (N–C_aromatic), and enamine N
+            //   (N–C=C) remain SP2.
+            //   (All 0.16-diff HallKierAlpha failures were sulfonamide N
+            //   wrongly called SP2 because S=O pi bonds fired neighbor_has_pi.)
+            //
+            // C and everything else:
+            //   Original broad "any pi neighbour" conjugation check.
+
+            // Helper closure: adjacency-based pi-neighbour scan that excludes
+            // hypervalent P/S neighbours.  Used for both O and N.
+            let o_n_conjugated = |atom_idx: usize| -> bool {
+                total_degree <= 3
+                    && mol.adjacency[atom_idx].iter().any(|&bi| {
+                        let b = &mol.bonds[bi as usize];
+                        let nbr_idx2 = if b.source as usize == atom_idx {
+                            b.target as usize
+                        } else {
+                            b.source as usize
+                        };
+                        let nbr = &mol.atoms[nbr_idx2];
+                        // Aromatic neighbour always drives SP2.
+                        if nbr.is_aromatic() {
+                            return true;
+                        }
+                        // Hypervalent P or S: excluded — their =O bonds do not
+                        // conjugate the lone pair on the heteroatom.
+                        if matches!(nbr.atomic_number, 15 | 16) {
+                            return false;
+                        }
+                        // Any other neighbour (C, N, …) with a pi bond to a
+                        // third atom (not the current heteroatom) drives SP2.
+                        mol.adjacency[nbr_idx2].iter().any(|&bi2| {
+                            let b2 = &mol.bonds[bi2 as usize];
+                            let other = if b2.source as usize == nbr_idx2 {
+                                b2.target as usize
+                            } else {
+                                b2.source as usize
+                            };
+                            other != atom_idx
+                                && matches!(
+                                    b2.bond_type,
+                                    crate::types::BondType::Double
+                                        | crate::types::BondType::Aromatic
+                                )
+                        })
+                    })
+            };
+
+            let conjugated = match atom.atomic_number {
+                8 => o_n_conjugated(idx),
+                16 => false, // S in norbs==4 is always SP3 (see comment above)
+                7 => o_n_conjugated(idx),
+                _ => {
+                    // C and other elements: original broad conjugation check.
+                    total_degree <= 3 && neighbor_has_pi
+                }
+            };
+            if conjugated {
                 Hybridization::SP2
             } else {
                 Hybridization::SP3
@@ -164,7 +405,7 @@ fn effective_hybridization(mol: &Molecule, idx: usize) -> Hybridization {
 fn outer_shell_electrons(atomic_num: u8) -> i32 {
     match atomic_num {
         1 => 1,
-        5 => 3,  // B
+        5 => 3, // B
         6 => 4,
         7 => 5,
         8 => 6,
@@ -237,11 +478,18 @@ fn get_params(mol: &Molecule, idx: usize) -> Option<ENParams> {
                 Hybridization::SP => Some(S_SP3), // fallback
                 _ => {
                     // Count bonded oxygens for so/so2 detection
-                    let n_o = mol.adjacency[idx].iter().filter(|&&bi| {
-                        let b = &mol.bonds[bi as usize];
-                        let other = if b.source as usize == idx { b.target as usize } else { b.source as usize };
-                        mol.atoms[other].atomic_number == 8
-                    }).count();
+                    let n_o = mol.adjacency[idx]
+                        .iter()
+                        .filter(|&&bi| {
+                            let b = &mol.bonds[bi as usize];
+                            let other = if b.source as usize == idx {
+                                b.target as usize
+                            } else {
+                                b.source as usize
+                            };
+                            mol.atoms[other].atomic_number == 8
+                        })
+                        .count();
                     match n_o {
                         2.. => Some(S_SO2),
                         1 => Some(S_SO),
@@ -249,7 +497,7 @@ fn get_params(mol: &Molecule, idx: usize) -> Option<ENParams> {
                     }
                 }
             }
-        },
+        }
         17 => Some(CL),
         35 => Some(BR),
         53 => Some(I_PARAMS),
@@ -264,18 +512,26 @@ fn get_params(mol: &Molecule, idx: usize) -> Option<ENParams> {
 fn split_charge_conjugated(mol: &Molecule, charges: &mut [f64]) {
     let n = mol.num_atoms();
     // Precompute which atoms have pi bonds (double, triple, or aromatic).
-    let has_pi: Vec<bool> = (0..n).map(|idx| {
-        mol.adjacency[idx].iter().any(|&bi| {
-            let ob = &mol.bonds[bi as usize];
-            matches!(ob.bond_type, crate::types::BondType::Double | crate::types::BondType::Triple | crate::types::BondType::Aromatic)
-                || ob.is_aromatic()
+    let has_pi: Vec<bool> = (0..n)
+        .map(|idx| {
+            mol.adjacency[idx].iter().any(|&bi| {
+                let ob = &mol.bonds[bi as usize];
+                matches!(
+                    ob.bond_type,
+                    crate::types::BondType::Double
+                        | crate::types::BondType::Triple
+                        | crate::types::BondType::Aromatic
+                ) || ob.is_aromatic()
+            })
         })
-    }).collect();
+        .collect();
 
     // A bond is conjugated if at least one endpoint has a pi bond.
-    let bond_is_conjugated: Vec<bool> = mol.bonds.iter().map(|b| {
-        has_pi[b.source as usize] || has_pi[b.target as usize]
-    }).collect();
+    let bond_is_conjugated: Vec<bool> = mol
+        .bonds
+        .iter()
+        .map(|b| has_pi[b.source as usize] || has_pi[b.target as usize])
+        .collect();
 
     for i in 0..n {
         let fc = mol.atoms[i].formal_charge;
@@ -288,16 +544,32 @@ fn split_charge_conjugated(mol: &Molecule, charges: &mut [f64]) {
 
         // Walk 2 conjugated bonds: i → neighbor aax → yax
         for &bi in &mol.adjacency[i] {
-            if !bond_is_conjugated[bi as usize] { continue; }
+            if !bond_is_conjugated[bi as usize] {
+                continue;
+            }
             let bond = &mol.bonds[bi as usize];
-            let aax = if bond.source as usize == i { bond.target as usize } else { bond.source as usize };
+            let aax = if bond.source as usize == i {
+                bond.target as usize
+            } else {
+                bond.source as usize
+            };
 
             for &bi2 in &mol.adjacency[aax] {
-                if bi2 == bi { continue; } // Skip the bond we came from
-                if !bond_is_conjugated[bi2 as usize] { continue; }
+                if bi2 == bi {
+                    continue;
+                } // Skip the bond we came from
+                if !bond_is_conjugated[bi2 as usize] {
+                    continue;
+                }
                 let bond2 = &mol.bonds[bi2 as usize];
-                let yax = if bond2.source as usize == aax { bond2.target as usize } else { bond2.source as usize };
-                if yax == i { continue; } // Skip self
+                let yax = if bond2.source as usize == aax {
+                    bond2.target as usize
+                } else {
+                    bond2.source as usize
+                };
+                if yax == i {
+                    continue;
+                } // Skip self
                 if mol.atoms[yax].atomic_number == anum && !marker.contains(&yax) {
                     total_formal += mol.atoms[yax].formal_charge as f64;
                     marker.push(yax);
@@ -340,12 +612,20 @@ pub fn compute_gasteiger_charges(mol: &Molecule) -> Vec<f64> {
                 // Flood-fill NaN to all atoms in this connected component
                 let mut stack = vec![i];
                 while let Some(idx) = stack.pop() {
-                    if nan_atoms[idx] { continue; }
+                    if nan_atoms[idx] {
+                        continue;
+                    }
                     nan_atoms[idx] = true;
                     for &bond_idx in &mol.adjacency[idx] {
                         let bond = &mol.bonds[bond_idx as usize];
-                        let other = if bond.source as usize == idx { bond.target as usize } else { bond.source as usize };
-                        if !nan_atoms[other] { stack.push(other); }
+                        let other = if bond.source as usize == idx {
+                            bond.target as usize
+                        } else {
+                            bond.source as usize
+                        };
+                        if !nan_atoms[other] {
+                            stack.push(other);
+                        }
                     }
                 }
             }
@@ -375,7 +655,9 @@ pub fn compute_gasteiger_charges(mol: &Molecule) -> Vec<f64> {
 
         // Compute electronegativity for each atom.
         for i in 0..n {
-            if nan_atoms[i] { continue; }
+            if nan_atoms[i] {
+                continue;
+            }
             if let Some(p) = &params[i] {
                 chi[i] = p.a + p.b * q[i] + p.c * q[i] * q[i];
             }
@@ -385,7 +667,9 @@ pub fn compute_gasteiger_charges(mol: &Molecule) -> Vec<f64> {
         for bond in &mol.bonds {
             let i = bond.source as usize;
             let j = bond.target as usize;
-            if nan_atoms[i] || nan_atoms[j] { continue; }
+            if nan_atoms[i] || nan_atoms[j] {
+                continue;
+            }
 
             let (pi, pj) = match (&params[i], &params[j]) {
                 (Some(a), Some(b)) => (a, b),
@@ -404,7 +688,9 @@ pub fn compute_gasteiger_charges(mol: &Molecule) -> Vec<f64> {
 
         // Charge transfer between each heavy atom and its implicit H atoms.
         for i in 0..n {
-            if nan_atoms[i] { continue; }
+            if nan_atoms[i] {
+                continue;
+            }
             let nh = n_h[i] as usize;
             if nh == 0 {
                 continue;
@@ -484,8 +770,16 @@ mod tests {
         let q = compute_gasteiger_charges(&mol);
         let c_idx = mol.atoms.iter().position(|a| a.atomic_number == 6).unwrap();
         let o_idx = mol.atoms.iter().position(|a| a.atomic_number == 8).unwrap();
-        assert!(q[c_idx] > 0.0, "C in formaldehyde should be positive: {}", q[c_idx]);
-        assert!(q[o_idx] < 0.0, "O in formaldehyde should be negative: {}", q[o_idx]);
+        assert!(
+            q[c_idx] > 0.0,
+            "C in formaldehyde should be positive: {}",
+            q[c_idx]
+        );
+        assert!(
+            q[o_idx] < 0.0,
+            "O in formaldehyde should be negative: {}",
+            q[o_idx]
+        );
     }
 
     #[test]
@@ -494,7 +788,11 @@ mod tests {
         let q = charges("CCO");
         let mol = parse_smiles("CCO").unwrap();
         let o_idx = mol.atoms.iter().position(|a| a.atomic_number == 8).unwrap();
-        assert!(q[o_idx] < -0.1, "O in ethanol should be negative: {}", q[o_idx]);
+        assert!(
+            q[o_idx] < -0.1,
+            "O in ethanol should be negative: {}",
+            q[o_idx]
+        );
     }
 
     #[test]
@@ -505,7 +803,11 @@ mod tests {
 
         // Find carbonyl C (bonded to =O), carbonyl O, hydroxyl O
         let carbonyl_c = 1; // atom index 1 in CC(=O)O
-        assert!(q[carbonyl_c] > 0.1, "Carbonyl C should be positive: {}", q[carbonyl_c]);
+        assert!(
+            q[carbonyl_c] > 0.1,
+            "Carbonyl C should be positive: {}",
+            q[carbonyl_c]
+        );
 
         // Both oxygens should be negative
         for (i, atom) in mol.atoms.iter().enumerate() {
@@ -520,7 +822,10 @@ mod tests {
         let mol = parse_smiles("c1ccccc1").unwrap();
         let q = compute_gasteiger_charges(&mol);
         // All carbons in benzene should have nearly identical charges.
-        let c_charges: Vec<f64> = mol.atoms.iter().enumerate()
+        let c_charges: Vec<f64> = mol
+            .atoms
+            .iter()
+            .enumerate()
             .filter(|(_, a)| a.atomic_number == 6)
             .map(|(i, _)| q[i])
             .collect();
@@ -535,7 +840,11 @@ mod tests {
         let mol = parse_smiles("c1ccc(N)cc1").unwrap();
         let q = compute_gasteiger_charges(&mol);
         let n_idx = mol.atoms.iter().position(|a| a.atomic_number == 7).unwrap();
-        assert!(q[n_idx] < -0.05, "N in aniline should be negative: {}", q[n_idx]);
+        assert!(
+            q[n_idx] < -0.05,
+            "N in aniline should be negative: {}",
+            q[n_idx]
+        );
     }
 
     #[test]
@@ -543,7 +852,11 @@ mod tests {
         let mol = parse_smiles("CN").unwrap();
         let q = compute_gasteiger_charges(&mol);
         let n_idx = mol.atoms.iter().position(|a| a.atomic_number == 7).unwrap();
-        assert!(q[n_idx] < -0.1, "N in methylamine should be negative: {}", q[n_idx]);
+        assert!(
+            q[n_idx] < -0.1,
+            "N in methylamine should be negative: {}",
+            q[n_idx]
+        );
     }
 
     #[test]
@@ -557,8 +870,10 @@ mod tests {
             let total_q: f64 = q.iter().sum();
             // For neutral molecules, sum of heavy atom charges should be negative
             // (implicit H carry the balancing positive charge).
-            assert!(total_q < 0.1,
-                "Heavy atom charge sum for {smiles} should be <=0: {total_q}");
+            assert!(
+                total_q < 0.1,
+                "Heavy atom charge sum for {smiles} should be <=0: {total_q}"
+            );
         }
     }
 
@@ -570,7 +885,11 @@ mod tests {
         let f_idx = mol.atoms.iter().position(|a| a.atomic_number == 9).unwrap();
         let c_idx = mol.atoms.iter().position(|a| a.atomic_number == 6).unwrap();
         assert!(q[f_idx] < 0.0, "F should be negative: {}", q[f_idx]);
-        assert!(q[c_idx] > 0.0, "C bonded to F should be positive: {}", q[c_idx]);
+        assert!(
+            q[c_idx] > 0.0,
+            "C bonded to F should be positive: {}",
+            q[c_idx]
+        );
     }
 
     #[test]
@@ -578,7 +897,10 @@ mod tests {
         // ClC(Cl)Cl
         let mol = parse_smiles("ClC(Cl)Cl").unwrap();
         let q = compute_gasteiger_charges(&mol);
-        let cl_charges: Vec<f64> = mol.atoms.iter().enumerate()
+        let cl_charges: Vec<f64> = mol
+            .atoms
+            .iter()
+            .enumerate()
             .filter(|(_, a)| a.atomic_number == 17)
             .map(|(i, _)| q[i])
             .collect();
@@ -601,12 +923,19 @@ mod tests {
     fn assert_charges(smiles: &str, rdkit_ref: &[f64]) {
         let mol = parse_smiles(smiles).unwrap();
         let q = compute_gasteiger_charges(&mol);
-        assert_eq!(q.len(), rdkit_ref.len(),
-            "{smiles}: atom count mismatch (ours={}, rdkit={})", q.len(), rdkit_ref.len());
+        assert_eq!(
+            q.len(),
+            rdkit_ref.len(),
+            "{smiles}: atom count mismatch (ours={}, rdkit={})",
+            q.len(),
+            rdkit_ref.len()
+        );
         for (i, (&ours, &ref_v)) in q.iter().zip(rdkit_ref).enumerate() {
-            assert!((ours - ref_v).abs() < TOL,
+            assert!(
+                (ours - ref_v).abs() < TOL,
                 "{smiles} atom {i}: ours={ours:.4}, rdkit={ref_v:.4}, diff={:.4}",
-                (ours - ref_v).abs());
+                (ours - ref_v).abs()
+            );
         }
     }
 
@@ -686,21 +1015,30 @@ mod tests {
     fn test_rdkit_phenol() {
         // c1ccc(O)cc1 → 7 atoms
         // RDKit: C -0.062, C -0.0586, C -0.0202, C +0.1151, O -0.5080, C -0.0202, C -0.0586
-        assert_charges("c1ccc(O)cc1", &[-0.062, -0.0586, -0.0202, 0.1151, -0.5080, -0.0202, -0.0586]);
+        assert_charges(
+            "c1ccc(O)cc1",
+            &[-0.062, -0.0586, -0.0202, 0.1151, -0.5080, -0.0202, -0.0586],
+        );
     }
 
     #[test]
     fn test_rdkit_pyridine() {
         // c1ccncc1 → 6 atoms
         // RDKit: C -0.0592, C -0.0438, C +0.0267, N -0.2647, C +0.0267, C -0.0438
-        assert_charges("c1ccncc1", &[-0.0592, -0.0438, 0.0267, -0.2647, 0.0267, -0.0438]);
+        assert_charges(
+            "c1ccncc1",
+            &[-0.0592, -0.0438, 0.0267, -0.2647, 0.0267, -0.0438],
+        );
     }
 
     #[test]
     fn test_rdkit_aniline() {
         // c1ccc(N)cc1 → 7 atoms
         // RDKit: C -0.0621, C -0.0602, C -0.0392, C +0.0313, N -0.3987, C -0.0392, C -0.0602
-        assert_charges("c1ccc(N)cc1", &[-0.0621, -0.0602, -0.0392, 0.0313, -0.3987, -0.0392, -0.0602]);
+        assert_charges(
+            "c1ccc(N)cc1",
+            &[-0.0621, -0.0602, -0.0392, 0.0313, -0.3987, -0.0392, -0.0602],
+        );
     }
 
     #[test]
@@ -738,5 +1076,246 @@ mod tests {
         let q = compute_gasteiger_charges(&mol);
         println!("Grignard charges: {:?}", q);
         assert!(q[0] > 0.3, "Mg should be positive: {}", q[0]);
+    }
+
+    // ===================================================================
+    // Hybridization unit tests – effective_hybridization O/S norbs==4 rule
+    //
+    // These encode the three-case rule that drives correct HallKierAlpha
+    // values for ester/phosphate-containing molecules:
+    //   Case 1: aromatic neighbour          → SP2  (phenol, anisole)
+    //   Case 2: terminal O-H, C nbr w/ pi   → SP2  (COOH, enol)
+    //   else                                → SP3  (ester bridge, P-OH, ether)
+    //
+    // Validated against RDKit's setHybridization and Gasteiger charges.
+    // ===================================================================
+
+    fn hyb_of(smiles: &str, atom_idx: usize) -> crate::types::Hybridization {
+        let mol = parse_smiles(smiles).unwrap();
+        effective_hybridization(&mol, atom_idx)
+    }
+
+    // -- carbonyl =O: direct double bond → SP2 via Stage 3 (not norbs path) --
+    #[test]
+    fn test_hyb_carbonyl_o_sp2() {
+        // C=O: C(0) O(1)  — direct double bond, Stage 3 fires before norbs
+        assert_eq!(
+            hyb_of("C=O", 1),
+            crate::types::Hybridization::SP2,
+            "carbonyl =O must be SP2"
+        );
+    }
+
+    // -- ester bridging O: C=O neighbour (not hypervalent) → SP2 (RDKit-confirmed) --
+    #[test]
+    fn test_hyb_ester_bridging_o_sp2() {
+        // CC(=O)OC: C(0) C(1) =O(2) bridging-O(3) C(4)
+        // O(3): C(1) neighbour has C=O pi bond, C is not P/S → SP2
+        assert_eq!(
+            hyb_of("CC(=O)OC", 3),
+            crate::types::Hybridization::SP2,
+            "ester bridging O must be SP2 (C=O neighbour, RDKit-confirmed)"
+        );
+    }
+
+    // -- carboxylic-acid OH: terminal O-H, C neighbour has C=O → SP2 --
+    #[test]
+    fn test_hyb_carboxylic_acid_oh_sp2() {
+        // CC(=O)O: C(0) C(1) =O(2) OH(3)
+        // O(3): C(1) has C=O to O(2) ≠ O(3) → SP2
+        assert_eq!(
+            hyb_of("CC(=O)O", 3),
+            crate::types::Hybridization::SP2,
+            "carboxylic-acid OH must be SP2"
+        );
+    }
+
+    // -- phenol OH: direct aromatic C neighbour → SP2 (Case 1) --
+    #[test]
+    fn test_hyb_phenol_o_sp2() {
+        let mol = parse_smiles("c1ccc(O)cc1").unwrap();
+        let o_idx = mol.atoms.iter().position(|a| a.atomic_number == 8).unwrap();
+        assert_eq!(
+            effective_hybridization(&mol, o_idx),
+            crate::types::Hybridization::SP2,
+            "phenol OH must be SP2 (aromatic neighbour)"
+        );
+    }
+
+    // -- anisole O: one heavy nbr is aromatic C, other is aliphatic C → SP2 (Case 1) --
+    #[test]
+    fn test_hyb_anisole_o_sp2() {
+        // COc1ccccc1: C(0) O(1) aromatic-ring(2-7)
+        let mol = parse_smiles("COc1ccccc1").unwrap();
+        let o_idx = mol.atoms.iter().position(|a| a.atomic_number == 8).unwrap();
+        assert_eq!(
+            effective_hybridization(&mol, o_idx),
+            crate::types::Hybridization::SP2,
+            "anisole O (one aromatic-ring nbr) must be SP2"
+        );
+    }
+
+    // -- plain ether O: two aliphatic C neighbours, no pi → SP3 --
+    #[test]
+    fn test_hyb_ether_o_sp3() {
+        // COC: C(0) O(1) C(2)
+        assert_eq!(
+            hyb_of("COC", 1),
+            crate::types::Hybridization::SP3,
+            "ether O must be SP3"
+        );
+    }
+
+    // -- phosphate OH: terminal O-H but neighbour is P (not C) → SP3 --
+    #[test]
+    fn test_hyb_phosphate_oh_sp3() {
+        // OP(=O)(O)O: O(0) P(1) =O(2) O(3)H O(4)H
+        // All three P–OH oxygens must be SP3; only the =O is SP2.
+        let mol = parse_smiles("OP(=O)(O)O").unwrap();
+        for (i, atom) in mol.atoms.iter().enumerate() {
+            if atom.atomic_number != 8 {
+                continue;
+            }
+            let has_double = mol.adjacency[i]
+                .iter()
+                .any(|&bi| mol.bonds[bi as usize].bond_type == crate::types::BondType::Double);
+            if has_double {
+                continue; // skip the =O, which is SP2 via Stage 3
+            }
+            assert_eq!(
+                effective_hybridization(&mol, i),
+                crate::types::Hybridization::SP3,
+                "phosphate OH oxygen {i} must be SP3 (P neighbour, not C)"
+            );
+        }
+    }
+
+    // -- thioether S adjacent to aromatic ring: norbs==4, always SP3 (not SP2) --
+    #[test]
+    fn test_hyb_thioanisole_s_sp3() {
+        // CSc1ccccc1 — PhSCH3, the thioether S has one aromatic-C neighbour
+        // but S in norbs==4 is always SP3 (unlike phenol O which is SP2).
+        let mol = parse_smiles("CSc1ccccc1").unwrap();
+        let s_idx = mol
+            .atoms
+            .iter()
+            .position(|a| a.atomic_number == 16)
+            .unwrap();
+        assert_eq!(
+            effective_hybridization(&mol, s_idx),
+            crate::types::Hybridization::SP3,
+            "thioether S adjacent to aromatic ring must be SP3 (norbs==4 S rule)"
+        );
+    }
+
+    // -- thioether S adjacent to C=N (thiazolidine-like): still SP3 --
+    #[test]
+    fn test_hyb_thiazolidine_s_sp3() {
+        // C1(=N)SCC1 — 4,5-dihydrothiazole ring; S sees a C=N neighbour
+        // but S in norbs==4 must still be SP3.
+        let mol = parse_smiles("C1(=N)SCC1").unwrap();
+        let s_idx = mol
+            .atoms
+            .iter()
+            .position(|a| a.atomic_number == 16)
+            .unwrap();
+        assert_eq!(
+            effective_hybridization(&mol, s_idx),
+            crate::types::Hybridization::SP3,
+            "thiazolidine S (C=N neighbour) must be SP3"
+        );
+    }
+
+    // -- sulfonamide N: N–S(=O)₂ must be SP3 (hypervalent S excluded) --
+    #[test]
+    fn test_hyb_sulfonamide_n_sp3() {
+        // CN(C)S(=O)(=O)c1ccccc1 — N-dimethylbenzenesulfonamide
+        // The amine N is bonded to the sulfonyl S, whose S=O bonds fire
+        // neighbor_has_pi=true in the old broad check — but with the
+        // adjacency-based exclusion of hypervalent S, N must be SP3.
+        let mol = parse_smiles("CN(C)S(=O)(=O)c1ccccc1").unwrap();
+        // Find the sulfonamide N (bonded to S, not in the aromatic ring)
+        let n_idx = mol
+            .atoms
+            .iter()
+            .enumerate()
+            .find(|(i, a)| {
+                a.atomic_number == 7
+                    && !a.is_aromatic()
+                    && mol.adjacency[*i].iter().any(|&bi| {
+                        let b = &mol.bonds[bi as usize];
+                        let nb = if b.source as usize == *i {
+                            b.target as usize
+                        } else {
+                            b.source as usize
+                        };
+                        mol.atoms[nb].atomic_number == 16
+                    })
+            })
+            .map(|(i, _)| i)
+            .expect("sulfonamide N not found");
+        assert_eq!(
+            effective_hybridization(&mol, n_idx),
+            crate::types::Hybridization::SP3,
+            "sulfonamide N (N–S(=O)₂) must be SP3"
+        );
+    }
+
+    // -- amide N: N–C=O must still be SP2 (C is non-hypervalent, not excluded) --
+    #[test]
+    fn test_hyb_amide_n_sp2() {
+        // CC(=O)NC — N-methylacetamide; amide N must be SP2.
+        let mol = parse_smiles("CC(=O)NC").unwrap();
+        let n_idx = mol
+            .atoms
+            .iter()
+            .position(|a| a.atomic_number == 7)
+            .expect("N not found");
+        assert_eq!(
+            effective_hybridization(&mol, n_idx),
+            crate::types::Hybridization::SP2,
+            "amide N (N–C=O) must be SP2"
+        );
+    }
+
+    // -- aniline N: N bonded to aromatic C must still be SP2 --
+    #[test]
+    fn test_hyb_aniline_n_sp2() {
+        // Nc1ccccc1 — aniline; NH₂ bonded to aromatic ring must be SP2.
+        let mol = parse_smiles("Nc1ccccc1").unwrap();
+        let n_idx = mol
+            .atoms
+            .iter()
+            .position(|a| a.atomic_number == 7)
+            .expect("N not found");
+        assert_eq!(
+            effective_hybridization(&mol, n_idx),
+            crate::types::Hybridization::SP2,
+            "aniline N (aromatic-C neighbour) must be SP2"
+        );
+    }
+
+    // -- phosphate bridging O: two heavy neighbours (C and P), neither aromatic → SP3 --
+    #[test]
+    fn test_hyb_phosphate_bridging_o_sp3() {
+        // COP(=O)(OC)O — two C–O–P bridging oxygens + one P–OH
+        // All non-double-bond oxygens must be SP3.
+        let mol = parse_smiles("COP(=O)(OC)O").unwrap();
+        for (i, atom) in mol.atoms.iter().enumerate() {
+            if atom.atomic_number != 8 {
+                continue;
+            }
+            let has_double = mol.adjacency[i]
+                .iter()
+                .any(|&bi| mol.bonds[bi as usize].bond_type == crate::types::BondType::Double);
+            if has_double {
+                continue; // skip =O
+            }
+            assert_eq!(
+                effective_hybridization(&mol, i),
+                crate::types::Hybridization::SP3,
+                "phosphate O {i} (bridging or OH) must be SP3"
+            );
+        }
     }
 }

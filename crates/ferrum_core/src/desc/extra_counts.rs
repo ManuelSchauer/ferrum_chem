@@ -14,7 +14,7 @@
 //! - Bertz (1981) JACS 103, 3599 (BertzCT)
 //! - Kier & Hall (1986) Molecular Connectivity (HallKierAlpha)
 
-use super::typed::{DescriptorValue, Descriptor};
+use super::typed::{Descriptor, DescriptorValue};
 use crate::mol::molecule::Molecule;
 use crate::types::{AtomIdx, BondType};
 
@@ -34,12 +34,14 @@ fn compute_fraction_csp3(mol: &Molecule) -> f32 {
     let mut sp3_c = 0u32;
 
     for (i, atom) in mol.atoms.iter().enumerate() {
-        if atom.atomic_number != 6 { continue; }
+        if atom.atomic_number != 6 {
+            continue;
+        }
         total_c += 1;
 
-        let has_triple = mol.adjacency[i].iter().any(|&bi| {
-            mol.bonds[bi as usize].bond_type == BondType::Triple
-        });
+        let has_triple = mol.adjacency[i]
+            .iter()
+            .any(|&bi| mol.bonds[bi as usize].bond_type == BondType::Triple);
         let has_double_or_arom = mol.adjacency[i].iter().any(|&bi| {
             let bt = mol.bonds[bi as usize].bond_type;
             bt == BondType::Double || bt == BondType::Aromatic
@@ -50,11 +52,17 @@ fn compute_fraction_csp3(mol: &Molecule) -> f32 {
         }
     }
 
-    if total_c > 0 { sp3_c as f32 / total_c as f32 } else { 0.0 }
+    if total_c > 0 {
+        sp3_c as f32 / total_c as f32
+    } else {
+        0.0
+    }
 }
 
 impl Descriptor for FractionCSP3 {
-    fn name(&self) -> &str { "FractionCSP3" }
+    fn name(&self) -> &str {
+        "FractionCSP3"
+    }
 
     fn calculate(&self, mol: &mut Molecule) -> DescriptorValue {
         DescriptorValue::Float(compute_fraction_csp3(mol))
@@ -74,7 +82,9 @@ fn ring_all_single_bonds(mol: &Molecule, ring: &[AtomIdx]) -> bool {
             ((bond.source == a1 && bond.target == a2) || (bond.source == a2 && bond.target == a1))
                 && bond.bond_type == BondType::Single
         });
-        if !is_single { return false; }
+        if !is_single {
+            return false;
+        }
     }
     true
 }
@@ -96,11 +106,21 @@ pub fn compute_ring_type_counts(mol: &Molecule) -> [u32; 5] {
         });
         let all_single = ring_all_single_bonds(mol, ring);
 
-        if all_aromatic { counts[0] += 1; }
-        if !any_aromatic { counts[1] += 1; }
-        if all_single { counts[2] += 1; }
-        if all_aromatic && has_heteroatom { counts[3] += 1; }
-        if has_heteroatom { counts[4] += 1; }
+        if all_aromatic {
+            counts[0] += 1;
+        }
+        if !any_aromatic {
+            counts[1] += 1;
+        }
+        if all_single {
+            counts[2] += 1;
+        }
+        if all_aromatic && has_heteroatom {
+            counts[3] += 1;
+        }
+        if has_heteroatom {
+            counts[4] += 1;
+        }
     }
 
     counts
@@ -114,19 +134,53 @@ pub fn compute_ring_type_counts(mol: &Molecule) -> [u32; 5] {
 pub struct NumAmideBonds;
 
 fn compute_num_amide_bonds(mol: &Molecule) -> u32 {
-    use crate::io::smarts::parse_smarts;
-    use crate::algo::iso::count_matches;
-    use once_cell::sync::Lazy;
+    let mut count = 0u32;
 
-    static AMIDE: Lazy<crate::io::smarts::QueryGraph> = Lazy::new(|| {
-        parse_smarts("[NX3][CX3](=[OX1])").expect("valid SMARTS")
-    });
+    for bond in &mol.bonds {
+        if bond.bond_type != crate::types::BondType::Single {
+            continue;
+        }
 
-    count_matches(mol, &AMIDE) as u32
+        let a = bond.source as usize;
+        let b = bond.target as usize;
+        let (n_idx, c_idx) = match (
+            mol.atoms[a].atomic_number,
+            mol.atoms[a].is_aromatic(),
+            mol.atoms[b].atomic_number,
+            mol.atoms[b].is_aromatic(),
+        ) {
+            (7, false, 6, false) => (a, b),
+            (6, false, 7, false) => (b, a),
+            _ => continue,
+        };
+
+        if !mol.adjacency[c_idx].iter().any(|&other_bond_idx| {
+            let other_bond = &mol.bonds[other_bond_idx as usize];
+            if other_bond.bond_type != crate::types::BondType::Double {
+                return false;
+            }
+
+            let other_idx = if other_bond.source == c_idx as u16 {
+                other_bond.target as usize
+            } else {
+                other_bond.source as usize
+            };
+
+            other_idx != n_idx && mol.atoms[other_idx].atomic_number == 8 && !mol.atoms[other_idx].is_aromatic()
+        }) {
+            continue;
+        }
+
+        count += 1;
+    }
+
+    count
 }
 
 impl Descriptor for NumAmideBonds {
-    fn name(&self) -> &str { "NumAmideBonds" }
+    fn name(&self) -> &str {
+        "NumAmideBonds"
+    }
 
     fn calculate(&self, mol: &mut Molecule) -> DescriptorValue {
         DescriptorValue::Int(compute_num_amide_bonds(mol))
@@ -142,15 +196,21 @@ pub struct AromaticAtomFraction;
 
 fn compute_aromatic_atom_fraction(mol: &Molecule) -> f32 {
     let heavy: usize = mol.atoms.iter().filter(|a| a.atomic_number > 1).count();
-    if heavy == 0 { return 0.0; }
-    let aromatic: usize = mol.atoms.iter()
+    if heavy == 0 {
+        return 0.0;
+    }
+    let aromatic: usize = mol
+        .atoms
+        .iter()
         .filter(|a| a.atomic_number > 1 && a.is_aromatic())
         .count();
     aromatic as f32 / heavy as f32
 }
 
 impl Descriptor for AromaticAtomFraction {
-    fn name(&self) -> &str { "AromaticAtomFraction" }
+    fn name(&self) -> &str {
+        "AromaticAtomFraction"
+    }
 
     fn calculate(&self, mol: &mut Molecule) -> DescriptorValue {
         DescriptorValue::Float(compute_aromatic_atom_fraction(mol))
@@ -177,8 +237,12 @@ fn compute_hall_kier_alpha(mol: &Molecule) -> f32 {
     // Lookup table: [SP, SP2, SP3] alpha values per element.
     // None means use the last non-None value.
     for (i, atom) in mol.atoms.iter().enumerate() {
-        if atom.atomic_number == 0 { continue; }
-        if atom.atomic_number == 1 { continue; } // H contributes 0
+        if atom.atomic_number == 0 {
+            continue;
+        }
+        if atom.atomic_number == 1 {
+            continue;
+        } // H contributes 0
 
         let hyb = effective_hybridization_pub(mol, i);
         // hyb index: SP=0, SP2=1, SP3=2
@@ -189,34 +253,39 @@ fn compute_hall_kier_alpha(mol: &Molecule) -> f32 {
         };
 
         let alpha = match atom.atomic_number {
-            6 => {  // C: [-0.22, -0.13, 0.0]
+            6 => {
+                // C: [-0.22, -0.13, 0.0]
                 [-0.22, -0.13, 0.0][hyb_idx]
             }
-            7 => {  // N: [-0.29, -0.20, -0.04]
+            7 => {
+                // N: [-0.29, -0.20, -0.04]
                 [-0.29, -0.20, -0.04][hyb_idx]
             }
-            8 => {  // O: [None, -0.20, -0.04] → SP uses -0.04
+            8 => {
+                // O: [None, -0.20, -0.04] → SP uses -0.04
                 match hyb_idx {
                     1 => -0.20,
                     _ => -0.04,
                 }
             }
-            16 => {  // S: [None, 0.22, 0.35]
+            16 => {
+                // S: [None, 0.22, 0.35]
                 match hyb_idx {
                     1 => 0.22,
                     _ => 0.35,
                 }
             }
-            15 => {  // P: [None, 0.30, 0.43]
+            15 => {
+                // P: [None, 0.30, 0.43]
                 match hyb_idx {
                     1 => 0.30,
                     _ => 0.43,
                 }
             }
-            9 => -0.07,     // F: always -0.07
-            17 => 0.29,     // Cl: always 0.29
-            35 => 0.48,     // Br: always 0.48
-            53 => 0.73,     // I: always 0.73
+            9 => -0.07, // F: always -0.07
+            17 => 0.29, // Cl: always 0.29
+            35 => 0.48, // Br: always 0.48
+            53 => 0.73, // I: always 0.73
             _ => {
                 // Fallback: Rb0(element)/Rb0(C) - 1
                 let ra = crate::desc::vsa::rb0_radius(atom.atomic_number);
@@ -237,7 +306,9 @@ pub fn compute_hall_kier_alpha_f64(mol: &Molecule) -> f64 {
     let rb0_c = 0.77f64;
 
     for (i, atom) in mol.atoms.iter().enumerate() {
-        if atom.atomic_number == 0 || atom.atomic_number == 1 { continue; }
+        if atom.atomic_number == 0 || atom.atomic_number == 1 {
+            continue;
+        }
 
         let hyb = effective_hybridization_pub(mol, i);
         let hyb_idx = match hyb {
@@ -249,9 +320,18 @@ pub fn compute_hall_kier_alpha_f64(mol: &Molecule) -> f64 {
         let alpha = match atom.atomic_number {
             6 => [-0.22, -0.13, 0.0][hyb_idx],
             7 => [-0.29, -0.20, -0.04][hyb_idx],
-            8 => match hyb_idx { 1 => -0.20, _ => -0.04 },
-            16 => match hyb_idx { 1 => 0.22, _ => 0.35 },
-            15 => match hyb_idx { 1 => 0.30, _ => 0.43 },
+            8 => match hyb_idx {
+                1 => -0.20,
+                _ => -0.04,
+            },
+            16 => match hyb_idx {
+                1 => 0.22,
+                _ => 0.35,
+            },
+            15 => match hyb_idx {
+                1 => 0.30,
+                _ => 0.43,
+            },
             9 => -0.07,
             17 => 0.29,
             35 => 0.48,
@@ -267,7 +347,9 @@ pub fn compute_hall_kier_alpha_f64(mol: &Molecule) -> f64 {
 }
 
 impl Descriptor for HallKierAlpha {
-    fn name(&self) -> &str { "HallKierAlpha" }
+    fn name(&self) -> &str {
+        "HallKierAlpha"
+    }
 
     fn calculate(&self, mol: &mut Molecule) -> DescriptorValue {
         DescriptorValue::Float(compute_hall_kier_alpha(mol))
@@ -292,7 +374,9 @@ pub struct BertzCT;
 
 fn compute_bertz_ct(mol: &Molecule) -> f32 {
     let n = mol.num_atoms();
-    if n < 2 { return 0.0; }
+    if n < 2 {
+        return 0.0;
+    }
 
     // Step 1: Build neighbor list and bond order lookup
     let num_bonds = mol.num_bonds();
@@ -316,8 +400,12 @@ fn compute_bertz_ct(mol: &Molecule) -> f32 {
             }
         };
         bond_orders.insert((lo, hi), bo);
-        if !neighbors[a1].contains(&a2) { neighbors[a1].push(a2); }
-        if !neighbors[a2].contains(&a1) { neighbors[a2].push(a1); }
+        if !neighbors[a1].contains(&a2) {
+            neighbors[a1].push(a2);
+        }
+        if !neighbors[a2].contains(&a1) {
+            neighbors[a2].push(a1);
+        }
         degrees[a1] += 1;
         degrees[a2] += 1;
     }
@@ -342,7 +430,8 @@ fn compute_bertz_ct(mol: &Molecule) -> f32 {
     }
 
     // Step 3: Connection counting
-    let mut connection_dict: std::collections::HashMap<Vec<usize>, f64> = std::collections::HashMap::new();
+    let mut connection_dict: std::collections::HashMap<Vec<usize>, f64> =
+        std::collections::HashMap::new();
     let mut atom_type_counts: std::collections::HashMap<u8, u32> = std::collections::HashMap::new();
 
     for atom_idx in 0..n {
@@ -356,7 +445,11 @@ fn compute_bertz_ct(mol: &Molecule) -> f32 {
         for i in 0..num_nbrs {
             let ni = nbrs[i];
             let ni_class = sym_classes[ni];
-            let (lo_i, hi_i) = if atom_idx < ni { (atom_idx, ni) } else { (ni, atom_idx) };
+            let (lo_i, hi_i) = if atom_idx < ni {
+                (atom_idx, ni)
+            } else {
+                (ni, atom_idx)
+            };
             let bo_i = *bond_orders.get(&(lo_i, hi_i)).unwrap_or(&1.0);
 
             // Extra connections from multi-order bonds
@@ -370,7 +463,11 @@ fn compute_bertz_ct(mol: &Molecule) -> f32 {
             for j in (i + 1)..num_nbrs {
                 let nj = nbrs[j];
                 let nj_class = sym_classes[nj];
-                let (lo_j, hi_j) = if atom_idx < nj { (atom_idx, nj) } else { (nj, atom_idx) };
+                let (lo_j, hi_j) = if atom_idx < nj {
+                    (atom_idx, nj)
+                } else {
+                    (nj, atom_idx)
+                };
                 let bo_j = *bond_orders.get(&(lo_j, hi_j)).unwrap_or(&1.0);
                 let num_conn = bo_i * bo_j;
                 let key = vec![ni_class.min(nj_class), hinge_class, ni_class.max(nj_class)];
@@ -402,7 +499,9 @@ fn compute_bertz_ct(mol: &Molecule) -> f32 {
 /// Shannon information entropy: H = -sum(p_i * log2(p_i))
 fn info_entropy(counts: &[f64]) -> f64 {
     let total: f64 = counts.iter().sum();
-    if total <= 0.0 { return 0.0; }
+    if total <= 0.0 {
+        return 0.0;
+    }
     let mut h = 0.0;
     for &c in counts {
         if c > 0.0 {
@@ -414,7 +513,9 @@ fn info_entropy(counts: &[f64]) -> f64 {
 }
 
 impl Descriptor for BertzCT {
-    fn name(&self) -> &str { "BertzCT" }
+    fn name(&self) -> &str {
+        "BertzCT"
+    }
 
     fn calculate(&self, mol: &mut Molecule) -> DescriptorValue {
         DescriptorValue::Float(compute_bertz_ct(mol))
@@ -423,9 +524,12 @@ impl Descriptor for BertzCT {
 
 fn shannon_entropy(counts: &[u32]) -> f64 {
     let total: u32 = counts.iter().sum();
-    if total == 0 { return 0.0; }
+    if total == 0 {
+        return 0.0;
+    }
     let t = total as f64;
-    counts.iter()
+    counts
+        .iter()
         .filter(|&&c| c > 0)
         .map(|&c| {
             let p = c as f64 / t;
@@ -447,19 +551,20 @@ fn shannon_entropy(counts: &[u32]) -> f64 {
 /// Reference: D. Bonchev & N. Trinajstic, J. Chem. Phys. 67, 4517-4533 (1977)
 pub struct Ipc;
 
-fn compute_ipc(mol: &Molecule) -> f32 {
+fn compute_ipc(mol: &Molecule) -> f64 {
     let n = mol.num_atoms();
-    if n < 2 { return 0.0; }
+    if n < 2 {
+        return 0.0;
+    }
 
-    // Build adjacency matrix from topological distance matrix
-    let topo_dist = super::balaban::compute_distance_matrix(mol, false);
+    // Build simple adjacency matrix (unweighted graph).
+    // Use direct bond connectivity instead of distance reconstruction.
     let mut adj = vec![0.0f64; n * n];
-    for i in 0..n {
-        for j in 0..n {
-            if (topo_dist[i * n + j] - 1.0).abs() < 0.01 {
-                adj[i * n + j] = 1.0;
-            }
-        }
+    for bond in &mol.bonds {
+        let i = bond.source as usize;
+        let j = bond.target as usize;
+        adj[i * n + j] = 1.0;
+        adj[j * n + i] = 1.0;
     }
 
     // Characteristic polynomial via Le Verrier-Faddeev-Frame
@@ -510,14 +615,16 @@ fn compute_ipc(mol: &Molecule) -> f32 {
     // Ipc = sum(|coeffs|) * InfoEntropy(|coeffs|)
     let total: f64 = abs_cpoly.iter().sum();
     let ie = info_entropy(&abs_cpoly);
-    (total * ie) as f32
+    total * ie
 }
 
 impl Descriptor for Ipc {
-    fn name(&self) -> &str { "Ipc" }
+    fn name(&self) -> &str {
+        "Ipc"
+    }
 
     fn calculate(&self, mol: &mut Molecule) -> DescriptorValue {
-        DescriptorValue::Float(compute_ipc(mol))
+        DescriptorValue::Float64(compute_ipc(mol))
     }
 }
 
@@ -542,7 +649,9 @@ fn compute_fragment_complexity(mol: &Molecule) -> f32 {
 }
 
 impl Descriptor for FragmentComplexity {
-    fn name(&self) -> &str { "FragmentComplexity" }
+    fn name(&self) -> &str {
+        "FragmentComplexity"
+    }
 
     fn calculate(&self, mol: &mut Molecule) -> DescriptorValue {
         DescriptorValue::Float(compute_fragment_complexity(mol))
@@ -668,6 +777,27 @@ mod tests {
         assert!(v >= 1, "should have amide bonds: {}", v);
     }
 
+    #[test]
+    fn test_amide_caffeine_like_ureide_counts_imino_n_bond() {
+        assert_eq!(calc_int(&NumAmideBonds, "CN1C(=O)N=C2N=CN=C2C1=O"), 3);
+    }
+
+    #[test]
+    fn test_amide_barbituric_acid_aromatic_ureide_does_not_count() {
+        assert_eq!(calc_int(&NumAmideBonds, "O=C1NC(=O)NC(=O)N1"), 0);
+    }
+
+    #[test]
+    fn test_amide_non_aromatic_imino_n_counts() {
+        assert_eq!(
+            calc_int(
+                &NumAmideBonds,
+                "COC1=CC=C(CCN2C=C(C(=O)N=C3N=CC=N3)C3=CC=CC=C3C2=O)C=C1",
+            ),
+            1
+        );
+    }
+
     // -- AromaticAtomFraction --
 
     #[test]
@@ -706,6 +836,87 @@ mod tests {
     fn test_hka_bromine() {
         let v = calc_float(&HallKierAlpha, "CCBr");
         assert!(v > 0.0, "Br makes alpha positive: {}", v);
+    }
+
+    // Exact-value tests that encode the three-case O/S norbs==4 rule.
+    // Expected values derived from the alpha lookup table:
+    //   C_SP3=0.0, C_SP2=-0.13, O_SP2=-0.20, O_SP3=-0.04, P_SP3=0.43
+    //
+    // These are the cases that were systematically wrong before the fix
+    // (ester/phosphate oxygens were promoted to SP2 → alpha too negative).
+
+    #[test]
+    fn test_hka_ester_bridging_o_sp2() {
+        // CC(=O)OC — methyl acetate
+        // C_SP3(0) + C_SP2(-0.13) + O_SP2(-0.20) + O_SP2(-0.20) + C_SP3(0) = -0.53
+        // The bridging O has a C=O neighbour (not hypervalent) → SP2, RDKit-confirmed.
+        let v = calc_float(&HallKierAlpha, "CC(=O)OC");
+        assert!(
+            (v - (-0.53_f32)).abs() < 0.01,
+            "methyl acetate HallKierAlpha expected -0.53, got {v}"
+        );
+    }
+
+    #[test]
+    fn test_hka_carboxylic_acid_oh_sp2() {
+        // CC(=O)O — acetic acid
+        // C_SP3(0) + C_SP2(-0.13) + O_SP2(-0.20) + O_SP2(-0.20) = -0.53
+        // COOH-OH: C(=O) neighbour (not hypervalent P/S) → SP2.
+        let v = calc_float(&HallKierAlpha, "CC(=O)O");
+        assert!(
+            (v - (-0.53_f32)).abs() < 0.01,
+            "acetic acid HallKierAlpha expected -0.53, got {v}"
+        );
+    }
+
+    #[test]
+    fn test_hka_phenol_o_sp2() {
+        // c1ccc(O)cc1 — phenol
+        // 6×C_arom(-0.13) + O_SP2(-0.20) = -0.98
+        // Phenol O has an aromatic C neighbour → SP2 (Case 1).
+        let v = calc_float(&HallKierAlpha, "c1ccc(O)cc1");
+        assert!(
+            (v - (-0.98_f32)).abs() < 0.01,
+            "phenol HallKierAlpha expected -0.98, got {v}"
+        );
+    }
+
+    #[test]
+    fn test_hka_ether_o_sp3() {
+        // COC — dimethyl ether
+        // C_SP3(0) + O_SP3(-0.04) + C_SP3(0) = -0.04
+        // Ether O has 2 aliphatic C neighbours and no pi → SP3.
+        let v = calc_float(&HallKierAlpha, "COC");
+        assert!(
+            (v - (-0.04_f32)).abs() < 0.01,
+            "dimethyl ether HallKierAlpha expected -0.04, got {v}"
+        );
+    }
+
+    #[test]
+    fn test_hka_phosphoric_acid_oh_sp3() {
+        // OP(=O)(O)O — phosphoric acid
+        // P_SP3(0.43) + O_SP2(-0.20) + 3×O_SP3(-0.04) = 0.11
+        // All three P–OH oxygens have P (non-C) neighbour → SP3.
+        let v = calc_float(&HallKierAlpha, "OP(=O)(O)O");
+        assert!(
+            (v - 0.11_f32).abs() < 0.01,
+            "phosphoric acid HallKierAlpha expected 0.11, got {v}"
+        );
+    }
+
+    #[test]
+    fn test_hka_dimethyl_phosphate_o_sp3() {
+        // COP(=O)(OC)O — dimethyl phosphate
+        // 2×C_SP3(0) + 2×O_bridge_SP3(-0.04) + P_SP3(0.43) + O_SP2(-0.20) + O_OH_SP3(-0.04) = 0.11
+        // Both C–O–P bridging oxygens: P neighbour excluded (hypervalent),
+        // sp3 C neighbour has no pi → SP3.
+        // The P–OH also has only P neighbour → SP3.
+        let v = calc_float(&HallKierAlpha, "COP(=O)(OC)O");
+        assert!(
+            (v - 0.11_f32).abs() < 0.01,
+            "dimethyl phosphate HallKierAlpha expected 0.11, got {v}"
+        );
     }
 
     // -- BertzCT --

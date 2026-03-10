@@ -1,54 +1,56 @@
 // Public modules
-pub mod molecular_weight;
-pub mod fingerprint;
-pub mod topo;
-pub mod atom_count;
-pub mod bond_count;
 pub mod aromatic_ring_count;
-pub mod formal_charge;
-pub mod hbond;
-pub mod logp;
-pub mod lipinski;
-pub mod chains;
-pub mod pi_system;
-pub mod maccs;
-pub mod small_ring;
-pub mod wiener_numbers;
-pub mod simple_counts;
-pub mod zagreb;
-pub mod balaban;
-pub mod eccentric;
-pub mod ring_types;
-pub mod carbon_types;
-pub mod spiro;
-pub mod gravitational;
-pub mod petitjean;
-pub mod tpsa;
-pub mod batch;
-pub mod kappa;
-pub mod functional_groups;
-pub mod qed;
-pub mod path_fingerprints;
-pub mod pubchem;
-pub mod chi;
-pub mod estate;
+pub mod atom_count;
 pub mod autocorrelation;
+pub mod balaban;
+pub mod batch;
 pub mod bcut;
-pub mod weighted_path;
-pub mod mde;
+pub mod bond_count;
+pub mod carbon_types;
+pub mod chains;
+pub mod chi;
+pub mod eccentric;
+pub mod estate;
 pub mod extra_counts;
-pub mod vsa;
-pub mod polarizability;
+pub mod fingerprint;
+pub mod formal_charge;
+pub mod functional_groups;
 pub mod gasteiger_charge;
+pub mod gravitational;
+pub mod hbond;
+pub mod kappa;
+pub mod lipinski;
+pub mod logp;
+pub mod maccs;
+pub mod mde;
+pub mod molecular_weight;
+pub mod path_fingerprints;
+pub mod petitjean;
+pub mod pi_system;
+pub mod polarizability;
+pub mod pubchem;
+pub mod qed;
+pub mod ring_types;
+pub mod simple_counts;
+pub mod small_ring;
+pub mod spiro;
+pub mod topo;
+pub mod tpsa;
 pub mod typed;
+pub mod vsa;
+pub mod weighted_path;
+pub mod wiener_numbers;
+pub mod zagreb;
 
 // Re-export the core descriptor API
-pub use typed::{Descriptor, DescriptorValue, BitVector, build_ml_vector, build_ml_vectors_parallel};
+pub use typed::{
+    BitVector, Descriptor, DescriptorValue, build_ml_vector, build_ml_vectors_parallel,
+};
 
 #[cfg(test)]
 mod descriptor_tests {
-    use crate::io::smiles::parse_smiles;
     use super::typed::{Descriptor, DescriptorValue};
+    use crate::io::smiles::parse_smiles;
 
     fn parse(smiles: &str) -> crate::mol::molecule::Molecule {
         parse_smiles(smiles).expect("valid SMILES")
@@ -58,6 +60,7 @@ mod descriptor_tests {
         let mut mol = parse(smiles);
         match desc.calculate(&mut mol) {
             DescriptorValue::Float(v) => v,
+            DescriptorValue::Float64(v) => v as f32,
             other => panic!("{} expected Float, got {:?}", desc.name(), other),
         }
     }
@@ -301,7 +304,10 @@ mod descriptor_tests {
         use super::chi::ChiIndices;
         let v = calc_float_vec(&ChiIndices, "c1ccccc1");
         assert_eq!(v.len(), 26, "chi indices should have 26 values");
-        assert!(v.iter().any(|&x| x > 0.0), "benzene should have nonzero chi");
+        assert!(
+            v.iter().any(|&x| x > 0.0),
+            "benzene should have nonzero chi"
+        );
     }
 
     #[test]
@@ -457,7 +463,10 @@ mod descriptor_tests {
     #[test]
     fn test_ecfp() {
         use super::fingerprint::ECFP;
-        let desc = ECFP { radius: 2, num_bits: 2048 };
+        let desc = ECFP {
+            radius: 2,
+            num_bits: 2048,
+        };
         let len = calc_binary_len(&desc, "c1ccccc1");
         assert_eq!(len, 2048, "ECFP4 has 2048 bits");
     }
@@ -465,7 +474,10 @@ mod descriptor_tests {
     #[test]
     fn test_fcfp() {
         use super::fingerprint::FCFP;
-        let desc = FCFP { radius: 2, num_bits: 2048 };
+        let desc = FCFP {
+            radius: 2,
+            num_bits: 2048,
+        };
         let len = calc_binary_len(&desc, "c1ccccc1");
         assert_eq!(len, 2048, "FCFP4 has 2048 bits");
     }
@@ -609,14 +621,20 @@ mod descriptor_tests {
     fn test_max_partial_charge() {
         use super::gasteiger_charge::MaxPartialCharge;
         let v = calc_float(&MaxPartialCharge, "C=O");
-        assert!(v > 0.0, "formaldehyde max charge should be positive (C): {v}");
+        assert!(
+            v > 0.0,
+            "formaldehyde max charge should be positive (C): {v}"
+        );
     }
 
     #[test]
     fn test_min_partial_charge() {
         use super::gasteiger_charge::MinPartialCharge;
         let v = calc_float(&MinPartialCharge, "C=O");
-        assert!(v < 0.0, "formaldehyde min charge should be negative (O): {v}");
+        assert!(
+            v < 0.0,
+            "formaldehyde min charge should be negative (O): {v}"
+        );
     }
 
     #[test]
@@ -656,10 +674,10 @@ mod descriptor_tests {
 
     #[test]
     fn test_build_ml_vector_all_types() {
-        use super::typed::build_ml_vector;
-        use super::molecular_weight::MolecularWeight;
         use super::atom_count::HeavyAtomCount;
         use super::logp::LogP;
+        use super::molecular_weight::MolecularWeight;
+        use super::typed::build_ml_vector;
 
         let mut mol = parse("CCO");
         let descriptors: Vec<Box<dyn Descriptor>> = vec![
@@ -675,42 +693,50 @@ mod descriptor_tests {
 
     #[test]
     fn test_all_descriptors_no_panic() {
-        use super::molecular_weight::MolecularWeight;
-        use super::logp::{LogP, MolarRefractivity};
-        use super::tpsa::Tpsa;
-        use super::atom_count::{AtomCount, HeavyAtomCount, ElementCounts, AromaticAtomCount};
-        use super::bond_count::{BondCount, BondCountDetailed, RotatableBondCount};
         use super::aromatic_ring_count::AromaticRingCount;
-        use super::hbond::{HBondDonor, HBondAcceptor};
-        use super::lipinski::LipinskiViolations;
-        use super::simple_counts::{ValenceElectrons, HeteroatomCount, RadicalElectrons, HybridizationRatio, VAdjMa};
-        use super::small_ring::SmallRingDescriptor;
-        use super::ring_types::RingTypeCounts;
-        use super::pi_system::{PiSystemCounts, LargestPiSystem};
-        use super::carbon_types::CarbonTypes;
-        use super::chi::ChiIndices;
-        use super::kappa::KappaIndices;
-        use super::estate::EStateIndices;
+        use super::atom_count::{AromaticAtomCount, AtomCount, ElementCounts, HeavyAtomCount};
         use super::autocorrelation::Autocorrelation;
+        use super::balaban::BalabanIndex;
         use super::bcut::BCUT;
-        use super::weighted_path::WeightedPath;
+        use super::bond_count::{BondCount, BondCountDetailed, RotatableBondCount};
+        use super::carbon_types::CarbonTypes;
+        use super::chains::{LargestChain, LongestAliphaticChain};
+        use super::chi::ChiIndices;
+        use super::estate::EStateIndices;
+        use super::extra_counts::{
+            AromaticAtomFraction, BertzCT, FractionCSP3, FragmentComplexity, HallKierAlpha, Ipc,
+            NumAmideBonds,
+        };
+        use super::fingerprint::{ECFP, FCFP};
+        use super::formal_charge::FormalCharge;
+        use super::functional_groups::{AcidicGroupCount, BasicGroupCount, FunctionalGroupCounts};
+        use super::gasteiger_charge::{
+            GasteigerCharges, MaxAbsPartialCharge, MaxPartialCharge, MinAbsPartialCharge,
+            MinPartialCharge,
+        };
+        use super::hbond::{HBondAcceptor, HBondDonor};
+        use super::kappa::KappaIndices;
+        use super::lipinski::LipinskiViolations;
+        use super::logp::{LogP, MolarRefractivity};
+        use super::maccs::MaccsKeys;
         use super::mde::MDE;
+        use super::molecular_weight::MolecularWeight;
+        use super::path_fingerprints::{AtomPairFingerprint, TopologicalTorsionFingerprint};
+        use super::petitjean::PetitjeanIndex;
+        use super::pi_system::{LargestPiSystem, PiSystemCounts};
+        use super::polarizability::{APol, BPol};
+        use super::pubchem::PubChem881;
+        use super::qed::Qed;
+        use super::ring_types::RingTypeCounts;
+        use super::simple_counts::{
+            HeteroatomCount, HybridizationRatio, RadicalElectrons, VAdjMa, ValenceElectrons,
+        };
+        use super::small_ring::SmallRingDescriptor;
+        use super::tpsa::Tpsa;
+        use super::vsa::{LabuteASA, PeoeVsa, SlogpVSA, SmrVSA};
+        use super::weighted_path::WeightedPath;
         use super::wiener_numbers::WienerIndex;
         use super::zagreb::ZagrebIndices;
-        use super::balaban::BalabanIndex;
-        use super::qed::Qed;
-        use super::petitjean::PetitjeanIndex;
-        use super::vsa::{SlogpVSA, SmrVSA, LabuteASA, PeoeVsa};
-        use super::extra_counts::{FractionCSP3, BertzCT, NumAmideBonds, AromaticAtomFraction, HallKierAlpha, Ipc, FragmentComplexity};
-        use super::functional_groups::{FunctionalGroupCounts, AcidicGroupCount, BasicGroupCount};
-        use super::formal_charge::FormalCharge;
-        use super::chains::{LongestAliphaticChain, LargestChain};
-        use super::maccs::MaccsKeys;
-        use super::pubchem::PubChem881;
-        use super::fingerprint::{ECFP, FCFP};
-        use super::path_fingerprints::{AtomPairFingerprint, TopologicalTorsionFingerprint};
-        use super::gasteiger_charge::{MaxPartialCharge, MinPartialCharge, MaxAbsPartialCharge, MinAbsPartialCharge, GasteigerCharges};
-        use super::polarizability::{APol, BPol};
 
         let descriptors: Vec<Box<dyn Descriptor>> = vec![
             Box::new(MolecularWeight),
@@ -768,8 +794,14 @@ mod descriptor_tests {
             Box::new(LargestChain),
             Box::new(MaccsKeys),
             Box::new(PubChem881),
-            Box::new(ECFP { radius: 2, num_bits: 2048 }),
-            Box::new(FCFP { radius: 2, num_bits: 2048 }),
+            Box::new(ECFP {
+                radius: 2,
+                num_bits: 2048,
+            }),
+            Box::new(FCFP {
+                radius: 2,
+                num_bits: 2048,
+            }),
             Box::new(AtomPairFingerprint { num_bits: 2048 }),
             Box::new(TopologicalTorsionFingerprint { num_bits: 2048 }),
             // Phase 12: Gasteiger charges + polarizability
@@ -786,7 +818,9 @@ mod descriptor_tests {
         assert_eq!(descriptors.len(), 67, "should have 67 typed descriptors");
 
         // Test on multiple molecules - none should panic
-        let smiles_list = ["C", "CC", "CCO", "c1ccccc1", "CC(=O)O", "CN", "CC=O", "C=C", "CCBr"];
+        let smiles_list = [
+            "C", "CC", "CCO", "c1ccccc1", "CC(=O)O", "CN", "CC=O", "C=C", "CCBr",
+        ];
         for smiles in &smiles_list {
             let mut mol = parse(smiles);
             for desc in &descriptors {

@@ -1,17 +1,19 @@
+use ferrum_core::algo::aromaticity::perceive_aromaticity;
+use ferrum_core::algo::valency::assign_implicit_hydrogens;
 use ferrum_core::desc::Descriptor;
 use ferrum_core::desc::DescriptorValue;
-use ferrum_core::desc::molecular_weight::MolecularWeight;
-use ferrum_core::desc::atom_count::{AtomCount, HeavyAtomCount, SingleAtomCount, AromaticAtomCount};
-use ferrum_core::desc::bond_count::{BondCount, BondCountDetailed, RotatableBondCount};
 use ferrum_core::desc::aromatic_ring_count::AromaticRingCount;
+use ferrum_core::desc::atom_count::{
+    AromaticAtomCount, AtomCount, HeavyAtomCount, SingleAtomCount,
+};
+use ferrum_core::desc::bond_count::{BondCount, BondCountDetailed, RotatableBondCount};
 use ferrum_core::desc::formal_charge::FormalCharge;
-use ferrum_core::desc::hbond::{HBondDonor, HBondAcceptor};
-use ferrum_core::desc::logp::LogP;
+use ferrum_core::desc::hbond::{HBondAcceptor, HBondDonor};
 use ferrum_core::desc::lipinski::LipinskiViolations;
+use ferrum_core::desc::logp::LogP;
 use ferrum_core::desc::maccs::MaccsKeys;
+use ferrum_core::desc::molecular_weight::MolecularWeight;
 use ferrum_core::io::smiles::parse_smiles;
-use ferrum_core::algo::valency::assign_implicit_hydrogens;
-use ferrum_core::algo::aromaticity::perceive_aromaticity;
 
 fn main() {
     println!("🧪 FerrumChem - Basic Descriptors Demo\n");
@@ -34,13 +36,13 @@ fn main() {
     for (smiles, name) in test_cases {
         println!("📊 {} ({})", name, smiles);
         println!("───────────────────────────────────────────────────────────────");
-        
+
         match parse_smiles(smiles) {
             Ok(mut mol) => {
                 // Process molecule
                 assign_implicit_hydrogens(&mut mol).unwrap();
                 perceive_aromaticity(&mut mol);
-                
+
                 // Calculate and display individual descriptors
                 let descriptors: Vec<Box<dyn Descriptor>> = vec![
                     Box::new(MolecularWeight),
@@ -61,18 +63,21 @@ fn main() {
                     Box::new(AromaticRingCount),
                     Box::new(FormalCharge),
                 ];
-                
+
                 for desc in &descriptors {
                     let value = desc.calculate(&mut mol);
-                    
+
                     print!("  {:20} ", desc.name());
                     match &value {
                         DescriptorValue::Float(v) => println!("{:.2}", v),
+                        DescriptorValue::Float64(v) => println!("{:.2}", v),
                         DescriptorValue::Int(v) => println!("{}", v),
                         DescriptorValue::IntVec(v) => {
                             if v.len() == 4 {
-                                println!("[Total: {}, Single: {}, Double: {}, Triple: {}]",
-                                         v[0], v[1], v[2], v[3]);
+                                println!(
+                                    "[Total: {}, Single: {}, Double: {}, Triple: {}]",
+                                    v[0], v[1], v[2], v[3]
+                                );
                             } else {
                                 println!("{:?}", v);
                             }
@@ -95,7 +100,7 @@ fn main() {
                 println!("  ❌ Error parsing SMILES: {}", e);
             }
         }
-        
+
         println!();
     }
 

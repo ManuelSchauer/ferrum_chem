@@ -357,6 +357,28 @@ impl QueryBond {
     }
 }
 
+fn merge_bond_query_and(current: Option<QueryBond>, next: QueryBond) -> QueryBond {
+    match current {
+        Some(QueryBond::And(mut bonds)) => {
+            bonds.push(next);
+            QueryBond::And(bonds)
+        }
+        Some(prev) => QueryBond::And(vec![prev, next]),
+        None => next,
+    }
+}
+
+fn merge_bond_query_or(current: Option<QueryBond>, next: QueryBond) -> QueryBond {
+    match current {
+        Some(QueryBond::Or(mut bonds)) => {
+            bonds.push(next);
+            QueryBond::Or(bonds)
+        }
+        Some(prev) => QueryBond::Or(vec![prev, next]),
+        None => next,
+    }
+}
+
 /// Parses a SMARTS pattern into a QueryGraph.
 ///
 /// # Example
@@ -437,20 +459,21 @@ impl SmartsParser {
                         return Err("Expected bond type after !".to_string());
                     }
                     let next_ch = self.input[self.pos];
-                    match next_ch {
-                        '@' => { bond_type = Some(QueryBond::Not(Box::new(QueryBond::Ring))); self.pos += 1; }
-                        ':' => { bond_type = Some(QueryBond::Not(Box::new(QueryBond::Aromatic))); self.pos += 1; }
-                        '-' => { bond_type = Some(QueryBond::Not(Box::new(QueryBond::Single))); self.pos += 1; }
-                        '=' => { bond_type = Some(QueryBond::Not(Box::new(QueryBond::Double))); self.pos += 1; }
-                        '#' => { bond_type = Some(QueryBond::Not(Box::new(QueryBond::Triple))); self.pos += 1; }
+                    let next_bond = match next_ch {
+                        '@' => { self.pos += 1; QueryBond::Not(Box::new(QueryBond::Ring)) }
+                        ':' => { self.pos += 1; QueryBond::Not(Box::new(QueryBond::Aromatic)) }
+                        '-' => { self.pos += 1; QueryBond::Not(Box::new(QueryBond::Single)) }
+                        '=' => { self.pos += 1; QueryBond::Not(Box::new(QueryBond::Double)) }
+                        '#' => { self.pos += 1; QueryBond::Not(Box::new(QueryBond::Triple)) }
                         _ => return Err(format!("Invalid bond negation: !{}", next_ch)),
-                    }
+                    };
+                    bond_type = Some(merge_bond_query_and(bond_type.take(), next_bond));
                 }
                 ';' => {
                     // AND operator for bonds: =;@ means Double AND Ring
                     self.pos += 1;
                     // Parse next bond and combine with previous
-                    if let Some(prev_bond) = bond_type.take() {
+                    if bond_type.is_some() {
                         // Parse next bond type
                         if self.pos < self.input.len() {
                             let next_bond = match self.input[self.pos] {
@@ -462,23 +485,14 @@ impl SmartsParser {
                                 '~' => { self.pos += 1; QueryBond::Any }
                                 c => return Err(format!("Invalid bond after ;: {}", c)),
                             };
-                            // Combine into AND
-                            match prev_bond {
-                                QueryBond::And(mut bonds) => {
-                                    bonds.push(next_bond);
-                                    bond_type = Some(QueryBond::And(bonds));
-                                }
-                                _ => {
-                                    bond_type = Some(QueryBond::And(vec![prev_bond, next_bond]));
-                                }
-                            }
+                            bond_type = Some(merge_bond_query_and(bond_type.take(), next_bond));
                         }
                     }
                 }
                 ',' if bond_type.is_some() => {
                     // OR operator for bonds: =,: means Double OR Aromatic
                     self.pos += 1;
-                    if let Some(prev_bond) = bond_type.take() {
+                    if bond_type.is_some() {
                         if self.pos < self.input.len() {
                             let next_bond = match self.input[self.pos] {
                                 '@' => { self.pos += 1; QueryBond::Ring }
@@ -489,31 +503,28 @@ impl SmartsParser {
                                 '~' => { self.pos += 1; QueryBond::Any }
                                 c => return Err(format!("Invalid bond after ,: {}", c)),
                             };
-                            match prev_bond {
-                                QueryBond::Or(mut bonds) => {
-                                    bonds.push(next_bond);
-                                    bond_type = Some(QueryBond::Or(bonds));
-                                }
-                                _ => {
-                                    bond_type = Some(QueryBond::Or(vec![prev_bond, next_bond]));
-                                }
-                            }
+                            bond_type = Some(merge_bond_query_or(bond_type.take(), next_bond));
                         }
                     }
                 }
-                '@' => { bond_type = Some(QueryBond::Ring); self.pos += 1; }
-                '-' => { bond_type = Some(QueryBond::Single); self.pos += 1; }
-                '=' => { bond_type = Some(QueryBond::Double); self.pos += 1; }
-                '#' => { bond_type = Some(QueryBond::Triple); self.pos += 1; }
-                ':' => { bond_type = Some(QueryBond::Aromatic); self.pos += 1; }
-                '~' => { bond_type = Some(QueryBond::Any); self.pos += 1; }
+                '@' => { bond_type = Some(merge_bond_query_and(bond_type.take(), QueryBond::Ring)); self.pos += 1; }
+                '-' => { bond_type = Some(merge_bond_query_and(bond_type.take(), QueryBond::Single)); self.pos += 1; }
+                '=' => { bond_type = Some(merge_bond_query_and(bond_type.take(), QueryBond::Double)); self.pos += 1; }
+                '#' => { bond_type = Some(merge_bond_query_and(bond_type.take(), QueryBond::Triple)); self.pos += 1; }
+                ':' => { bond_type = Some(merge_bond_query_and(bond_type.take(), QueryBond::Aromatic)); self.pos += 1; }
+                '~' => { bond_type = Some(merge_bond_query_and(bond_type.take(), QueryBond::Any)); self.pos += 1; }
+                '.' => {
+                    self.pos += 1;
+                    prev_atom_idx = None;
+                    bond_type = None;
+                }
                 
                 '[' => {
                     let atom = self.parse_bracket_atom()?;
                     let atom_idx = self.add_atom(atom);
                     
                     if let Some(prev_idx) = prev_atom_idx {
-                        self.add_bond(prev_idx, atom_idx, bond_type.unwrap_or(QueryBond::Any));
+                        self.add_bond(prev_idx, atom_idx, bond_type.unwrap_or(QueryBond::SingleOrAromatic));
                     }
                     
                     prev_atom_idx = Some(atom_idx);
@@ -541,7 +552,7 @@ impl SmartsParser {
                     let atom_idx = self.add_atom(atom);
                     
                     if let Some(prev_idx) = prev_atom_idx {
-                        self.add_bond(prev_idx, atom_idx, bond_type.unwrap_or(QueryBond::Any));
+                        self.add_bond(prev_idx, atom_idx, bond_type.unwrap_or(QueryBond::SingleOrAromatic));
                     }
                     
                     prev_atom_idx = Some(atom_idx);

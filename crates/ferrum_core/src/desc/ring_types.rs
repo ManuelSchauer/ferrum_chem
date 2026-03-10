@@ -6,9 +6,18 @@
 //! - Aromatic rings: marked as aromatic
 
 use crate::mol::molecule::Molecule;
-use crate::algo::rings::find_sssr;
+use crate::algo::rings::find_minimum_cycle_basis_bonds;
 use crate::types::BondType;
 use crate::desc::typed::{Descriptor, DescriptorValue};
+
+fn ring_bonds_all_single(mol: &Molecule, ring: &[usize]) -> bool {
+    ring.iter()
+        .all(|&bond_idx| mol.bonds[bond_idx].bond_type == BondType::Single)
+}
+
+fn ring_bonds_all_aromatic(mol: &Molecule, ring: &[usize]) -> bool {
+    ring.iter().all(|&bond_idx| mol.bonds[bond_idx].is_aromatic())
+}
 
 /// Count number of saturated rings (no double/triple bonds)
 ///
@@ -19,37 +28,16 @@ use crate::desc::typed::{Descriptor, DescriptorValue};
 /// - Benzene: 0 saturated rings (aromatic double bonds)
 /// - Cyclohexene: 0 saturated rings (one double bond)
 pub fn num_saturated_rings(mol: &mut Molecule) -> u32 {
-    let rings = find_sssr(mol);
+    let rings = find_minimum_cycle_basis_bonds(mol);
     
-    rings.iter().filter(|ring| {
-        // Check if all bonds in the ring are single bonds
-        for i in 0..ring.len() {
-            let atom1 = ring[i];
-            let atom2 = ring[(i + 1) % ring.len()];
-            
-            // Find bond between atom1 and atom2
-            if let Some(bond_idx) = mol.adjacency[atom1 as usize].iter()
-                .find(|&&bond_idx| {
-                    let bond = &mol.bonds[bond_idx as usize];
-                    (bond.source == atom1 && bond.target == atom2) ||
-                    (bond.source == atom2 && bond.target == atom1)
-                })
-            {
-                let bond = &mol.bonds[*bond_idx as usize];
-                if bond.bond_type != BondType::Single {
-                    return false; // Found a double/triple bond
-                }
-            }
-        }
-        true // All bonds are single
-    }).count() as u32
+    rings.iter().filter(|ring| ring_bonds_all_single(mol, ring)).count() as u32
 }
 
 /// Count number of aliphatic rings (non-aromatic)
 ///
-/// Aliphatic rings are not marked as aromatic by the aromaticity perception.
-/// This includes both saturated rings and rings with double bonds that don't
-/// meet aromaticity criteria.
+/// RDKit defines aliphatic rings as rings containing at least one non-aromatic
+/// bond. This includes both saturated rings and rings with double bonds that
+/// do not qualify as fully aromatic rings.
 ///
 /// # Examples
 /// - Cyclohexane: 1 aliphatic ring
@@ -57,19 +45,16 @@ pub fn num_saturated_rings(mol: &mut Molecule) -> u32 {
 /// - Benzene: 0 aliphatic rings (aromatic)
 /// - Naphthalene: 0 aliphatic rings (both rings aromatic)
 pub fn num_aliphatic_rings(mol: &mut Molecule) -> u32 {
-    let rings = find_sssr(mol);
+    let rings = find_minimum_cycle_basis_bonds(mol);
     
-    rings.iter().filter(|ring| {
-        // Check if any atom in the ring is aromatic
-        !ring.iter().any(|&atom_idx| {
-            mol.atoms[atom_idx as usize].is_aromatic()
-        })
-    }).count() as u32
+    rings.iter().filter(|ring| !ring_bonds_all_aromatic(mol, ring)).count() as u32
 }
 
 /// Count number of aromatic rings
 ///
-/// Rings where all atoms are marked as aromatic.
+/// RDKit counts aromatic SSSR rings based on aromatic bonds, not just aromatic
+/// atoms. Fused systems can contain rings where every atom is aromatic while
+/// one or more ring bonds remain non-aromatic/Kekulized.
 ///
 /// # Examples
 /// - Benzene: 1 aromatic ring
@@ -77,14 +62,9 @@ pub fn num_aliphatic_rings(mol: &mut Molecule) -> u32 {
 /// - Pyridine: 1 aromatic ring
 /// - Cyclohexane: 0 aromatic rings
 pub fn num_aromatic_rings(mol: &mut Molecule) -> u32 {
-    let rings = find_sssr(mol);
+    let rings = find_minimum_cycle_basis_bonds(mol);
     
-    rings.iter().filter(|ring| {
-        // Check if all atoms in the ring are aromatic
-        ring.iter().all(|&atom_idx| {
-            mol.atoms[atom_idx as usize].is_aromatic()
-        })
-    }).count() as u32
+    rings.iter().filter(|ring| ring_bonds_all_aromatic(mol, ring)).count() as u32
 }
 
 #[cfg(test)]
@@ -152,6 +132,14 @@ mod tests {
         assert_eq!(num_aliphatic_rings(&mut mol), 0);
         assert_eq!(num_aromatic_rings(&mut mol), 0);
     }
+
+    #[test]
+    fn test_rdkit_like_ring_counts_for_fused_heterocycle() {
+        let mut mol = parse("CC1=CC2=C(C=C1C)N(C[C@H](O)[C@H](O)[C@H](O)COP(=O)(O)OP(=O)(O)OC[C@H]1O[C@@H](N3C=NC4=C(N)N=CN=C43)[C@H](O)[C@@H]1O)C1=NC(=O)N=C(O)C1=N2");
+        assert_eq!(num_saturated_rings(&mut mol), 1);
+        assert_eq!(num_aliphatic_rings(&mut mol), 3);
+        assert_eq!(num_aromatic_rings(&mut mol), 3);
+    }
 }
 
 // ===========================================================================
@@ -172,46 +160,21 @@ impl Descriptor for RingTypeCounts {
     }
 
     fn calculate(&self, mol: &mut Molecule) -> DescriptorValue {
-        let rings = find_sssr(mol);
+        let rings = find_minimum_cycle_basis_bonds(mol);
         
         let mut saturated = 0u16;
         let mut aliphatic = 0u16;
         let mut aromatic = 0u16;
         
         for ring in &rings {
-            // Check if aromatic
-            let is_aromatic = ring.iter().all(|&atom_idx| {
-                mol.atoms[atom_idx as usize].is_aromatic()
-            });
+            let is_aromatic = ring_bonds_all_aromatic(mol, ring);
             
             if is_aromatic {
                 aromatic += 1;
             } else {
                 aliphatic += 1;
                 
-                // Check if saturated (all single bonds)
-                let mut is_saturated = true;
-                for i in 0..ring.len() {
-                    let atom1 = ring[i];
-                    let atom2 = ring[(i + 1) % ring.len()];
-                    
-                    // Find bond between atom1 and atom2
-                    if let Some(bond_idx) = mol.adjacency[atom1 as usize].iter()
-                        .find(|&&bond_idx| {
-                            let bond = &mol.bonds[bond_idx as usize];
-                            (bond.source == atom1 && bond.target == atom2) ||
-                            (bond.source == atom2 && bond.target == atom1)
-                        })
-                    {
-                        let bond = &mol.bonds[*bond_idx as usize];
-                        if bond.bond_type != BondType::Single {
-                            is_saturated = false;
-                            break;
-                        }
-                    }
-                }
-                
-                if is_saturated {
+                if ring_bonds_all_single(mol, ring) {
                     saturated += 1;
                 }
             }

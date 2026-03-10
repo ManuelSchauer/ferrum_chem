@@ -1,4 +1,4 @@
-use super::typed::{DescriptorValue, Descriptor};
+use super::typed::{Descriptor, DescriptorValue};
 use crate::mol::molecule::Molecule;
 use crate::types::BondType;
 
@@ -12,25 +12,377 @@ pub fn compute_bond_count(mol: &Molecule) -> u32 {
 }
 
 /// Compute rotatable bond count.
+///
+/// Follows the RDKit `NumRotatableBonds` definition:
+/// - Single, non-ring, non-terminal, non-triple-adjacent bonds only.
+/// - **Strict conjugation exclusions**: amide-, thioamide-, amidine-, and
+///   carbamate-like `C(=X)-N` bonds are non-rotatable when the conjugated carbon
+///   has another heavy substituent, while formyl `N-C(=X)H` bonds remain
+///   rotatable. Adjacent `N-N` bonds are also excluded when both nitrogens are
+///   part of such conjugated systems.
+/// - **Carbonyl-O/S exclusion**: ester/thioester C(=O)–O/S bonds are excluded
+///   when the carbonyl carbon has another heavy substituent; formates remain
+///   rotatable, matching RDKit strict behavior.
+///   N-based conjugated bonds are handled by the strict conjugation rules above.
 pub fn compute_rotatable_bond_count(mol: &Molecule) -> u32 {
+    if mol.num_bonds() == 0 || mol.num_atoms() < 2 {
+        return 0;
+    }
+
+    // RDKit-style filtering is based on graph topology, not cached ring flags.
+    // A bond is in a ring iff it lies on a cycle (i.e. it is not a bridge).
+    let bond_in_cycle = compute_bond_in_cycle_flags(mol);
+    let heavy_degree = compute_heavy_degrees(mol);
+    let atom_has_triple = compute_has_triple_neighbor(mol);
+    let conjugated_n = compute_conjugated_nitrogen_flags(mol);
+
     let mut count = 0u32;
-    
-    for bond in &mol.bonds {
+
+    for (bond_idx, bond) in mol.bonds.iter().enumerate() {
+        // Single, non-aromatic bonds only.
+        if bond.bond_type != BondType::Single || bond.is_aromatic() {
+            continue;
+        }
+
+        // Exclude ring bonds (cycle edges).
+        if bond_in_cycle[bond_idx] {
+            continue;
+        }
+
+        let a = bond.source as usize;
+        let b = bond.target as usize;
+
+        // Heavy-atom bonds only.
+        if mol.atoms[a].atomic_number <= 1 || mol.atoms[b].atomic_number <= 1 {
+            continue;
+        }
+
+        // Both atoms must be non-terminal heavy atoms.
+        if heavy_degree[a] <= 1 || heavy_degree[b] <= 1 {
+            continue;
+        }
+
+        // RDKit strict also rejects the bond leaving a tert-butyl-like center:
+        // a non-ring quaternary carbon with three terminal carbon substituents.
+        if is_tert_butyl_like_rotor_blocked(mol, bond_idx, &heavy_degree) {
+            continue;
+        }
+
+        // Exclude bonds attached to atoms participating in triple bonds.
+        if atom_has_triple[a] || atom_has_triple[b] {
+            continue;
+        }
+
+        // Exclude strict amide-/amidine-like C(=X)-N bonds themselves.
+        if is_restricted_conjugated_carbon_n_bond(mol, bond_idx) {
+            continue;
+        }
+
+        // Exclude N-N linkages only when both nitrogens are amidic / conjugated.
+        if is_conjugated_nitrogen_pair_bond(mol, bond_idx, &conjugated_n) {
+            continue;
+        }
+
+        // Carbonyl-O/S exclusion: ester / thioester C(=O)–O/S bonds.
+        if is_carbonyl_os_single_bond(mol, bond_idx) {
+            continue;
+        }
+
+        count += 1;
+    }
+
+    count
+}
+
+fn is_tert_butyl_like_rotor_blocked(mol: &Molecule, bond_idx: usize, heavy_degree: &[usize]) -> bool {
+    let bond = &mol.bonds[bond_idx];
+    let a = bond.source as usize;
+    let b = bond.target as usize;
+    is_tert_butyl_like_center(mol, a, b, heavy_degree)
+        || is_tert_butyl_like_center(mol, b, a, heavy_degree)
+}
+
+fn is_tert_butyl_like_center(
+    mol: &Molecule,
+    center_idx: usize,
+    bonded_idx: usize,
+    heavy_degree: &[usize],
+) -> bool {
+    let atom = &mol.atoms[center_idx];
+    if atom.atomic_number != 6 || atom.is_aromatic() || atom.is_in_ring() || heavy_degree[center_idx] != 4 {
+        return false;
+    }
+
+    let mut terminal_carbon_neighbors = 0usize;
+    for &bi in &mol.adjacency[center_idx] {
+        let bond = &mol.bonds[bi as usize];
         if bond.bond_type != BondType::Single {
+            return false;
+        }
+
+        let other = if bond.source == center_idx as u16 {
+            bond.target as usize
+        } else {
+            bond.source as usize
+        };
+
+        if other == bonded_idx {
             continue;
         }
-        if bond.is_in_ring() {
-            continue;
-        }
-        let source_degree = mol.get_degree(bond.source);
-        let target_degree = mol.get_degree(bond.target);
-        
-        if source_degree > 1 && target_degree > 1 {
-            count += 1;
+
+        let other_atom = &mol.atoms[other];
+        if other_atom.atomic_number == 6
+            && !other_atom.is_aromatic()
+            && heavy_degree[other] == 1
+            && other_atom.total_h() == 3
+        {
+            terminal_carbon_neighbors += 1;
         }
     }
-    
-    count
+
+    terminal_carbon_neighbors >= 3
+}
+
+/// Returns a per-atom boolean: `true` if atom `i` is a neutral, non-aromatic
+/// nitrogen attached to a conjugated `C(=X)` center (`X = O, N, S`) which also
+/// bears another heavy substituent. This captures the amidic / amidine-like N
+/// atoms whose directly conjugated bonds are non-rotatable under RDKit's strict
+/// rotatable-bond semantics, while still allowing formyl `N-C(=X)H` bonds.
+fn compute_conjugated_nitrogen_flags(mol: &Molecule) -> Vec<bool> {
+    let mut flags = vec![false; mol.num_atoms()];
+    for (i, flag) in flags.iter_mut().enumerate() {
+        let atom = &mol.atoms[i];
+        if atom.atomic_number != 7 || atom.formal_charge != 0 || atom.is_aromatic() {
+            continue;
+        }
+
+        'outer: for &bi in &mol.adjacency[i] {
+            let bond = &mol.bonds[bi as usize];
+            if bond.bond_type != BondType::Single {
+                continue;
+            }
+            let nbr = if bond.source == i as u16 {
+                bond.target as usize
+            } else {
+                bond.source as usize
+            };
+            if mol.atoms[nbr].atomic_number != 6 {
+                continue;
+            }
+            if is_restricted_conjugated_center_for_n(mol, nbr, i) {
+                *flag = true;
+                break 'outer;
+            }
+        }
+    }
+    flags
+}
+
+fn compute_heavy_degrees(mol: &Molecule) -> Vec<usize> {
+    let mut deg = vec![0usize; mol.num_atoms()];
+    for (i, out) in deg.iter_mut().enumerate() {
+        *out = mol.adjacency[i]
+            .iter()
+            .filter(|&&bi| {
+                let b = &mol.bonds[bi as usize];
+                let nbr = if b.source == i as u16 {
+                    b.target
+                } else {
+                    b.source
+                } as usize;
+                mol.atoms[nbr].atomic_number > 1
+            })
+            .count();
+    }
+    deg
+}
+
+fn compute_has_triple_neighbor(mol: &Molecule) -> Vec<bool> {
+    let mut out = vec![false; mol.num_atoms()];
+    for (i, has_triple) in out.iter_mut().enumerate() {
+        *has_triple = mol.adjacency[i]
+            .iter()
+            .any(|&bi| mol.bonds[bi as usize].bond_type == BondType::Triple);
+    }
+    out
+}
+
+fn compute_bond_in_cycle_flags(mol: &Molecule) -> Vec<bool> {
+    let n = mol.num_atoms();
+    let m = mol.num_bonds();
+    let mut disc = vec![usize::MAX; n];
+    let mut low = vec![0usize; n];
+    let mut is_bridge = vec![false; m];
+    let mut time = 0usize;
+
+    fn dfs(
+        mol: &Molecule,
+        u: usize,
+        parent_bond: Option<usize>,
+        time: &mut usize,
+        disc: &mut [usize],
+        low: &mut [usize],
+        is_bridge: &mut [bool],
+    ) {
+        disc[u] = *time;
+        low[u] = *time;
+        *time += 1;
+
+        for &bi in &mol.adjacency[u] {
+            let bidx = bi as usize;
+            if Some(bidx) == parent_bond {
+                continue;
+            }
+
+            let bond = &mol.bonds[bidx];
+            let v = if bond.source == u as u16 {
+                bond.target as usize
+            } else {
+                bond.source as usize
+            };
+
+            if disc[v] == usize::MAX {
+                dfs(mol, v, Some(bidx), time, disc, low, is_bridge);
+                low[u] = low[u].min(low[v]);
+                if low[v] > disc[u] {
+                    is_bridge[bidx] = true;
+                }
+            } else {
+                low[u] = low[u].min(disc[v]);
+            }
+        }
+    }
+
+    for u in 0..n {
+        if disc[u] == usize::MAX {
+            dfs(mol, u, None, &mut time, &mut disc, &mut low, &mut is_bridge);
+        }
+    }
+
+    is_bridge.into_iter().map(|b| !b).collect()
+}
+
+/// Exclude ester / thioester bonds: C(=O)–O or C(=O)–S single bonds that are
+/// not in a ring.
+///
+/// **N is intentionally excluded from this check.** Conjugated `C(=X)-N` bonds
+/// are handled by `is_restricted_conjugated_carbon_n_bond()`. As with formamides,
+/// formate/thioformate `C(=O)H-O/S` bonds remain rotatable under RDKit strict.
+fn is_carbonyl_os_single_bond(mol: &Molecule, bond_idx: usize) -> bool {
+    let bond = &mol.bonds[bond_idx];
+    if bond.bond_type != BondType::Single {
+        return false;
+    }
+
+    let a = bond.source as usize;
+    let b = bond.target as usize;
+    let za = mol.atoms[a].atomic_number;
+    let zb = mol.atoms[b].atomic_number;
+
+    // Only C–O or C–S bonds (not C–N).
+    let (hetero_idx, c_idx) = if za == 6 && matches!(zb, 8 | 16) {
+        (b, a)
+    } else if zb == 6 && matches!(za, 8 | 16) {
+        (a, b)
+    } else {
+        return false;
+    };
+
+    // Aromatic O/S atoms are already handled upstream (aromatic bonds excluded).
+    if mol.atoms[hetero_idx].is_aromatic() {
+        return false;
+    }
+
+    let mut has_conjugated_hetero_double = false;
+    let mut has_other_heavy_substituent = false;
+
+    for &bi in &mol.adjacency[c_idx] {
+        let b2_idx = bi as usize;
+        if b2_idx == bond_idx {
+            continue;
+        }
+        let b2 = &mol.bonds[b2_idx];
+        let other = if b2.source == c_idx as u16 {
+            b2.target as usize
+        } else {
+            b2.source as usize
+        };
+
+        if b2.bond_type == BondType::Double && matches!(mol.atoms[other].atomic_number, 7 | 8 | 16) {
+            has_conjugated_hetero_double = true;
+            continue;
+        }
+
+        if other != hetero_idx && mol.atoms[other].atomic_number > 1 {
+            has_other_heavy_substituent = true;
+        }
+    }
+
+    has_conjugated_hetero_double && has_other_heavy_substituent
+}
+
+fn is_restricted_conjugated_carbon_n_bond(mol: &Molecule, bond_idx: usize) -> bool {
+    let bond = &mol.bonds[bond_idx];
+    if bond.bond_type != BondType::Single || bond.is_aromatic() {
+        return false;
+    }
+
+    let a = bond.source as usize;
+    let b = bond.target as usize;
+    let (n_idx, c_idx) = if mol.atoms[a].atomic_number == 7 && mol.atoms[b].atomic_number == 6 {
+        (a, b)
+    } else if mol.atoms[b].atomic_number == 7 && mol.atoms[a].atomic_number == 6 {
+        (b, a)
+    } else {
+        return false;
+    };
+
+    let n = &mol.atoms[n_idx];
+    n.formal_charge == 0
+        && is_restricted_conjugated_center_for_n(mol, c_idx, n_idx)
+}
+
+fn is_restricted_conjugated_center_for_n(mol: &Molecule, carbon_idx: usize, n_idx: usize) -> bool {
+    if mol.atoms[carbon_idx].atomic_number != 6 {
+        return false;
+    }
+
+    let mut has_conjugated_hetero_double = false;
+    let mut has_other_heavy_substituent = false;
+
+    for &bi in &mol.adjacency[carbon_idx] {
+        let bond = &mol.bonds[bi as usize];
+        let other = if bond.source == carbon_idx as u16 {
+            bond.target as usize
+        } else {
+            bond.source as usize
+        };
+
+        if bond.bond_type == BondType::Double && matches!(mol.atoms[other].atomic_number, 7 | 8 | 16) {
+            has_conjugated_hetero_double = true;
+            continue;
+        }
+
+        if other != n_idx && mol.atoms[other].atomic_number > 1 {
+            has_other_heavy_substituent = true;
+        }
+    }
+
+    has_conjugated_hetero_double && has_other_heavy_substituent
+}
+
+fn is_conjugated_nitrogen_pair_bond(mol: &Molecule, bond_idx: usize, conjugated_n: &[bool]) -> bool {
+    let bond = &mol.bonds[bond_idx];
+    if bond.bond_type != BondType::Single || bond.is_aromatic() {
+        return false;
+    }
+
+    let a = bond.source as usize;
+    let b = bond.target as usize;
+    mol.atoms[a].atomic_number == 7
+        && mol.atoms[b].atomic_number == 7
+        && conjugated_n[a]
+        && conjugated_n[b]
 }
 
 // ---------------------------------------------------------------------------
@@ -64,9 +416,9 @@ impl Descriptor for BondCountDetailed {
 
     fn calculate(&self, mol: &mut Molecule) -> DescriptorValue {
         let mut counts = vec![0u32; 5]; // total, single, double, triple, aromatic
-        
+
         counts[0] = mol.num_bonds() as u32;
-        
+
         for bond in &mol.bonds {
             match bond.bond_type {
                 BondType::Single => counts[1] += 1,
@@ -76,7 +428,7 @@ impl Descriptor for BondCountDetailed {
                 _ => {}
             }
         }
-        
+
         DescriptorValue::IntVec(counts)
     }
 }
@@ -107,8 +459,8 @@ const _: () = {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::io::smiles::parse_smiles;
     use crate::algo::rings::find_sssr;
+    use crate::io::smiles::parse_smiles;
 
     #[test]
     fn test_bond_count_simple() {
@@ -193,23 +545,117 @@ mod tests {
         find_sssr(&mut mol);
         assert_eq!(RotatableBondCount.calculate(&mut mol).as_int(), 0);
     }
-    
+
     #[test]
     fn test_rotatable_bond_count_pentane() {
         let mut mol = parse_smiles("CCCCC").unwrap();
         assert_eq!(RotatableBondCount.calculate(&mut mol).as_int(), 2);
     }
-    
+
     #[test]
     fn test_rotatable_bond_count_ethanol() {
         let mut mol = parse_smiles("CCO").unwrap();
         assert_eq!(RotatableBondCount.calculate(&mut mol).as_int(), 0);
     }
-    
+
     #[test]
     fn test_rotatable_bond_count_propanol() {
         let mut mol = parse_smiles("CCCO").unwrap();
         assert_eq!(RotatableBondCount.calculate(&mut mol).as_int(), 1);
+    }
+
+    #[test]
+    fn test_rotatable_bond_count_secondary_amide_keeps_n_alkyl_bond() {
+        // RDKit excludes the acyl C(=O)-N bond itself but still counts the
+        // exocyclic N-alkyl bond in a secondary amide.
+        let mut mol = parse_smiles("CC(=O)NCC").unwrap();
+        assert_eq!(RotatableBondCount.calculate(&mut mol).as_int(), 1);
+    }
+
+    #[test]
+    fn test_rotatable_bond_count_ester_carbonyl_o_excluded() {
+        // Ethyl acetate: C(=O)-O is excluded by carbonyl-O rule, O-CH2 counted.
+        let mut mol = parse_smiles("CC(=O)OCC").unwrap();
+        assert_eq!(RotatableBondCount.calculate(&mut mol).as_int(), 1);
+    }
+
+    #[test]
+    fn test_rotatable_bond_count_methyl_acetate_zero() {
+        // Methyl acetate: C(=O)-O excluded (carbonyl-O), O-CH3 terminal -> 0.
+        let mut mol = parse_smiles("CC(=O)OC").unwrap();
+        assert_eq!(RotatableBondCount.calculate(&mut mol).as_int(), 0);
+    }
+
+    #[test]
+    fn test_rotatable_bond_count_formyl_c_n_bond_is_counted() {
+        // Formyl C(=O)H-N bonds remain rotatable under RDKit strict semantics.
+        let mut mol = parse_smiles("CNC=O").unwrap();
+        assert_eq!(RotatableBondCount.calculate(&mut mol).as_int(), 1);
+
+        // Aromatic formyl imidazole-like nitrogens are also counted.
+        let mut mol2 = parse_smiles("O=CN1C=CC=N1").unwrap();
+        assert_eq!(RotatableBondCount.calculate(&mut mol2).as_int(), 1);
+
+        // Tertiary formamide remains rotatable as well.
+        let mut mol2 = parse_smiles("CN(C)C=O").unwrap();
+        assert_eq!(RotatableBondCount.calculate(&mut mol2).as_int(), 1);
+    }
+
+    #[test]
+    fn test_rotatable_bond_count_hydrazide_nn_excluded_only_when_both_n_are_conjugated() {
+        let mut mol2 = parse_smiles("CC(=O)NNC(=O)C").unwrap();
+        assert_eq!(RotatableBondCount.calculate(&mut mol2).as_int(), 0);
+
+        let mut mol3 = parse_smiles("CC(=O)NNC").unwrap();
+        assert_eq!(RotatableBondCount.calculate(&mut mol3).as_int(), 1);
+    }
+
+    #[test]
+    fn test_rotatable_bond_count_acetanilide_counts_n_aryl_bond() {
+        let mut mol = parse_smiles("CC(=O)Nc1ccccc1").unwrap();
+        assert_eq!(RotatableBondCount.calculate(&mut mol).as_int(), 1);
+    }
+
+    #[test]
+    fn test_rotatable_bond_count_amidine_c_n_bond_excluded() {
+        let mut mol = parse_smiles("CCNC(=N)N").unwrap();
+        assert_eq!(RotatableBondCount.calculate(&mut mol).as_int(), 1);
+    }
+
+    #[test]
+    fn test_rotatable_bond_count_formate_c_o_bond_is_counted() {
+        let mut mol = parse_smiles("COC=O").unwrap();
+        assert_eq!(RotatableBondCount.calculate(&mut mol).as_int(), 1);
+
+        let mut mol2 = parse_smiles("CCOC=O").unwrap();
+        assert_eq!(RotatableBondCount.calculate(&mut mol2).as_int(), 2);
+    }
+
+    #[test]
+    fn test_rotatable_bond_count_aromatic_acyl_n_excluded_but_formyl_kept() {
+        let mut mol = parse_smiles("CC(=O)N1C=CC=N1").unwrap();
+        assert_eq!(RotatableBondCount.calculate(&mut mol).as_int(), 0);
+
+        let mut mol2 = parse_smiles("O=CN1C=CC=N1").unwrap();
+        assert_eq!(RotatableBondCount.calculate(&mut mol2).as_int(), 1);
+    }
+
+    #[test]
+    fn test_rotatable_bond_count_tert_butyl_like_linkage_excluded() {
+        let mut mol = parse_smiles("CC(C)(C)CC").unwrap();
+        assert_eq!(RotatableBondCount.calculate(&mut mol).as_int(), 0);
+
+        let mut mol2 = parse_smiles("CC(C)(C)OC").unwrap();
+        assert_eq!(RotatableBondCount.calculate(&mut mol2).as_int(), 0);
+    }
+
+    #[test]
+    fn test_rotatable_bond_count_non_tbutyl_quaternary_linkage_kept() {
+        let mut mol = parse_smiles("CCC(C)(C)CC").unwrap();
+        assert_eq!(RotatableBondCount.calculate(&mut mol).as_int(), 2);
+
+        let mut mol2 = parse_smiles("CC(C)(O)CC").unwrap();
+        assert_eq!(RotatableBondCount.calculate(&mut mol2).as_int(), 1);
     }
 
     #[test]

@@ -70,6 +70,12 @@ pub enum DescriptorValue {
     /// Single floating point value (e.g., molecular weight, LogP)
     Float(f32),
 
+    /// High-precision scalar floating point value.
+    ///
+    /// Used for descriptors that can span very large dynamic ranges (e.g. Ipc),
+    /// where f32 precision is insufficient for RDKit parity.
+    Float64(f64),
+
     /// Multiple integer values (e.g., atom counts by element)
     IntVec(Vec<u32>),
 
@@ -118,6 +124,7 @@ impl DescriptorValue {
         match self {
             DescriptorValue::Int(v) => output.push(*v as f32),
             DescriptorValue::Float(v) => output.push(*v),
+            DescriptorValue::Float64(v) => output.push(*v as f32),
             DescriptorValue::IntVec(v) => output.extend(v.iter().map(|&x| x as f32)),
             DescriptorValue::IntU16Vec(v) => output.extend(v.iter().map(|&x| x as f32)),
             DescriptorValue::FloatVec(v) => output.extend_from_slice(v),
@@ -142,7 +149,7 @@ impl DescriptorValue {
     /// ```
     pub fn len(&self) -> usize {
         match self {
-            DescriptorValue::Int(_) | DescriptorValue::Float(_) => 1,
+            DescriptorValue::Int(_) | DescriptorValue::Float(_) | DescriptorValue::Float64(_) => 1,
             DescriptorValue::IntVec(v) => v.len(),
             DescriptorValue::IntU16Vec(v) => v.len(),
             DescriptorValue::FloatVec(v) => v.len(),
@@ -185,7 +192,17 @@ impl DescriptorValue {
     pub fn as_float(&self) -> f32 {
         match self {
             DescriptorValue::Float(v) => *v,
+            DescriptorValue::Float64(v) => *v as f32,
             _ => panic!("Expected Float, got {:?}", self),
+        }
+    }
+
+    /// Extract as f64 scalar (panics if not scalar float).
+    pub fn as_f64(&self) -> f64 {
+        match self {
+            DescriptorValue::Float(v) => *v as f64,
+            DescriptorValue::Float64(v) => *v,
+            _ => panic!("Expected Float/Float64, got {:?}", self),
         }
     }
 
@@ -483,9 +500,7 @@ mod tests {
         use crate::io::smiles::parse_smiles;
 
         let mut mol = parse_smiles("CC").unwrap();
-        let descriptors: Vec<Box<dyn Descriptor>> = vec![
-            Box::new(ExampleDescriptor),
-        ];
+        let descriptors: Vec<Box<dyn Descriptor>> = vec![Box::new(ExampleDescriptor)];
 
         let vec = build_ml_vector(&mut mol, &descriptors);
         assert_eq!(vec, vec![2.0]); // 2 heavy atoms

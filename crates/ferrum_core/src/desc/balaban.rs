@@ -35,7 +35,9 @@ pub fn compute_distance_matrix(mol: &Molecule, use_bo: bool) -> Vec<f64> {
                     u = v;
                 }
             }
-            if u == usize::MAX { break; }
+            if u == usize::MAX {
+                break;
+            }
             visited[u] = true;
 
             for &bond_idx in &mol.adjacency[u] {
@@ -46,7 +48,9 @@ pub fn compute_distance_matrix(mol: &Molecule, use_bo: bool) -> Vec<f64> {
                     bond.source as usize
                 };
                 let weight = if use_bo {
-                    let bo = if bond.is_aromatic() || bond.bond_type == crate::types::BondType::Aromatic {
+                    let bo = if bond.is_aromatic()
+                        || bond.bond_type == crate::types::BondType::Aromatic
+                    {
                         1.5
                     } else {
                         match bond.bond_type {
@@ -83,20 +87,24 @@ pub fn compute_distance_matrix(mol: &Molecule, use_bo: bool) -> Vec<f64> {
 /// # Panics
 /// Returns NaN for molecules with no bonds
 pub fn calculate(mol: &Molecule) -> f64 {
+    if crate::algo::components::num_fragments(mol) > 1 {
+        return 0.0;
+    }
+
     let n = mol.num_atoms();
     let m = mol.num_bonds();
-    
+
     if n == 0 || m == 0 {
         return 0.0;
     }
-    
+
     if n == 1 {
         return 0.0;
     }
-    
+
     // Compute bond-order-weighted distance matrix (like RDKit's useBO=1)
     let dist = compute_distance_matrix(mol, true);
-    
+
     // Compute distance sums s_i = sum of row i
     let mut s = vec![0.0f64; n];
     for i in 0..n {
@@ -107,10 +115,10 @@ pub fn calculate(mol: &Molecule) -> f64 {
             }
         }
     }
-    
+
     // Cyclomatic number μ = m - n + 1
     let mu = m as i32 - n as i32 + 1;
-    
+
     // Sum over all edges (using simple adjacency, not bond orders)
     let mut sum = 0.0;
     for bond in &mol.bonds {
@@ -123,7 +131,7 @@ pub fn calculate(mol: &Molecule) -> f64 {
         }
         sum += 1.0 / (si * sj).sqrt();
     }
-    
+
     // J = m/(μ+1) × sum
     if mu + 1 != 0 {
         (m as f64 / (mu + 1) as f64) * sum
@@ -159,11 +167,11 @@ const _: () = {
 mod tests {
     use super::*;
     use crate::io::smiles::parse_smiles;
-    
+
     fn parse(smiles: &str) -> Molecule {
         parse_smiles(smiles).unwrap()
     }
-    
+
     #[test]
     fn test_balaban_methane() {
         let mol = parse("C");
@@ -171,7 +179,7 @@ mod tests {
         println!("Methane J = {}", j);
         assert!(j.is_nan() || j == 0.0); // Single atom, no bonds
     }
-    
+
     #[test]
     fn test_balaban_ethane() {
         let mol = parse("CC");
@@ -181,7 +189,7 @@ mod tests {
         // J = 1/(0+1) * 1.0 = 1.0
         assert!((j - 1.0).abs() < 0.01);
     }
-    
+
     #[test]
     fn test_balaban_propane() {
         let mol = parse("CCC");
@@ -189,7 +197,7 @@ mod tests {
         // Linear chain should have J around 1.63
         assert!(j > 1.5 && j < 1.8);
     }
-    
+
     #[test]
     fn test_balaban_isobutane() {
         let mol = parse("CC(C)C");
@@ -198,7 +206,7 @@ mod tests {
         // Isobutane J ≈ 2.32
         assert!(j > 2.2 && j < 2.4, "J = {}", j);
     }
-    
+
     #[test]
     fn test_balaban_benzene() {
         let mol = parse("c1ccccc1");
@@ -206,7 +214,7 @@ mod tests {
         // Benzene: J = 3.0 (with bond-order-weighted distances)
         assert!((j - 3.0).abs() < 0.1, "J = {}", j);
     }
-    
+
     #[test]
     fn test_balaban_cyclohexane() {
         let mol = parse("C1CCCCC1");
@@ -214,7 +222,7 @@ mod tests {
         // Cyclohexane: all single bonds, J ≈ 2.0
         assert!((j - 2.0).abs() < 0.1, "J = {}", j);
     }
-    
+
     #[test]
     fn test_balaban_naphthalene() {
         let mol = parse("c1ccc2ccccc2c1");
@@ -222,7 +230,7 @@ mod tests {
         // Naphthalene: J ≈ 2.89 (with BO-weighted distances)
         assert!(j > 2.7 && j < 3.0, "J = {}", j);
     }
-    
+
     #[test]
     fn test_balaban_disconnected() {
         // Two separate methane molecules

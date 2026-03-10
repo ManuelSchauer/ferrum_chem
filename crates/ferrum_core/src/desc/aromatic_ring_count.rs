@@ -1,6 +1,6 @@
-use super::typed::{DescriptorValue, Descriptor};
+use super::typed::{Descriptor, DescriptorValue};
+use crate::algo::rings::find_minimum_cycle_basis_bonds;
 use crate::mol::molecule::Molecule;
-use crate::algo::rings::find_sssr;
 
 // ---------------------------------------------------------------------------
 // Public computation function
@@ -8,29 +8,18 @@ use crate::algo::rings::find_sssr;
 
 /// Compute aromatic ring count.
 ///
-/// A ring is considered aromatic if all atoms in the ring
-/// have their aromatic flag set.
+/// RDKit's Lipinski aromatic ring descriptor counts aromatic SSSR rings.
+/// A ring is aromatic only when every bond around that ring is aromatic;
+/// aromatic atoms alone are not sufficient in fused/Kekulized systems.
 pub fn compute_aromatic_ring_count(mol: &Molecule) -> u32 {
-    let mut mol_copy = Molecule {
-        atoms: mol.atoms.clone(),
-        bonds: mol.bonds.clone(),
-        adjacency: mol.adjacency.clone(),
-    };
-    
-    let rings = find_sssr(&mut mol_copy);
-    
-    let mut aromatic_count = 0u32;
-    
-    for ring in rings {
-        let all_aromatic = ring.iter()
-            .all(|&atom_idx| mol.atoms[atom_idx as usize].is_aromatic());
-        
-        if all_aromatic {
-            aromatic_count += 1;
-        }
-    }
-    
-    aromatic_count
+    find_minimum_cycle_basis_bonds(mol)
+        .iter()
+        .filter(|ring| ring_bonds_all_aromatic(mol, ring))
+        .count() as u32
+}
+
+fn ring_bonds_all_aromatic(mol: &Molecule, ring: &[usize]) -> bool {
+    ring.iter().all(|&bond_idx| mol.bonds[bond_idx].is_aromatic())
 }
 
 // ---------------------------------------------------------------------------
@@ -61,8 +50,8 @@ const _: () = {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::io::smiles::parse_smiles;
     use crate::algo::aromaticity::perceive_aromaticity;
+    use crate::io::smiles::parse_smiles;
 
     #[test]
     fn test_aromatic_ring_count_benzene() {
@@ -112,4 +101,12 @@ mod tests {
         perceive_aromaticity(&mut mol);
         assert_eq!(compute_aromatic_ring_count(&mol), 1);
     }
+
+    #[test]
+    fn test_aromatic_ring_count_requires_aromatic_ring_bonds() {
+        let mut mol = parse_smiles("CC1=CC2=C(C=C1C)N(C[C@H](O)[C@H](O)[C@H](O)COP(=O)(O)OP(=O)(O)OC[C@H]1O[C@@H](N3C=NC4=C(N)N=CN=C43)[C@H](O)[C@@H]1O)C1=NC(=O)N=C(O)C1=N2").unwrap();
+        perceive_aromaticity(&mut mol);
+        assert_eq!(compute_aromatic_ring_count(&mol), 3);
+    }
+
 }
