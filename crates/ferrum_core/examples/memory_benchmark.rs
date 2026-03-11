@@ -2,10 +2,10 @@
 //!
 //! Demonstrates memory-efficient bit-packed fingerprints.
 
+use ferrum_core::algo::aromaticity::perceive_aromaticity;
 use ferrum_core::desc::maccs::MaccsKeys;
 use ferrum_core::desc::typed::Descriptor;
 use ferrum_core::io::smiles::parse_smiles;
-use ferrum_core::algo::aromaticity::perceive_aromaticity;
 
 fn main() {
     println!("═══════════════════════════════════════════════════════════════");
@@ -31,7 +31,10 @@ fn main() {
 
     println!("🚀 MACCS Keys (BitVec)");
     println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-    println!("  Size per molecule:  {} bytes (vs {} bytes as Vec<f32>)", typed_size, legacy_equiv_size);
+    println!(
+        "  Size per molecule:  {} bytes (vs {} bytes as Vec<f32>)",
+        typed_size, legacy_equiv_size
+    );
     println!("  Bits set:           {}/166", set_bits);
     println!("  Storage efficiency: 1 bit per feature");
     let reduction = legacy_equiv_size as f64 / typed_size as f64;
@@ -67,8 +70,12 @@ fn main() {
     for &n in &batch_sizes {
         let legacy_mb = (n * 69 * 1024) as f64 / (1024.0 * 1024.0);
         let typed_mb = (n * 2200) as f64 / (1024.0 * 1024.0);
-        println!("  {:>9} molecules:  {:.1} MB → {:.1} MB", 
-            format_number(n), legacy_mb, typed_mb);
+        println!(
+            "  {:>9} molecules:  {:.1} MB → {:.1} MB",
+            format_number(n),
+            legacy_mb,
+            typed_mb
+        );
     }
     println!();
 

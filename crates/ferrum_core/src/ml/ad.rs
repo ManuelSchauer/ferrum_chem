@@ -50,9 +50,12 @@ impl KnnDistanceAD {
         }
 
         let mean_dist = distances.iter().sum::<f64>() / n as f64;
-        let std_dist = (distances.iter()
+        let std_dist = (distances
+            .iter()
             .map(|&d| (d - mean_dist).powi(2))
-            .sum::<f64>() / n as f64).sqrt();
+            .sum::<f64>()
+            / n as f64)
+            .sqrt();
 
         let threshold = mean_dist + z_cutoff * std_dist;
 
@@ -257,14 +260,11 @@ mod tests {
 
     #[test]
     fn test_knn_ad_in_domain() {
-        let features = Array2::from_shape_vec((6, 2), vec![
-            0.0, 0.0,
-            1.0, 0.0,
-            0.0, 1.0,
-            1.0, 1.0,
-            0.5, 0.5,
-            0.5, 0.0,
-        ]).unwrap();
+        let features = Array2::from_shape_vec(
+            (6, 2),
+            vec![0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 1.0, 1.0, 0.5, 0.5, 0.5, 0.0],
+        )
+        .unwrap();
         let ad = KnnDistanceAD::fit(&features, 3, 2.0);
 
         // Point inside cluster → in domain
@@ -285,13 +285,11 @@ mod tests {
 
     #[test]
     fn test_leverage_ad() {
-        let features = Array2::from_shape_vec((5, 2), vec![
-            1.0, 2.0,
-            2.0, 3.0,
-            3.0, 4.0,
-            4.0, 5.0,
-            5.0, 6.0,
-        ]).unwrap();
+        let features = Array2::from_shape_vec(
+            (5, 2),
+            vec![1.0, 2.0, 2.0, 3.0, 3.0, 4.0, 4.0, 5.0, 5.0, 6.0],
+        )
+        .unwrap();
         let ad = LeverageAD::fit(&features);
 
         // Interior point should have low leverage

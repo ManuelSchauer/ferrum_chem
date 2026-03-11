@@ -1,9 +1,9 @@
 //! Train/test splitting — random, stratified, scaffold-based.
 
 use crate::ml::dataset::QsarDataset;
-use rand::seq::SliceRandom;
 use rand::SeedableRng;
 use rand::rngs::StdRng;
+use rand::seq::SliceRandom;
 use std::collections::HashMap;
 
 /// Split result.
@@ -167,9 +167,7 @@ mod tests {
         // Binary classification: 60 class-0, 40 class-1
         let n = 100;
         let features = Array2::from_shape_fn((n, 2), |(i, j)| (i + j) as f64);
-        let targets = Array1::from_vec(
-            (0..n).map(|i| if i < 60 { 0.0 } else { 1.0 }).collect()
-        );
+        let targets = Array1::from_vec((0..n).map(|i| if i < 60 { 0.0 } else { 1.0 }).collect());
         let names = vec!["x".into(), "y".into()];
         let ds = QsarDataset::new(features, targets, names);
 
@@ -186,23 +184,37 @@ mod tests {
     #[test]
     fn test_scaffold_split() {
         let ds = make_dataset(10);
-        let scaffolds: Vec<String> = (0..10).map(|i| {
-            if i < 3 { "ring_A".into() }
-            else if i < 7 { "ring_B".into() }
-            else { "ring_C".into() }
-        }).collect();
+        let scaffolds: Vec<String> = (0..10)
+            .map(|i| {
+                if i < 3 {
+                    "ring_A".into()
+                } else if i < 7 {
+                    "ring_B".into()
+                } else {
+                    "ring_C".into()
+                }
+            })
+            .collect();
 
         let split = scaffold_split(&ds, &scaffolds, 0.3, 42);
         assert_eq!(split.train.n_samples() + split.test.n_samples(), 10);
 
         // Scaffolds should not be split across train/test
-        let train_scaffolds: Vec<&str> = split.train_indices.iter()
-            .map(|&i| scaffolds[i].as_str()).collect();
-        let test_scaffolds: Vec<&str> = split.test_indices.iter()
-            .map(|&i| scaffolds[i].as_str()).collect();
+        let train_scaffolds: Vec<&str> = split
+            .train_indices
+            .iter()
+            .map(|&i| scaffolds[i].as_str())
+            .collect();
+        let test_scaffolds: Vec<&str> = split
+            .test_indices
+            .iter()
+            .map(|&i| scaffolds[i].as_str())
+            .collect();
         for ts in &test_scaffolds {
-            assert!(!train_scaffolds.contains(ts),
-                "Scaffold {ts} found in both train and test");
+            assert!(
+                !train_scaffolds.contains(ts),
+                "Scaffold {ts} found in both train and test"
+            );
         }
     }
 }

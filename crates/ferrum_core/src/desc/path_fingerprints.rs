@@ -9,13 +9,13 @@
 //! - Carhart et al. (1985) "Atom pairs as molecular features" JCICS 25, 64-73
 //! - Nilakantan et al. (1987) "Topological torsion" JCICS 27, 82-85
 
+use super::typed::{Descriptor, DescriptorValue};
 use crate::mol::molecule::Molecule;
 use crate::types::{AtomIdx, BondType};
-use std::collections::VecDeque;
-use std::hash::{Hash, Hasher};
-use std::collections::hash_map::DefaultHasher;
-use super::typed::{DescriptorValue, Descriptor};
 use bitvec::prelude::*;
+use std::collections::VecDeque;
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 
 /// Maximum topological distance for atom pair encoding.
 const MAX_PAIR_DISTANCE: u32 = 7;
@@ -38,7 +38,8 @@ fn atom_pair_type(mol: &Molecule, idx: usize) -> u64 {
     let total_h = atom.total_h() as u64;
 
     // Estimate pi electrons from bond types
-    let pi_electrons: u64 = mol.adjacency[idx].iter()
+    let pi_electrons: u64 = mol.adjacency[idx]
+        .iter()
         .map(|&bond_idx| {
             let bond = &mol.bonds[bond_idx as usize];
             match bond.bond_type {
@@ -50,12 +51,7 @@ fn atom_pair_type(mol: &Molecule, idx: usize) -> u64 {
         })
         .sum();
 
-    combine_hash(&[
-        atom.atomic_number as u64,
-        pi_electrons,
-        degree,
-        total_h,
-    ])
+    combine_hash(&[atom.atomic_number as u64, pi_electrons, degree, total_h])
 }
 
 /// Compute all-pairs shortest path distances using BFS.
@@ -72,7 +68,11 @@ fn compute_distances(mol: &Molecule) -> Vec<u32> {
             let current_dist = distances[start * n + current as usize];
             for &bond_idx in &mol.adjacency[current as usize] {
                 let bond = &mol.bonds[bond_idx as usize];
-                let neighbor = if bond.source == current { bond.target } else { bond.source };
+                let neighbor = if bond.source == current {
+                    bond.target
+                } else {
+                    bond.source
+                };
                 let nd = &mut distances[start * n + neighbor as usize];
                 if *nd == u32::MAX {
                     *nd = current_dist + 1;
@@ -202,7 +202,8 @@ impl Descriptor for TopologicalTorsionFingerprint {
 fn torsion_atom_type(mol: &Molecule, idx: usize) -> u64 {
     let atom = &mol.atoms[idx];
     let degree = mol.get_degree(idx as u16) as u64;
-    let pi_electrons: u64 = mol.adjacency[idx].iter()
+    let pi_electrons: u64 = mol.adjacency[idx]
+        .iter()
         .map(|&bond_idx| {
             let bond = &mol.bonds[bond_idx as usize];
             match bond.bond_type {
@@ -231,17 +232,33 @@ fn find_4_atom_paths(mol: &Molecule) -> Vec<[usize; 4]> {
         // DFS for paths of length 3 (4 atoms)
         for &b1 in &mol.adjacency[start] {
             let bond1 = &mol.bonds[b1 as usize];
-            let a1 = if bond1.source as usize == start { bond1.target as usize } else { bond1.source as usize };
+            let a1 = if bond1.source as usize == start {
+                bond1.target as usize
+            } else {
+                bond1.source as usize
+            };
 
             for &b2 in &mol.adjacency[a1] {
                 let bond2 = &mol.bonds[b2 as usize];
-                let a2 = if bond2.source as usize == a1 { bond2.target as usize } else { bond2.source as usize };
-                if a2 == start { continue; } // no backtracking
+                let a2 = if bond2.source as usize == a1 {
+                    bond2.target as usize
+                } else {
+                    bond2.source as usize
+                };
+                if a2 == start {
+                    continue;
+                } // no backtracking
 
                 for &b3 in &mol.adjacency[a2] {
                     let bond3 = &mol.bonds[b3 as usize];
-                    let a3 = if bond3.source as usize == a2 { bond3.target as usize } else { bond3.source as usize };
-                    if a3 == a1 || a3 == start { continue; } // no backtracking
+                    let a3 = if bond3.source as usize == a2 {
+                        bond3.target as usize
+                    } else {
+                        bond3.source as usize
+                    };
+                    if a3 == a1 || a3 == start {
+                        continue;
+                    } // no backtracking
 
                     // Only add each path once: use canonical ordering (start < end)
                     if start < a3 {
@@ -264,10 +281,21 @@ fn torsion_features(mol: &Molecule) -> Vec<u64> {
     let atom_types: Vec<u64> = (0..n).map(|i| torsion_atom_type(mol, i)).collect();
     let paths = find_4_atom_paths(mol);
 
-    let mut features: Vec<u64> = paths.iter()
+    let mut features: Vec<u64> = paths
+        .iter()
         .map(|p| {
-            let forward = combine_hash(&[atom_types[p[0]], atom_types[p[1]], atom_types[p[2]], atom_types[p[3]]]);
-            let reverse = combine_hash(&[atom_types[p[3]], atom_types[p[2]], atom_types[p[1]], atom_types[p[0]]]);
+            let forward = combine_hash(&[
+                atom_types[p[0]],
+                atom_types[p[1]],
+                atom_types[p[2]],
+                atom_types[p[3]],
+            ]);
+            let reverse = combine_hash(&[
+                atom_types[p[3]],
+                atom_types[p[2]],
+                atom_types[p[1]],
+                atom_types[p[0]],
+            ]);
             forward.min(reverse) // canonical
         })
         .collect();
@@ -286,8 +314,8 @@ const _: () = {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::io::smiles::parse_smiles;
     use crate::desc::fingerprint::tanimoto_similarity;
+    use crate::io::smiles::parse_smiles;
 
     fn count_bits(fp: &BitVec<u8, Lsb0>) -> usize {
         fp.count_ones()
@@ -310,7 +338,10 @@ mod tests {
     #[test]
     fn test_ap_ethane() {
         let fp = calc_ap("CC", 2048);
-        assert!(count_bits(&fp) > 0, "Ethane should have at least 1 atom pair");
+        assert!(
+            count_bits(&fp) > 0,
+            "Ethane should have at least 1 atom pair"
+        );
     }
 
     #[test]
@@ -339,7 +370,11 @@ mod tests {
         let fp1 = calc_ap("c1ccc(O)cc1", 2048);
         let fp2 = calc_ap("Cc1ccc(O)cc1", 2048);
         let sim = tanimoto_similarity(&fp1, &fp2);
-        assert!(sim > 0.2, "Similar molecules should have some AP overlap: {}", sim);
+        assert!(
+            sim > 0.2,
+            "Similar molecules should have some AP overlap: {}",
+            sim
+        );
     }
 
     #[test]

@@ -53,9 +53,12 @@ impl ElasticNet {
         let x_mean = features.mean_axis(Axis(0)).unwrap();
         let mut x_std = Array1::<f64>::zeros(p);
         for j in 0..p {
-            let var: f64 = features.column(j).iter()
+            let var: f64 = features
+                .column(j)
+                .iter()
                 .map(|&x| (x - x_mean[j]).powi(2))
-                .sum::<f64>() / n;
+                .sum::<f64>()
+                / n;
             x_std[j] = var.sqrt().max(1e-12);
         }
 
@@ -98,8 +101,7 @@ impl ElasticNet {
                 let rho = x.column(j).dot(&residual);
 
                 // Soft thresholding (proximal operator for L1)
-                let new_beta = soft_threshold(rho, l1_penalty * n)
-                    / (x_sq[j] + l2_penalty * n);
+                let new_beta = soft_threshold(rho, l1_penalty * n) / (x_sq[j] + l2_penalty * n);
 
                 beta[j] = new_beta;
 
@@ -125,9 +127,8 @@ impl ElasticNet {
             coefficients[j] = beta[j] / x_std[j];
         }
 
-        let selected_features: Vec<usize> = (0..p)
-            .filter(|&j| coefficients[j].abs() > 1e-12)
-            .collect();
+        let selected_features: Vec<usize> =
+            (0..p).filter(|&j| coefficients[j].abs() > 1e-12).collect();
 
         Self {
             coefficients,
@@ -166,7 +167,7 @@ impl ElasticNet {
         Array1::from_vec(
             (0..features.nrows())
                 .map(|i| self.predict_one(features.row(i).as_slice().unwrap()))
-                .collect()
+                .collect(),
         )
     }
 
@@ -190,22 +191,21 @@ fn soft_threshold(x: f64, lambda: f64) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ndarray::{array, Array1, Array2};
+    use ndarray::{Array1, Array2, array};
 
     #[test]
     fn test_elastic_net_linear() {
         // y = 2*x1 + 3*x2
-        let features = Array2::from_shape_vec((8, 2), vec![
-            1.0, 1.0,
-            2.0, 1.0,
-            3.0, 1.0,
-            1.0, 2.0,
-            2.0, 2.0,
-            3.0, 2.0,
-            1.0, 3.0,
-            2.0, 3.0,
-        ]).unwrap();
-        let targets: Array1<f64> = features.rows().into_iter()
+        let features = Array2::from_shape_vec(
+            (8, 2),
+            vec![
+                1.0, 1.0, 2.0, 1.0, 3.0, 1.0, 1.0, 2.0, 2.0, 2.0, 3.0, 2.0, 1.0, 3.0, 2.0, 3.0,
+            ],
+        )
+        .unwrap();
+        let targets: Array1<f64> = features
+            .rows()
+            .into_iter()
             .map(|r| 2.0 * r[0] + 3.0 * r[1])
             .collect();
 
@@ -223,18 +223,14 @@ mod tests {
     #[test]
     fn test_lasso_sparsity() {
         // 3 features, only first is relevant: y = x1
-        let features = Array2::from_shape_vec((10, 3), vec![
-            1.0, 5.0, 3.0,
-            2.0, 3.0, 7.0,
-            3.0, 8.0, 1.0,
-            4.0, 2.0, 9.0,
-            5.0, 6.0, 4.0,
-            6.0, 1.0, 8.0,
-            7.0, 4.0, 2.0,
-            8.0, 7.0, 6.0,
-            9.0, 9.0, 5.0,
-            10.0, 0.0, 0.0,
-        ]).unwrap();
+        let features = Array2::from_shape_vec(
+            (10, 3),
+            vec![
+                1.0, 5.0, 3.0, 2.0, 3.0, 7.0, 3.0, 8.0, 1.0, 4.0, 2.0, 9.0, 5.0, 6.0, 4.0, 6.0,
+                1.0, 8.0, 7.0, 4.0, 2.0, 8.0, 7.0, 6.0, 9.0, 9.0, 5.0, 10.0, 0.0, 0.0,
+            ],
+        )
+        .unwrap();
         let targets = array![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0];
 
         let model = ElasticNet::lasso(&features, &targets, 0.1);
@@ -242,23 +238,23 @@ mod tests {
         // Feature 0 should have the largest coefficient
         assert!(
             model.coefficients[0].abs() > model.coefficients[1].abs(),
-            "Coefficients: {:?}", model.coefficients
+            "Coefficients: {:?}",
+            model.coefficients
         );
         assert!(
             model.coefficients[0].abs() > model.coefficients[2].abs(),
-            "Coefficients: {:?}", model.coefficients
+            "Coefficients: {:?}",
+            model.coefficients
         );
     }
 
     #[test]
     fn test_ridge_no_sparsity() {
-        let features = Array2::from_shape_vec((5, 2), vec![
-            1.0, 2.0,
-            2.0, 3.0,
-            3.0, 4.0,
-            4.0, 5.0,
-            5.0, 6.0,
-        ]).unwrap();
+        let features = Array2::from_shape_vec(
+            (5, 2),
+            vec![1.0, 2.0, 2.0, 3.0, 3.0, 4.0, 4.0, 5.0, 5.0, 6.0],
+        )
+        .unwrap();
         let targets = array![3.0, 5.0, 7.0, 9.0, 11.0];
 
         let model = ElasticNet::ridge(&features, &targets, 0.01);
@@ -276,19 +272,23 @@ mod tests {
 
     #[test]
     fn test_selected_features() {
-        let features = Array2::from_shape_vec((6, 3), vec![
-            1.0, 0.0, 0.5,
-            2.0, 0.0, 1.0,
-            3.0, 0.0, 1.5,
-            4.0, 0.0, 2.0,
-            5.0, 0.0, 2.5,
-            6.0, 0.0, 3.0,
-        ]).unwrap();
+        let features = Array2::from_shape_vec(
+            (6, 3),
+            vec![
+                1.0, 0.0, 0.5, 2.0, 0.0, 1.0, 3.0, 0.0, 1.5, 4.0, 0.0, 2.0, 5.0, 0.0, 2.5, 6.0,
+                0.0, 3.0,
+            ],
+        )
+        .unwrap();
         let targets = array![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
 
         let model = ElasticNet::lasso(&features, &targets, 0.5);
         // Constant feature (col 1) should be dropped
-        assert!(!model.selected_features.contains(&1),
-            "Selected: {:?}, coeffs: {:?}", model.selected_features, model.coefficients);
+        assert!(
+            !model.selected_features.contains(&1),
+            "Selected: {:?}, coeffs: {:?}",
+            model.selected_features,
+            model.coefficients
+        );
     }
 }

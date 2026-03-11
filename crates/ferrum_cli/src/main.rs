@@ -1,7 +1,7 @@
 use clap::{Parser, Subcommand};
-use ferrum_core::{io, algo, desc};
-use std::path::PathBuf;
 use ferrum_core::desc::Descriptor;
+use ferrum_core::{algo, desc, io};
+use std::path::PathBuf;
 
 #[derive(Parser)]
 #[command(name = "FerrumChem")]

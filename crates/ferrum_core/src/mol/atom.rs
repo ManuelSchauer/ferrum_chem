@@ -1,7 +1,7 @@
 use crate::types::Hybridization;
 
 /// Atom representation in a molecular graph.
-/// 
+///
 /// # Thread Safety
 /// `Atom` is `Copy + Send + Sync`, making it trivially thread-safe.
 /// The struct is designed to be compact (12 bytes) and cache-friendly
@@ -11,7 +11,7 @@ pub struct Atom {
     pub atomic_number: u8,
     pub formal_charge: i8,
     pub num_explicit_h: u8,
-    pub num_implicit_h: u8,  // Calculated implicit hydrogens
+    pub num_implicit_h: u8, // Calculated implicit hydrogens
     pub isotope: u16,
     pub hybridization: Hybridization,
     pub flags: u8, // Bit 0: Aromatic, Bit 1: Ring
@@ -36,22 +36,40 @@ impl Atom {
         }
     }
 
-    pub fn is_aromatic(&self) -> bool { self.flags & 1 != 0 }
+    pub fn is_aromatic(&self) -> bool {
+        self.flags & 1 != 0
+    }
     pub fn set_aromatic(&mut self, val: bool) {
-        if val { self.flags |= 1; } else { self.flags &= !1; }
+        if val {
+            self.flags |= 1;
+        } else {
+            self.flags &= !1;
+        }
     }
-    
-    pub fn is_in_ring(&self) -> bool { self.flags & 0b10 != 0 }
+
+    pub fn is_in_ring(&self) -> bool {
+        self.flags & 0b10 != 0
+    }
     pub fn set_in_ring(&mut self, val: bool) {
-        if val { self.flags |= 0b10; } else { self.flags &= !0b10; }
+        if val {
+            self.flags |= 0b10;
+        } else {
+            self.flags &= !0b10;
+        }
     }
-    
+
     /// Whether this atom has no implicit H (bracket atom with explicit specification)
-    pub fn no_implicit_h(&self) -> bool { self.flags & 0b100 != 0 }
-    pub fn set_no_implicit_h(&mut self, val: bool) {
-        if val { self.flags |= 0b100; } else { self.flags &= !0b100; }
+    pub fn no_implicit_h(&self) -> bool {
+        self.flags & 0b100 != 0
     }
-    
+    pub fn set_no_implicit_h(&mut self, val: bool) {
+        if val {
+            self.flags |= 0b100;
+        } else {
+            self.flags &= !0b100;
+        }
+    }
+
     /// Total hydrogen count (explicit + implicit)
     pub fn total_h(&self) -> u8 {
         self.num_explicit_h + self.num_implicit_h

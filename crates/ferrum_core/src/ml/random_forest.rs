@@ -30,7 +30,12 @@ impl TreeNode {
     fn predict(&self, sample: &[f64]) -> f64 {
         match self {
             TreeNode::Leaf { value } => *value,
-            TreeNode::Split { feature_idx, threshold, left, right } => {
+            TreeNode::Split {
+                feature_idx,
+                threshold,
+                left,
+                right,
+            } => {
                 if sample[*feature_idx] <= *threshold {
                     left.predict(sample)
                 } else {
@@ -54,16 +59,30 @@ struct DecisionTreeBuilder {
 }
 
 impl DecisionTreeBuilder {
-    fn build(&self, features: &Array2<f64>, targets: &[f64], indices: &[usize], depth: usize, rng: &mut StdRng) -> TreeNode {
+    fn build(
+        &self,
+        features: &Array2<f64>,
+        targets: &[f64],
+        indices: &[usize],
+        depth: usize,
+        rng: &mut StdRng,
+    ) -> TreeNode {
         // Stop conditions
         if depth >= self.max_depth || indices.len() < self.min_samples_split || indices.len() <= 1 {
-            return TreeNode::Leaf { value: self.leaf_value(targets, indices) };
+            return TreeNode::Leaf {
+                value: self.leaf_value(targets, indices),
+            };
         }
 
         // Check if all targets are the same
         let first_target = targets[indices[0]];
-        if indices.iter().all(|&i| (targets[i] - first_target).abs() < 1e-15) {
-            return TreeNode::Leaf { value: first_target };
+        if indices
+            .iter()
+            .all(|&i| (targets[i] - first_target).abs() < 1e-15)
+        {
+            return TreeNode::Leaf {
+                value: first_target,
+            };
         }
 
         let n_features = features.ncols();
@@ -93,7 +112,8 @@ impl DecisionTreeBuilder {
             // Try midpoints as thresholds
             for w in values.windows(2) {
                 let threshold = (w[0] + w[1]) / 2.0;
-                let (left, right): (Vec<usize>, Vec<usize>) = indices.iter()
+                let (left, right): (Vec<usize>, Vec<usize>) = indices
+                    .iter()
                     .partition(|&&i| features[[i, feat_idx]] <= threshold);
 
                 if left.is_empty() || right.is_empty() {
@@ -117,7 +137,9 @@ impl DecisionTreeBuilder {
         }
 
         if best_left.is_empty() || best_right.is_empty() {
-            return TreeNode::Leaf { value: self.leaf_value(targets, indices) };
+            return TreeNode::Leaf {
+                value: self.leaf_value(targets, indices),
+            };
         }
 
         TreeNode::Split {
@@ -158,14 +180,22 @@ impl DecisionTreeBuilder {
     }
 
     fn variance(&self, targets: &[f64], indices: &[usize]) -> f64 {
-        if indices.is_empty() { return 0.0; }
+        if indices.is_empty() {
+            return 0.0;
+        }
         let n = indices.len() as f64;
         let mean: f64 = indices.iter().map(|&i| targets[i]).sum::<f64>() / n;
-        indices.iter().map(|&i| (targets[i] - mean).powi(2)).sum::<f64>() / n
+        indices
+            .iter()
+            .map(|&i| (targets[i] - mean).powi(2))
+            .sum::<f64>()
+            / n
     }
 
     fn gini(&self, targets: &[f64], indices: &[usize]) -> f64 {
-        if indices.is_empty() { return 0.0; }
+        if indices.is_empty() {
+            return 0.0;
+        }
         let n = indices.len() as f64;
         let p = indices.iter().filter(|&&i| targets[i] >= 0.5).count() as f64 / n;
         2.0 * p * (1.0 - p)
@@ -251,7 +281,7 @@ impl RandomForestRegressor {
         Array1::from_vec(
             (0..features.nrows())
                 .map(|i| self.predict_one(features.row(i).as_slice().unwrap()))
-                .collect()
+                .collect(),
         )
     }
 }
@@ -330,7 +360,11 @@ impl RandomForestClassifier {
 
     /// Predict class (0.0 or 1.0) for a single sample.
     pub fn predict_one(&self, sample: &[f64]) -> f64 {
-        if self.predict_proba_one(sample) >= 0.5 { 1.0 } else { 0.0 }
+        if self.predict_proba_one(sample) >= 0.5 {
+            1.0
+        } else {
+            0.0
+        }
     }
 
     /// Predict for multiple samples.
@@ -338,7 +372,7 @@ impl RandomForestClassifier {
         Array1::from_vec(
             (0..features.nrows())
                 .map(|i| self.predict_one(features.row(i).as_slice().unwrap()))
-                .collect()
+                .collect(),
         )
     }
 }
@@ -347,7 +381,12 @@ impl RandomForestClassifier {
 fn count_feature_usage(node: &TreeNode, counts: &mut [u64]) {
     match node {
         TreeNode::Leaf { .. } => {}
-        TreeNode::Split { feature_idx, left, right, .. } => {
+        TreeNode::Split {
+            feature_idx,
+            left,
+            right,
+            ..
+        } => {
             counts[*feature_idx] += 1;
             count_feature_usage(left, counts);
             count_feature_usage(right, counts);
@@ -358,22 +397,23 @@ fn count_feature_usage(node: &TreeNode, counts: &mut [u64]) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ndarray::{array, Array2};
+    use ndarray::{Array2, array};
 
     #[test]
     fn test_rf_regressor_basic() {
         // Simple linear relationship: y = x
-        let features = Array2::from_shape_vec((20, 1),
-            (0..20).map(|i| i as f64).collect()).unwrap();
+        let features =
+            Array2::from_shape_vec((20, 1), (0..20).map(|i| i as f64).collect()).unwrap();
         let targets = Array1::from_vec((0..20).map(|i| i as f64).collect());
 
-        let model = RandomForestRegressor::fit(
-            &features, &targets, 50, 10, 2, 1.0, 42
-        );
+        let model = RandomForestRegressor::fit(&features, &targets, 50, 10, 2, 1.0, 42);
 
         // Should predict reasonably for in-range values
         let pred = model.predict_one(&[5.0]);
-        assert!((pred - 5.0).abs() < 3.0, "Prediction {pred} too far from 5.0");
+        assert!(
+            (pred - 5.0).abs() < 3.0,
+            "Prediction {pred} too far from 5.0"
+        );
     }
 
     #[test]
@@ -389,9 +429,7 @@ mod tests {
         let features = Array2::from_shape_vec((20, 2), feat_data).unwrap();
         let targets = Array1::from_vec(target_data);
 
-        let model = RandomForestClassifier::fit(
-            &features, &targets, 50, 10, 2, 1.0, 42
-        );
+        let model = RandomForestClassifier::fit(&features, &targets, 50, 10, 2, 1.0, 42);
 
         assert!((model.predict_one(&[2.0, 0.0]) - 0.0).abs() < 1e-10);
         assert!((model.predict_one(&[15.0, 0.0]) - 1.0).abs() < 1e-10);
@@ -411,26 +449,23 @@ mod tests {
         let features = Array2::from_shape_vec((n, 2), feat).unwrap();
         let targets = Array1::from_vec(tgt);
 
-        let model = RandomForestRegressor::fit(
-            &features, &targets, 30, 8, 2, 1.0, 42
-        );
+        let model = RandomForestRegressor::fit(&features, &targets, 30, 8, 2, 1.0, 42);
 
         // Feature 0 should be more important than feature 1
         assert!(
             model.feature_importances[0] > model.feature_importances[1],
-            "Feature importances: {:?}", model.feature_importances
+            "Feature importances: {:?}",
+            model.feature_importances
         );
     }
 
     #[test]
     fn test_rf_batch_predict() {
-        let features = Array2::from_shape_vec((10, 1),
-            (0..10).map(|i| i as f64).collect()).unwrap();
+        let features =
+            Array2::from_shape_vec((10, 1), (0..10).map(|i| i as f64).collect()).unwrap();
         let targets = Array1::from_vec((0..10).map(|i| i as f64 * 2.0).collect());
 
-        let model = RandomForestRegressor::fit(
-            &features, &targets, 20, 5, 2, 1.0, 42
-        );
+        let model = RandomForestRegressor::fit(&features, &targets, 20, 5, 2, 1.0, 42);
 
         let test = Array2::from_shape_vec((3, 1), vec![2.0, 5.0, 8.0]).unwrap();
         let preds = model.predict(&test);
@@ -452,9 +487,7 @@ mod tests {
         let features = Array2::from_shape_vec((30, 1), feat).unwrap();
         let targets = Array1::from_vec(tgt);
 
-        let model = RandomForestClassifier::fit(
-            &features, &targets, 50, 5, 2, 1.0, 42
-        );
+        let model = RandomForestClassifier::fit(&features, &targets, 50, 5, 2, 1.0, 42);
 
         let prob_low = model.predict_proba_one(&[3.0]);
         let prob_high = model.predict_proba_one(&[25.0]);

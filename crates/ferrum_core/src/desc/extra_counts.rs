@@ -30,6 +30,9 @@ use crate::types::{AtomIdx, BondType};
 pub struct FractionCSP3;
 
 fn compute_fraction_csp3(mol: &Molecule) -> f32 {
+    use crate::algo::electronic::effective_hybridization_pub;
+    use crate::types::Hybridization;
+
     let mut total_c = 0u32;
     let mut sp3_c = 0u32;
 
@@ -39,15 +42,10 @@ fn compute_fraction_csp3(mol: &Molecule) -> f32 {
         }
         total_c += 1;
 
-        let has_triple = mol.adjacency[i]
-            .iter()
-            .any(|&bi| mol.bonds[bi as usize].bond_type == BondType::Triple);
-        let has_double_or_arom = mol.adjacency[i].iter().any(|&bi| {
-            let bt = mol.bonds[bi as usize].bond_type;
-            bt == BondType::Double || bt == BondType::Aromatic
-        });
+        let total_degree = mol.adjacency[i].len() as u8 + atom.total_h();
+        let hyb = effective_hybridization_pub(mol, i);
 
-        if !has_triple && !has_double_or_arom && !atom.is_aromatic() {
+        if total_degree == 4 && hyb == Hybridization::SP3 {
             sp3_c += 1;
         }
     }
@@ -166,7 +164,9 @@ fn compute_num_amide_bonds(mol: &Molecule) -> u32 {
                 other_bond.source as usize
             };
 
-            other_idx != n_idx && mol.atoms[other_idx].atomic_number == 8 && !mol.atoms[other_idx].is_aromatic()
+            other_idx != n_idx
+                && mol.atoms[other_idx].atomic_number == 8
+                && !mol.atoms[other_idx].is_aromatic()
         }) {
             continue;
         }
@@ -722,6 +722,12 @@ mod tests {
         assert!((v - 1.0 / 7.0).abs() < 0.02, "fsp3 = {}", v);
     }
 
+    #[test]
+    fn test_fsp3_trivalent_radical_carbon_excluded() {
+        let v = calc_float(&FractionCSP3, "[C](C)(C)C");
+        assert!((v - 0.75).abs() < 0.01, "fsp3 = {}", v);
+    }
+
     // -- RingTypeCounts (helper function) --
 
     #[test]
@@ -917,6 +923,22 @@ mod tests {
             (v - 0.11_f32).abs() < 0.01,
             "dimethyl phosphate HallKierAlpha expected 0.11, got {v}"
         );
+    }
+
+    #[test]
+    fn test_hka_allene_central_carbon_sp() {
+        let v = calc_float(&HallKierAlpha, "C=C=C");
+        assert!(
+            (v - (-0.48_f32)).abs() < 0.01,
+            "allene HallKierAlpha = {}",
+            v
+        );
+    }
+
+    #[test]
+    fn test_hka_trivalent_radical_carbon_stays_sp3() {
+        let v = calc_float(&HallKierAlpha, "[C](C)(C)C");
+        assert!(v.abs() < 0.01, "tert-butyl radical HallKierAlpha = {}", v);
     }
 
     // -- BertzCT --

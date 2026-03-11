@@ -10,9 +10,9 @@
 //! to estimate solubility and permeability in drug discovery and development settings.
 //! Advanced Drug Delivery Reviews, 23(1-3), 3-25.
 
-use super::typed::{DescriptorValue, Descriptor};
+use super::hbond::{compute_hbond_acceptors, compute_hbond_donors};
 use super::logp::compute_logp;
-use super::hbond::{compute_hbond_donors, compute_hbond_acceptors};
+use super::typed::{Descriptor, DescriptorValue};
 use crate::desc::molecular_weight::compute_molecular_weight;
 use crate::mol::molecule::Molecule;
 
@@ -42,7 +42,7 @@ impl Descriptor for LipinskiViolations {
         let hba = compute_hbond_acceptors(mol);
 
         let mut violations = 0u32;
-        
+
         if mw > 500.0 {
             violations += 1;
         }
@@ -55,7 +55,7 @@ impl Descriptor for LipinskiViolations {
         if hba > 10 {
             violations += 1;
         }
-        
+
         DescriptorValue::Int(violations)
     }
 }
@@ -68,8 +68,8 @@ const _: () = {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::io::smiles::parse_smiles;
     use crate::algo::valency::assign_implicit_hydrogens;
+    use crate::io::smiles::parse_smiles;
 
     fn parse_and_prepare(smiles: &str) -> Molecule {
         let mut mol = parse_smiles(smiles).unwrap();
@@ -82,7 +82,11 @@ mod tests {
         let mut mol = parse_and_prepare("CC(=O)Oc1ccccc1C(=O)O");
         let desc = LipinskiViolations;
         let value = desc.calculate(&mut mol);
-        assert_eq!(value, DescriptorValue::Int(0), "Aspirin should have 0 Lipinski violations");
+        assert_eq!(
+            value,
+            DescriptorValue::Int(0),
+            "Aspirin should have 0 Lipinski violations"
+        );
     }
 
     #[test]
@@ -90,7 +94,11 @@ mod tests {
         let mut mol = parse_and_prepare("CN1C=NC2=C1C(=O)N(C(=O)N2C)C");
         let desc = LipinskiViolations;
         let value = desc.calculate(&mut mol);
-        assert_eq!(value, DescriptorValue::Int(0), "Caffeine should have 0 Lipinski violations");
+        assert_eq!(
+            value,
+            DescriptorValue::Int(0),
+            "Caffeine should have 0 Lipinski violations"
+        );
     }
 
     #[test]
@@ -98,7 +106,11 @@ mod tests {
         let mut mol = parse_and_prepare("CC(C)Cc1ccc(cc1)C(C)C(=O)O");
         let desc = LipinskiViolations;
         let value = desc.calculate(&mut mol);
-        assert_eq!(value, DescriptorValue::Int(0), "Ibuprofen should have 0 Lipinski violations");
+        assert_eq!(
+            value,
+            DescriptorValue::Int(0),
+            "Ibuprofen should have 0 Lipinski violations"
+        );
     }
 
     #[test]
@@ -106,7 +118,11 @@ mod tests {
         let mut mol = parse_and_prepare("CCO");
         let desc = LipinskiViolations;
         let value = desc.calculate(&mut mol);
-        assert_eq!(value, DescriptorValue::Int(0), "Ethanol should have 0 violations");
+        assert_eq!(
+            value,
+            DescriptorValue::Int(0),
+            "Ethanol should have 0 violations"
+        );
     }
 
     #[test]

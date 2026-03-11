@@ -26,7 +26,11 @@ fn compute_distance_matrix(mol: &Molecule) -> Vec<u32> {
             let current_dist = distances[start * n + current as usize];
             for &bond_idx in &mol.adjacency[current as usize] {
                 let bond = &mol.bonds[bond_idx as usize];
-                let nb = if bond.source == current { bond.target } else { bond.source };
+                let nb = if bond.source == current {
+                    bond.target
+                } else {
+                    bond.source
+                };
                 let nd = &mut distances[start * n + nb as usize];
                 if *nd == u32::MAX {
                     *nd = current_dist + 1;
@@ -60,7 +64,9 @@ const NUM_PAIR_TYPES: usize = 15;
 
 fn pair_index(a: usize, b: usize) -> Option<usize> {
     let (lo, hi) = if a <= b { (a, b) } else { (b, a) };
-    if lo > 4 || hi > 4 { return None; }
+    if lo > 4 || hi > 4 {
+        return None;
+    }
     // Map (lo, hi) to index in upper triangle of 5×5
     // Row lo, col hi: offset = sum(5-i for i in 0..lo) + (hi - lo)
     let offset: usize = (0..lo).map(|i| 5 - i).sum();
@@ -80,14 +86,16 @@ impl Descriptor for MDE {
 
     fn calculate(&self, mol: &mut Molecule) -> DescriptorValue {
         let mut values = vec![0.0f32; NUM_PAIR_TYPES];
-        
+
         let n = mol.num_atoms();
         if n < 2 {
             return DescriptorValue::FloatVec(values);
         }
 
         let dist = compute_distance_matrix(mol);
-        let classes: Vec<usize> = mol.atoms.iter()
+        let classes: Vec<usize> = mol
+            .atoms
+            .iter()
             .map(|a| atom_class(a.atomic_number))
             .collect();
 
@@ -101,7 +109,7 @@ impl Descriptor for MDE {
                 }
             }
         }
-        
+
         DescriptorValue::FloatVec(values)
     }
 }
@@ -113,9 +121,9 @@ const _: () = {
 
 #[cfg(test)]
 mod tests {
+    use super::super::typed::Descriptor;
     use super::*;
     use crate::io::smiles::parse_smiles;
-    use super::super::typed::Descriptor;
 
     fn calc_mde(smiles: &str) -> Vec<f32> {
         let mut mol = parse_smiles(smiles).expect("valid SMILES");

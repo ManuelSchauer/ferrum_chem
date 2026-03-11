@@ -8,8 +8,8 @@
 //! - Spiro[4.5]decane: 1 spiro atom
 //! - Bicyclo[2.2.1]heptane: 2 bridge atoms, 0 spiro atoms
 
-use crate::mol::molecule::Molecule;
 use crate::algo::rings::find_sssr;
+use crate::mol::molecule::Molecule;
 
 /// Count number of spiro atoms in a molecule
 ///
@@ -29,12 +29,12 @@ pub fn num_spiro_atoms(mol: &mut Molecule) -> u32 {
     if n == 0 {
         return 0;
     }
-    
+
     let rings = find_sssr(mol);
     if rings.len() < 2 {
         return 0; // Need at least 2 rings for spiro
     }
-    
+
     // Count ring membership for each atom
     let mut ring_count = vec![0u32; n];
     for ring in &rings {
@@ -42,22 +42,23 @@ pub fn num_spiro_atoms(mol: &mut Molecule) -> u32 {
             ring_count[atom_idx as usize] += 1;
         }
     }
-    
+
     let mut spiro_count = 0;
-    
+
     // Check each atom that's in 2+ rings
     for (atom_idx, &count) in ring_count.iter().enumerate() {
         if count < 2 {
             continue; // Not in multiple rings
         }
-        
+
         // Check if it's a spiro atom vs bridge atom
         // Spiro: only this atom is shared between rings
         // Bridge: this atom + neighbors form a path between rings
-        
+
         // Count how many neighbors are also in rings
         let neighbors = &mol.adjacency[atom_idx];
-        let neighbors_in_rings = neighbors.iter()
+        let neighbors_in_rings = neighbors
+            .iter()
             .map(|&bond_idx| {
                 let bond = &mol.bonds[bond_idx as usize];
                 let neighbor = if bond.source == atom_idx as u16 {
@@ -69,34 +70,33 @@ pub fn num_spiro_atoms(mol: &mut Molecule) -> u32 {
             })
             .filter(|&in_ring| in_ring)
             .count();
-        
+
         // If all neighbors in rings, it's likely a spiro atom
         // A bridge atom would have neighbors in different rings
         // For a true spiro: atom is in multiple rings, but only connects them at this point
-        
+
         // More precise check: is this atom the ONLY shared atom between its rings?
         let mut is_spiro = true;
-        
+
         // Get all rings containing this atom
-        let atom_rings: Vec<&Vec<u16>> = rings.iter()
+        let atom_rings: Vec<&Vec<u16>> = rings
+            .iter()
             .filter(|ring| ring.contains(&(atom_idx as u16)))
             .collect();
-        
+
         if atom_rings.len() < 2 {
             continue;
         }
-        
+
         // Check if any pair of rings shares more than just this atom
         for i in 0..atom_rings.len() {
-            for j in (i+1)..atom_rings.len() {
+            for j in (i + 1)..atom_rings.len() {
                 let ring1 = atom_rings[i];
                 let ring2 = atom_rings[j];
-                
+
                 // Count shared atoms
-                let shared = ring1.iter()
-                    .filter(|&&atom| ring2.contains(&atom))
-                    .count();
-                
+                let shared = ring1.iter().filter(|&&atom| ring2.contains(&atom)).count();
+
                 if shared > 1 {
                     // More than just the current atom is shared
                     is_spiro = false;
@@ -107,12 +107,12 @@ pub fn num_spiro_atoms(mol: &mut Molecule) -> u32 {
                 break;
             }
         }
-        
+
         if is_spiro {
             spiro_count += 1;
         }
     }
-    
+
     spiro_count
 }
 
@@ -120,51 +120,51 @@ pub fn num_spiro_atoms(mol: &mut Molecule) -> u32 {
 mod tests {
     use super::*;
     use crate::io::smiles::parse_smiles;
-    
+
     fn parse(smiles: &str) -> Molecule {
         parse_smiles(smiles).unwrap()
     }
-    
+
     #[test]
     fn test_no_rings() {
         let mut mol = parse("CCCC");
         assert_eq!(num_spiro_atoms(&mut mol), 0);
     }
-    
+
     #[test]
     fn test_single_ring() {
         let mut mol = parse("C1CCCCC1");
         assert_eq!(num_spiro_atoms(&mut mol), 0);
     }
-    
+
     #[test]
     fn test_fused_rings() {
         // Naphthalene - fused rings share an edge, not spiro
         let mut mol = parse("c1ccc2ccccc2c1");
         assert_eq!(num_spiro_atoms(&mut mol), 0);
     }
-    
+
     #[test]
     fn test_spiro_3_3_heptane() {
         // Spiro[3.3]heptane: C1CCC2(C1)CCC2
         let mut mol = parse("C1CCC2(C1)CCC2");
         assert_eq!(num_spiro_atoms(&mut mol), 1);
     }
-    
+
     #[test]
     fn test_spiro_4_5_decane() {
         // Spiro[4.5]decane
         let mut mol = parse("C1CCCC2(C1)CCCCC2");
         assert_eq!(num_spiro_atoms(&mut mol), 1);
     }
-    
+
     #[test]
     fn test_bicyclo_bridged() {
         // Bicyclo[2.2.1]heptane (norbornane) - bridged, not spiro
         let mut mol = parse("C1CC2CCC1C2");
         assert_eq!(num_spiro_atoms(&mut mol), 0);
     }
-    
+
     #[test]
     fn test_double_spiro() {
         // Dispiro compound should have 2 spiro atoms

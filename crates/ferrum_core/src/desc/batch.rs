@@ -1,6 +1,6 @@
-use crate::mol::molecule::Molecule;
 use crate::desc::typed::{Descriptor, build_ml_vector};
 use crate::error::Result;
+use crate::mol::molecule::Molecule;
 use rayon::prelude::*;
 use std::io::Write;
 
@@ -80,8 +80,8 @@ pub fn write_json<W: Write>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::io::smiles::parse_smiles;
     use crate::desc::molecular_weight::MolecularWeight;
+    use crate::io::smiles::parse_smiles;
 
     #[test]
     fn test_calculate_batch() {
@@ -91,9 +91,7 @@ mod tests {
             parse_smiles("CCC").unwrap(),
         ];
 
-        let descriptors: Vec<Box<dyn Descriptor>> = vec![
-            Box::new(MolecularWeight),
-        ];
+        let descriptors: Vec<Box<dyn Descriptor>> = vec![Box::new(MolecularWeight)];
 
         let results = calculate_batch(&mut molecules, &descriptors);
 
@@ -104,13 +102,8 @@ mod tests {
     #[test]
     fn test_write_csv() {
         let smiles = vec!["C".to_string(), "CC".to_string()];
-        let descriptors: Vec<Box<dyn Descriptor>> = vec![
-            Box::new(MolecularWeight),
-        ];
-        let matrix = vec![
-            vec![16.0],
-            vec![30.0],
-        ];
+        let descriptors: Vec<Box<dyn Descriptor>> = vec![Box::new(MolecularWeight)];
+        let matrix = vec![vec![16.0], vec![30.0]];
 
         let mut output = Vec::new();
         write_csv(&mut output, &smiles, &descriptors, &matrix).unwrap();
@@ -122,9 +115,7 @@ mod tests {
     #[test]
     fn test_write_json() {
         let smiles = vec!["C".to_string()];
-        let descriptors: Vec<Box<dyn Descriptor>> = vec![
-            Box::new(MolecularWeight),
-        ];
+        let descriptors: Vec<Box<dyn Descriptor>> = vec![Box::new(MolecularWeight)];
         let matrix = vec![vec![16.0]];
 
         let mut output = Vec::new();
@@ -135,4 +126,3 @@ mod tests {
         assert!(json_string.contains("\"smiles\": \"C\""));
     }
 }
-

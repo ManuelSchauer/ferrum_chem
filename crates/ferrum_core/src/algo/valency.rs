@@ -1,7 +1,7 @@
+use crate::error::{FerrumError, Result};
+use crate::mol::elements::{get_aromatic_valences, get_valences};
 use crate::mol::molecule::Molecule;
-use crate::mol::elements::{get_valences, get_aromatic_valences};
 use crate::types::BondType;
-use crate::error::{Result, FerrumError};
 
 /// Calculates and assigns implicit hydrogens based on valence rules.
 ///
@@ -174,25 +174,25 @@ fn calculate_connectivity(mol: &Molecule, atom_idx: u16) -> u8 {
 
         // Check if this is an aromatic bond
         // Either explicitly marked as Aromatic, or both atoms are aromatic
-        let is_aromatic_bond = bond.bond_type == BondType::Aromatic ||
-                               (is_atom_aromatic && other_atom.is_aromatic());
+        let is_aromatic_bond =
+            bond.bond_type == BondType::Aromatic || (is_atom_aromatic && other_atom.is_aromatic());
 
         let bond_order = match bond.bond_type {
             BondType::Single if is_aromatic_bond => {
                 // Single bond between two aromatic atoms is actually aromatic
                 aromatic_bonds += 1;
                 0
-            },
+            }
             BondType::Single => 1,
             BondType::Double => 2,
             BondType::Triple => 3,
             BondType::Aromatic => {
                 // Count aromatic bonds separately
                 aromatic_bonds += 1;
-                0  // Don't add to connectivity yet
-            },
+                0 // Don't add to connectivity yet
+            }
             BondType::Dative => 0,  // Coordinate bond, doesn't count
-            BondType::Unknown => 1,  // Assume single
+            BondType::Unknown => 1, // Assume single
         };
 
         connectivity += bond_order;
@@ -202,9 +202,7 @@ fn calculate_connectivity(mol: &Molecule, atom_idx: u16) -> u8 {
     // Most atoms: each aromatic bond contributes ~1.5 (Kekulé alternation).
     // Chalcogens (O, S, Se, Te): each aromatic bond contributes 1, because
     // they donate a lone pair to the π system, and both bonds are effectively single.
-    if aromatic_bonds > 0 && atom.is_aromatic()
-        && matches!(atom.atomic_number, 8 | 16 | 34 | 52)
-    {
+    if aromatic_bonds > 0 && atom.is_aromatic() && matches!(atom.atomic_number, 8 | 16 | 34 | 52) {
         connectivity += aromatic_bonds;
     } else {
         connectivity += aromatic_bonds + (aromatic_bonds / 2);
@@ -224,7 +222,7 @@ mod tests {
         let mut mol = parse_smiles("C").unwrap();
         assign_implicit_hydrogens(&mut mol).unwrap();
 
-        assert_eq!(mol.atoms[0].atomic_number, 6);  // Carbon
+        assert_eq!(mol.atoms[0].atomic_number, 6); // Carbon
         assert_eq!(mol.atoms[0].num_implicit_h, 4); // CH4
     }
 
@@ -245,7 +243,7 @@ mod tests {
         let mut mol = parse_smiles("O").unwrap();
         assign_implicit_hydrogens(&mut mol).unwrap();
 
-        assert_eq!(mol.atoms[0].atomic_number, 8);  // Oxygen
+        assert_eq!(mol.atoms[0].atomic_number, 8); // Oxygen
         assert_eq!(mol.atoms[0].num_implicit_h, 2); // H2O
     }
 
@@ -255,7 +253,7 @@ mod tests {
         let mut mol = parse_smiles("N").unwrap();
         assign_implicit_hydrogens(&mut mol).unwrap();
 
-        assert_eq!(mol.atoms[0].atomic_number, 7);  // Nitrogen
+        assert_eq!(mol.atoms[0].atomic_number, 7); // Nitrogen
         assert_eq!(mol.atoms[0].num_implicit_h, 3); // NH3
     }
 

@@ -39,9 +39,12 @@ impl PlsRegression {
         let x_mean = features.mean_axis(Axis(0)).unwrap();
         let mut x_std = Array1::<f64>::zeros(p);
         for j in 0..p {
-            let var: f64 = features.column(j).iter()
+            let var: f64 = features
+                .column(j)
+                .iter()
                 .map(|&x| (x - x_mean[j]).powi(2))
-                .sum::<f64>() / n as f64;
+                .sum::<f64>()
+                / n as f64;
             x_std[j] = var.sqrt().max(1e-12);
         }
 
@@ -159,7 +162,7 @@ impl PlsRegression {
         Array1::from_vec(
             (0..features.nrows())
                 .map(|i| self.predict_one(features.row(i).as_slice().unwrap()))
-                .collect()
+                .collect(),
         )
     }
 
@@ -176,24 +179,22 @@ impl PlsRegression {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ndarray::{array, Array1, Array2};
+    use ndarray::{Array1, Array2, array};
 
     #[test]
     fn test_pls_linear() {
         // y = 2*x1 + 3*x2
-        let features = Array2::from_shape_vec((10, 2), vec![
-            1.0, 1.0,
-            2.0, 1.0,
-            3.0, 1.0,
-            1.0, 2.0,
-            2.0, 2.0,
-            3.0, 2.0,
-            1.0, 3.0,
-            2.0, 3.0,
-            3.0, 3.0,
-            4.0, 4.0,
-        ]).unwrap();
-        let targets: Array1<f64> = features.rows().into_iter()
+        let features = Array2::from_shape_vec(
+            (10, 2),
+            vec![
+                1.0, 1.0, 2.0, 1.0, 3.0, 1.0, 1.0, 2.0, 2.0, 2.0, 3.0, 2.0, 1.0, 3.0, 2.0, 3.0,
+                3.0, 3.0, 4.0, 4.0,
+            ],
+        )
+        .unwrap();
+        let targets: Array1<f64> = features
+            .rows()
+            .into_iter()
             .map(|r| 2.0 * r[0] + 3.0 * r[1])
             .collect();
 
@@ -211,13 +212,11 @@ mod tests {
     #[test]
     fn test_pls_collinear() {
         // x2 = 2*x1, y = x1 (collinear features)
-        let features = Array2::from_shape_vec((5, 2), vec![
-            1.0, 2.0,
-            2.0, 4.0,
-            3.0, 6.0,
-            4.0, 8.0,
-            5.0, 10.0,
-        ]).unwrap();
+        let features = Array2::from_shape_vec(
+            (5, 2),
+            vec![1.0, 2.0, 2.0, 4.0, 3.0, 6.0, 4.0, 8.0, 5.0, 10.0],
+        )
+        .unwrap();
         let targets = array![1.0, 2.0, 3.0, 4.0, 5.0];
 
         let model = PlsRegression::fit(&features, &targets, 1);
@@ -227,14 +226,14 @@ mod tests {
 
     #[test]
     fn test_pls_n_components() {
-        let features = Array2::from_shape_vec((6, 3), vec![
-            1.0, 0.0, 0.0,
-            0.0, 1.0, 0.0,
-            0.0, 0.0, 1.0,
-            1.0, 1.0, 0.0,
-            0.0, 1.0, 1.0,
-            1.0, 0.0, 1.0,
-        ]).unwrap();
+        let features = Array2::from_shape_vec(
+            (6, 3),
+            vec![
+                1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 0.0, 0.0, 1.0, 1.0, 1.0,
+                0.0, 1.0,
+            ],
+        )
+        .unwrap();
         let targets = array![1.0, 2.0, 3.0, 3.0, 5.0, 4.0];
 
         let model = PlsRegression::fit(&features, &targets, 2);

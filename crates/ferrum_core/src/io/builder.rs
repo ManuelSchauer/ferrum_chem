@@ -1,7 +1,7 @@
-use crate::types::{AtomIdx, BondType};
-use crate::mol::molecule::Molecule;
 use crate::mol::atom::Atom;
 use crate::mol::bond::Bond;
+use crate::mol::molecule::Molecule;
+use crate::types::{AtomIdx, BondType};
 use smallvec::SmallVec;
 
 /// Abstraktion für den Aufbau eines Moleküls.

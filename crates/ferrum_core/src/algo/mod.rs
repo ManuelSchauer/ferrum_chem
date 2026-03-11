@@ -1,9 +1,10 @@
-pub mod rings;
 pub mod aromaticity;
-pub mod kekulize;
 pub mod canon;
-pub mod iso;
 pub mod components;
-pub mod valency;
-pub mod standardize;
 pub mod electronic;
+pub mod iso;
+pub mod kekulize;
+pub mod paths;
+pub mod rings;
+pub mod standardize;
+pub mod valency;

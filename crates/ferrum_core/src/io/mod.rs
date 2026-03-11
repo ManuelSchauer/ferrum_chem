@@ -1,5 +1,5 @@
 mod builder;
-pub mod smiles;
+pub mod csv_reader;
 mod sdf;
 pub mod smarts;
-pub mod csv_reader;
+pub mod smiles;

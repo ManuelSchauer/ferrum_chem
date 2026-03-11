@@ -23,25 +23,55 @@ fn atomic_mass(atomic_number: u8) -> f64 {
 
 fn electronegativity(atomic_number: u8) -> f64 {
     match atomic_number {
-        1 => 2.20, 5 => 2.04, 6 => 2.55, 7 => 3.04, 8 => 3.44,
-        9 => 3.98, 14 => 1.90, 15 => 2.19, 16 => 2.58, 17 => 3.16,
-        35 => 2.96, 53 => 2.66, _ => 2.00,
+        1 => 2.20,
+        5 => 2.04,
+        6 => 2.55,
+        7 => 3.04,
+        8 => 3.44,
+        9 => 3.98,
+        14 => 1.90,
+        15 => 2.19,
+        16 => 2.58,
+        17 => 3.16,
+        35 => 2.96,
+        53 => 2.66,
+        _ => 2.00,
     }
 }
 
 fn polarizability(atomic_number: u8) -> f64 {
     match atomic_number {
-        1 => 0.67, 5 => 3.03, 6 => 1.76, 7 => 1.10, 8 => 0.80,
-        9 => 0.56, 14 => 5.38, 15 => 3.63, 16 => 2.90, 17 => 2.18,
-        35 => 3.05, 53 => 5.35, _ => 1.50,
+        1 => 0.67,
+        5 => 3.03,
+        6 => 1.76,
+        7 => 1.10,
+        8 => 0.80,
+        9 => 0.56,
+        14 => 5.38,
+        15 => 3.63,
+        16 => 2.90,
+        17 => 2.18,
+        35 => 3.05,
+        53 => 5.35,
+        _ => 1.50,
     }
 }
 
 fn vdw_volume(atomic_number: u8) -> f64 {
     let r: f64 = match atomic_number {
-        1 => 1.20, 5 => 1.92, 6 => 1.70, 7 => 1.55, 8 => 1.52,
-        9 => 1.47, 14 => 2.10, 15 => 1.80, 16 => 1.80, 17 => 1.75,
-        35 => 1.85, 53 => 1.98, _ => 1.70,
+        1 => 1.20,
+        5 => 1.92,
+        6 => 1.70,
+        7 => 1.55,
+        8 => 1.52,
+        9 => 1.47,
+        14 => 2.10,
+        15 => 1.80,
+        16 => 1.80,
+        17 => 1.75,
+        35 => 1.85,
+        53 => 1.98,
+        _ => 1.70,
     };
     (4.0 / 3.0) * std::f64::consts::PI * r.powi(3)
 }
@@ -85,8 +115,12 @@ fn build_burden_matrix(mol: &Molecule, weights: &[f64]) -> Vec<f64> {
 /// Compute eigenvalues of a symmetric matrix using Jacobi iteration.
 /// Returns sorted eigenvalues (ascending).
 fn eigenvalues_symmetric(matrix: &[f64], n: usize) -> Vec<f64> {
-    if n == 0 { return vec![]; }
-    if n == 1 { return vec![matrix[0]]; }
+    if n == 0 {
+        return vec![];
+    }
+    if n == 1 {
+        return vec![matrix[0]];
+    }
 
     let mut a = matrix.to_vec();
     let max_iter = 100 * n * n;
@@ -107,7 +141,9 @@ fn eigenvalues_symmetric(matrix: &[f64], n: usize) -> Vec<f64> {
             }
         }
 
-        if max_val < 1e-10 { break; }
+        if max_val < 1e-10 {
+            break;
+        }
 
         // Compute rotation angle
         let app = a[p * n + p];
@@ -170,15 +206,14 @@ impl Descriptor for BCUT {
 
     fn calculate(&self, mol: &mut Molecule) -> DescriptorValue {
         let mut values = vec![0.0f32; 8];
-        
+
         let n = mol.num_atoms();
         if n == 0 {
             return DescriptorValue::FloatVec(values);
         }
 
-        let weight_fns: [fn(u8) -> f64; 4] = [
-            atomic_mass, electronegativity, polarizability, vdw_volume
-        ];
+        let weight_fns: [fn(u8) -> f64; 4] =
+            [atomic_mass, electronegativity, polarizability, vdw_volume];
 
         for (wi, wfn) in weight_fns.iter().enumerate() {
             let weights: Vec<f64> = (0..n).map(|i| wfn(mol.atoms[i].atomic_number)).collect();
@@ -190,7 +225,7 @@ impl Descriptor for BCUT {
                 values[wi * 2 + 1] = *eigs.last().unwrap() as f32;
             }
         }
-        
+
         DescriptorValue::FloatVec(values)
     }
 }
@@ -202,9 +237,9 @@ const _: () = {
 
 #[cfg(test)]
 mod tests {
+    use super::super::typed::Descriptor;
     use super::*;
     use crate::io::smiles::parse_smiles;
-    use super::super::typed::Descriptor;
 
     fn calc_bcut(smiles: &str) -> Vec<f32> {
         let mut mol = parse_smiles(smiles).expect("valid SMILES");
@@ -237,8 +272,13 @@ mod tests {
     fn test_bcut_high_ge_low() {
         let b = calc_bcut("c1ccccc1");
         for i in 0..4 {
-            assert!(b[i * 2 + 1] >= b[i * 2],
-                "prop {}: high {} >= low {}", i, b[i * 2 + 1], b[i * 2]);
+            assert!(
+                b[i * 2 + 1] >= b[i * 2],
+                "prop {}: high {} >= low {}",
+                i,
+                b[i * 2 + 1],
+                b[i * 2]
+            );
         }
     }
 

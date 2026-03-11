@@ -19,7 +19,8 @@ pub fn compute_aromatic_ring_count(mol: &Molecule) -> u32 {
 }
 
 fn ring_bonds_all_aromatic(mol: &Molecule, ring: &[usize]) -> bool {
-    ring.iter().all(|&bond_idx| mol.bonds[bond_idx].is_aromatic())
+    ring.iter()
+        .all(|&bond_idx| mol.bonds[bond_idx].is_aromatic())
 }
 
 // ---------------------------------------------------------------------------
@@ -108,5 +109,4 @@ mod tests {
         perceive_aromaticity(&mut mol);
         assert_eq!(compute_aromatic_ring_count(&mol), 3);
     }
-
 }

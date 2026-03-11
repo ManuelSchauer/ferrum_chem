@@ -8,7 +8,8 @@
 //! Reference: Kier, L.B. (1985) "A Shape Index from Molecular Graphs"
 //!            Quant. Struct.-Act. Relat. 4, 109-116.
 
-use super::typed::{DescriptorValue, Descriptor};
+use super::typed::{Descriptor, DescriptorValue};
+use crate::algo::paths::find_all_paths_of_length;
 use crate::mol::molecule::Molecule;
 
 // (Legacy descriptor removed — use KappaIndices below)
@@ -56,14 +57,8 @@ impl Descriptor for KappaIndices {
             })
             .sum();
 
-        // P₃ = sum over all bonds of (deg_i - 1)(deg_j - 1)
-        let p3: f64 = mol.bonds.iter()
-            .map(|bond| {
-                let di = mol.get_degree(bond.source) as f64;
-                let dj = mol.get_degree(bond.target) as f64;
-                (di - 1.0) * (dj - 1.0)
-            })
-            .sum();
+        // RDKit counts explicit 3-bond paths and includes ring-closing paths.
+        let p3 = find_all_paths_of_length(mol, 3).len() as f64;
 
         // κ₁ = (A + α)(A + α - 1)² / (P1 + α)²
         let denom1 = p1 + alpha;
@@ -92,7 +87,7 @@ impl Descriptor for KappaIndices {
         } else {
             0.0
         };
-        
+
         DescriptorValue::FloatVec(vec![kappa1, kappa2, kappa3])
     }
 }
@@ -143,8 +138,12 @@ mod tests {
         let k_linear = calc_kappa("CCCC");
         let k_branched = calc_kappa("CC(C)C");
         assert!((k_linear[0] - k_branched[0]).abs() < 0.01);
-        assert!(k_linear[1] > k_branched[1],
-            "linear κ₂={} should > branched κ₂={}", k_linear[1], k_branched[1]);
+        assert!(
+            k_linear[1] > k_branched[1],
+            "linear κ₂={} should > branched κ₂={}",
+            k_linear[1],
+            k_branched[1]
+        );
     }
 
     #[test]
@@ -159,6 +158,12 @@ mod tests {
         assert!(k[0] > 3.0 && k[0] < 6.0, "κ₁ = {}", k[0]);
         assert!(k[1] > 0.0);
         assert!(k[2] > 0.0);
+    }
+
+    #[test]
+    fn test_kappa3_epoxide_regression_matches_rdkit() {
+        let k = calc_kappa("CC1OC1");
+        assert!((k[2] - 0.20616508).abs() < 1e-5, "κ₃ = {}", k[2]);
     }
 
     #[test]

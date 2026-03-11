@@ -9,7 +9,11 @@ pub fn r_squared(actual: &[f64], predicted: &[f64]) -> f64 {
     }
     let mean: f64 = actual.iter().sum::<f64>() / n as f64;
     let ss_tot: f64 = actual.iter().map(|&y| (y - mean).powi(2)).sum();
-    let ss_res: f64 = actual.iter().zip(predicted).map(|(&a, p)| (a - p).powi(2)).sum();
+    let ss_res: f64 = actual
+        .iter()
+        .zip(predicted)
+        .map(|(&a, p)| (a - p).powi(2))
+        .sum();
     if ss_tot < 1e-15 {
         return if ss_res < 1e-15 { 1.0 } else { 0.0 };
     }
@@ -20,9 +24,12 @@ pub fn r_squared(actual: &[f64], predicted: &[f64]) -> f64 {
 pub fn rmse(actual: &[f64], predicted: &[f64]) -> f64 {
     let n = actual.len();
     assert_eq!(n, predicted.len());
-    let mse: f64 = actual.iter().zip(predicted)
+    let mse: f64 = actual
+        .iter()
+        .zip(predicted)
         .map(|(&a, p)| (a - p).powi(2))
-        .sum::<f64>() / n as f64;
+        .sum::<f64>()
+        / n as f64;
     mse.sqrt()
 }
 
@@ -30,9 +37,12 @@ pub fn rmse(actual: &[f64], predicted: &[f64]) -> f64 {
 pub fn mae(actual: &[f64], predicted: &[f64]) -> f64 {
     let n = actual.len();
     assert_eq!(n, predicted.len());
-    actual.iter().zip(predicted)
+    actual
+        .iter()
+        .zip(predicted)
         .map(|(&a, p)| (a - p).abs())
-        .sum::<f64>() / n as f64
+        .sum::<f64>()
+        / n as f64
 }
 
 /// Q² (cross-validated R²) — same formula as R² but on CV predictions.
@@ -44,7 +54,9 @@ pub fn q_squared(actual: &[f64], cv_predicted: &[f64]) -> f64 {
 pub fn accuracy(actual: &[f64], predicted: &[f64]) -> f64 {
     let n = actual.len();
     assert_eq!(n, predicted.len());
-    let correct = actual.iter().zip(predicted)
+    let correct = actual
+        .iter()
+        .zip(predicted)
         .filter(|&(&a, &p)| {
             let a_class = if a >= 0.5 { 1 } else { 0 };
             let p_class = if p >= 0.5 { 1 } else { 0 };
@@ -71,8 +83,8 @@ pub fn mcc(actual: &[f64], predicted: &[f64]) -> f64 {
         }
     }
 
-    let denom = ((tp + fp) as f64 * (tp + fn_) as f64
-        * (tn + fp) as f64 * (tn + fn_) as f64).sqrt();
+    let denom =
+        ((tp + fp) as f64 * (tp + fn_) as f64 * (tn + fp) as f64 * (tn + fn_) as f64).sqrt();
     if denom < 1e-15 {
         return 0.0;
     }
@@ -84,10 +96,16 @@ pub fn sensitivity(actual: &[f64], predicted: &[f64]) -> f64 {
     let (mut tp, mut fn_) = (0u64, 0u64);
     for (&a, &p) in actual.iter().zip(predicted) {
         if a >= 0.5 {
-            if p >= 0.5 { tp += 1; } else { fn_ += 1; }
+            if p >= 0.5 {
+                tp += 1;
+            } else {
+                fn_ += 1;
+            }
         }
     }
-    if tp + fn_ == 0 { return 0.0; }
+    if tp + fn_ == 0 {
+        return 0.0;
+    }
     tp as f64 / (tp + fn_) as f64
 }
 
@@ -96,10 +114,16 @@ pub fn specificity(actual: &[f64], predicted: &[f64]) -> f64 {
     let (mut tn, mut fp) = (0u64, 0u64);
     for (&a, &p) in actual.iter().zip(predicted) {
         if a < 0.5 {
-            if p < 0.5 { tn += 1; } else { fp += 1; }
+            if p < 0.5 {
+                tn += 1;
+            } else {
+                fp += 1;
+            }
         }
     }
-    if tn + fp == 0 { return 0.0; }
+    if tn + fp == 0 {
+        return 0.0;
+    }
     tn as f64 / (tn + fp) as f64
 }
 
@@ -111,7 +135,9 @@ pub fn auc_roc(actual: &[f64], predicted: &[f64]) -> f64 {
     assert_eq!(n, predicted.len());
 
     // Sort by predicted score descending
-    let mut pairs: Vec<(f64, f64)> = predicted.iter().zip(actual)
+    let mut pairs: Vec<(f64, f64)> = predicted
+        .iter()
+        .zip(actual)
         .map(|(&p, a)| (p, *a))
         .collect();
     pairs.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap());

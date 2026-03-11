@@ -13,9 +13,9 @@
 //! This function modifies the molecule in-place and is not thread-safe.
 //! Call it once per molecule before parallel descriptor calculations.
 
+use crate::algo::rings::find_sssr;
 use crate::mol::molecule::Molecule;
 use crate::types::{AtomIdx, BondType};
-use crate::algo::rings::find_sssr;
 
 /// Kekulize aromatic rings by assigning explicit single/double bond orders.
 ///
@@ -34,13 +34,13 @@ use crate::algo::rings::find_sssr;
 pub fn kekulize(mol: &mut Molecule) {
     // Find all aromatic rings
     let rings = find_sssr(mol);
-    
+
     for ring in rings {
         // Check if this ring is aromatic
         if !is_aromatic_ring(mol, &ring) {
             continue;
         }
-        
+
         // Assign alternating single/double bonds
         kekulize_ring(mol, &ring);
     }
@@ -48,30 +48,31 @@ pub fn kekulize(mol: &mut Molecule) {
 
 /// Check if all atoms in a ring are aromatic
 fn is_aromatic_ring(mol: &Molecule, ring: &[AtomIdx]) -> bool {
-    ring.iter().all(|&idx| mol.atoms[idx as usize].is_aromatic())
+    ring.iter()
+        .all(|&idx| mol.atoms[idx as usize].is_aromatic())
 }
 
 /// Assign alternating single/double bonds to an aromatic ring.
 /// Keeps the aromatic flag set on bonds.
 fn kekulize_ring(mol: &mut Molecule, ring: &[AtomIdx]) {
     let n = ring.len();
-    
+
     // For standard aromatic rings (5, 6, 7 members), use simple alternating pattern
     // Start with double bond on first edge
     for i in 0..n {
         let from = ring[i];
         let to = ring[(i + 1) % n];
-        
+
         if let Some(bond_idx) = find_bond_between(mol, from, to) {
             let bond = &mut mol.bonds[bond_idx];
-            
+
             // Alternate: double on even indices, single on odd
             bond.bond_type = if i % 2 == 0 {
                 BondType::Double
             } else {
                 BondType::Single
             };
-            
+
             // IMPORTANT: Keep aromatic flag set (RDKit style)
             // This allows TPSA and other algorithms to detect aromatic bonds
             // even after kekulization
@@ -82,8 +83,8 @@ fn kekulize_ring(mol: &mut Molecule, ring: &[AtomIdx]) {
 /// Find bond index between two atoms.
 fn find_bond_between(mol: &Molecule, from: AtomIdx, to: AtomIdx) -> Option<usize> {
     for (idx, bond) in mol.bonds.iter().enumerate() {
-        if (bond.source == from && bond.target == to) ||
-           (bond.source == to && bond.target == from) {
+        if (bond.source == from && bond.target == to) || (bond.source == to && bond.target == from)
+        {
             return Some(idx);
         }
     }
@@ -93,25 +94,25 @@ fn find_bond_between(mol: &Molecule, from: AtomIdx, to: AtomIdx) -> Option<usize
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::io::smiles::parse_smiles;
     use crate::algo::aromaticity::perceive_aromaticity;
-    
+    use crate::io::smiles::parse_smiles;
+
     #[test]
     fn test_kekulize_benzene() {
         let mut mol = parse_smiles("c1ccccc1").unwrap();
         perceive_aromaticity(&mut mol);
-        
+
         // Before kekulization: all bonds are Aromatic type
         for bond in &mol.bonds {
             assert_eq!(bond.bond_type, BondType::Aromatic);
         }
-        
+
         kekulize(&mut mol);
-        
+
         // After kekulization: bonds are Single/Double but aromatic flag is set
         let mut single_count = 0;
         let mut double_count = 0;
-        
+
         for bond in &mol.bonds {
             assert!(bond.is_aromatic(), "Aromatic flag should remain set");
             match bond.bond_type {
@@ -120,7 +121,7 @@ mod tests {
                 _ => panic!("Unexpected bond type after kekulization"),
             }
         }
-        
+
         assert_eq!(single_count, 3, "Benzene should have 3 single bonds");
         assert_eq!(double_count, 3, "Benzene should have 3 double bonds");
     }

@@ -3,9 +3,9 @@
 //! Provides counts for common functional groups, acidic groups, and basic groups.
 
 use super::typed::{Descriptor, DescriptorValue};
-use crate::mol::molecule::Molecule;
-use crate::io::smarts::{parse_smarts, QueryGraph};
 use crate::algo::iso::find_all_matches;
+use crate::io::smarts::{QueryGraph, parse_smarts};
+use crate::mol::molecule::Molecule;
 use once_cell::sync::Lazy;
 
 /// A named SMARTS pattern for functional group detection.
@@ -30,48 +30,54 @@ macro_rules! fg_patterns {
 }
 
 // Core functional group SMARTS patterns
-fg_patterns!(FUNC_GROUP_PATTERNS,
-    ("Hydroxyl",        "[OX2H]"),
-    ("Aldehyde",        "[CX3H1](=O)[#6]"),
-    ("Ketone",          "[#6][CX3](=O)[#6]"),
-    ("CarboxylicAcid",  "[CX3](=O)[OX2H1]"),
-    ("Ester",           "[#6][CX3](=O)[OX2H0][#6]"),
-    ("Amide",           "[NX3][CX3](=O)[#6]"),
-    ("PrimaryAmine",    "[NX3;H2;!$(NC=O)]"),
-    ("SecondaryAmine",  "[NX3;H1;!$(NC=O)]"),
-    ("TertiaryAmine",   "[NX3;H0;!$(NC=O);!$([NX3](=O)=O)]"),
-    ("Nitro",           "[$([NX3](=O)=O)]"),
-    ("Sulfonamide",     "[#16X4]([NX3])(=O)=O"),
-    ("Sulfone",         "[#16X4](=O)(=O)([#6])[#6]"),
-    ("Thiol",           "[#16X2H]"),
-    ("Ether",           "[OD2]([#6])[#6]"),
-    ("Nitrile",         "[NX1]#[CX2]"),
-    ("Halide",          "[F,Cl,Br,I]"),
+fg_patterns!(
+    FUNC_GROUP_PATTERNS,
+    ("Hydroxyl", "[OX2H]"),
+    ("Aldehyde", "[CX3H1](=O)[#6]"),
+    ("Ketone", "[#6][CX3](=O)[#6]"),
+    ("CarboxylicAcid", "[CX3](=O)[OX2H1]"),
+    ("Ester", "[#6][CX3](=O)[OX2H0][#6]"),
+    ("Amide", "[NX3][CX3](=O)[#6]"),
+    ("PrimaryAmine", "[NX3;H2;!$(NC=O)]"),
+    ("SecondaryAmine", "[NX3;H1;!$(NC=O)]"),
+    ("TertiaryAmine", "[NX3;H0;!$(NC=O);!$([NX3](=O)=O)]"),
+    ("Nitro", "[$([NX3](=O)=O)]"),
+    ("Sulfonamide", "[#16X4]([NX3])(=O)=O"),
+    ("Sulfone", "[#16X4](=O)(=O)([#6])[#6]"),
+    ("Thiol", "[#16X2H]"),
+    ("Ether", "[OD2]([#6])[#6]"),
+    ("Nitrile", "[NX1]#[CX2]"),
+    ("Halide", "[F,Cl,Br,I]"),
 );
 
 // Acidic group patterns
-fg_patterns!(ACIDIC_PATTERNS,
-    ("CarboxylicAcid",  "[CX3](=O)[OX2H1]"),
-    ("Sulfonamide_NH",  "[#16X4](=O)(=O)[NX3H]"),
-    ("SulfonicAcid",    "[#16X4](=O)(=O)[OX2H]"),
-    ("Phenol",          "[OX2H]c"),
-    ("Thiol",           "[#16X2H]"),
+fg_patterns!(
+    ACIDIC_PATTERNS,
+    ("CarboxylicAcid", "[CX3](=O)[OX2H1]"),
+    ("Sulfonamide_NH", "[#16X4](=O)(=O)[NX3H]"),
+    ("SulfonicAcid", "[#16X4](=O)(=O)[OX2H]"),
+    ("Phenol", "[OX2H]c"),
+    ("Thiol", "[#16X2H]"),
 );
 
 // Basic group patterns
-fg_patterns!(BASIC_PATTERNS,
-    ("PrimaryAmine",    "[NX3;H2;!$(NC=O)]"),
-    ("SecondaryAmine",  "[NX3;H1;!$(NC=O)]"),
-    ("TertiaryAmine",   "[NX3;H0;!$(NC=O);!$([NX3](=O)=O)]"),
-    ("Guanidine",       "[NX3][CX3](=[NX2])[NX3]"),
-    ("Amidine",         "[NX3][CX3]=[NX2]"),
+fg_patterns!(
+    BASIC_PATTERNS,
+    ("PrimaryAmine", "[NX3;H2;!$(NC=O)]"),
+    ("SecondaryAmine", "[NX3;H1;!$(NC=O)]"),
+    ("TertiaryAmine", "[NX3;H0;!$(NC=O);!$([NX3](=O)=O)]"),
+    ("Guanidine", "[NX3][CX3](=[NX2])[NX3]"),
+    ("Amidine", "[NX3][CX3]=[NX2]"),
 );
 
 fn count_matches(mol: &Molecule, patterns: &[FuncGroupPattern]) -> Vec<(String, u32)> {
-    patterns.iter().map(|p| {
-        let matches = find_all_matches(mol, &p.query);
-        (p.name.to_string(), matches.len() as u32)
-    }).collect()
+    patterns
+        .iter()
+        .map(|p| {
+            let matches = find_all_matches(mol, &p.query);
+            (p.name.to_string(), matches.len() as u32)
+        })
+        .collect()
 }
 
 /// Functional Group Counts descriptor.
@@ -83,12 +89,15 @@ fn count_matches(mol: &Molecule, patterns: &[FuncGroupPattern]) -> Vec<(String, 
 pub struct FunctionalGroupCounts;
 
 impl Descriptor for FunctionalGroupCounts {
-    fn name(&self) -> &str { "FunctionalGroupCounts" }
+    fn name(&self) -> &str {
+        "FunctionalGroupCounts"
+    }
 
     fn calculate(&self, mol: &mut Molecule) -> DescriptorValue {
-        let counts: Vec<u16> = FUNC_GROUP_PATTERNS.iter().map(|p| {
-            find_all_matches(mol, &p.query).len() as u16
-        }).collect();
+        let counts: Vec<u16> = FUNC_GROUP_PATTERNS
+            .iter()
+            .map(|p| find_all_matches(mol, &p.query).len() as u16)
+            .collect();
         DescriptorValue::IntU16Vec(counts)
     }
 }
@@ -99,10 +108,13 @@ impl Descriptor for FunctionalGroupCounts {
 pub struct AcidicGroupCount;
 
 impl Descriptor for AcidicGroupCount {
-    fn name(&self) -> &str { "AcidicGroupCount" }
+    fn name(&self) -> &str {
+        "AcidicGroupCount"
+    }
 
     fn calculate(&self, mol: &mut Molecule) -> DescriptorValue {
-        let total: usize = ACIDIC_PATTERNS.iter()
+        let total: usize = ACIDIC_PATTERNS
+            .iter()
             .map(|p| find_all_matches(mol, &p.query).len())
             .sum();
         DescriptorValue::Int(total as u32)
@@ -115,10 +127,13 @@ impl Descriptor for AcidicGroupCount {
 pub struct BasicGroupCount;
 
 impl Descriptor for BasicGroupCount {
-    fn name(&self) -> &str { "BasicGroupCount" }
+    fn name(&self) -> &str {
+        "BasicGroupCount"
+    }
 
     fn calculate(&self, mol: &mut Molecule) -> DescriptorValue {
-        let total: usize = BASIC_PATTERNS.iter()
+        let total: usize = BASIC_PATTERNS
+            .iter()
             .map(|p| find_all_matches(mol, &p.query).len())
             .sum();
         DescriptorValue::Int(total as u32)
@@ -182,7 +197,11 @@ mod tests {
     #[test]
     fn test_fg_methylamine() {
         let fg = calc_fg("CN");
-        assert!(fg[6] >= 1, "Methylamine should have primary amine: {:?}", fg);
+        assert!(
+            fg[6] >= 1,
+            "Methylamine should have primary amine: {:?}",
+            fg
+        );
     }
 
     #[test]
@@ -195,7 +214,11 @@ mod tests {
     fn test_fg_benzene_no_groups() {
         let fg = calc_fg("c1ccccc1");
         let total: u16 = fg.iter().sum();
-        assert_eq!(total, 0, "Benzene should have no functional groups: {:?}", fg);
+        assert_eq!(
+            total, 0,
+            "Benzene should have no functional groups: {:?}",
+            fg
+        );
     }
 
     #[test]

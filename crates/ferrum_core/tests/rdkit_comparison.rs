@@ -28,6 +28,7 @@ use ferrum_core::desc::tpsa::Tpsa;
 use ferrum_core::desc::vsa::{LabuteASA, PeoeVsa, SlogpVSA, SmrVSA};
 
 use std::collections::HashMap;
+use std::env;
 use std::path::Path;
 
 // ── Tolerances ──────────────────────────────────────────────────────────────
@@ -67,7 +68,15 @@ struct CompResult {
 
 // ── CSV Loader ──────────────────────────────────────────────────────────────
 
-const MAX_REFERENCE_ROWS: usize = 500;
+const DEFAULT_MAX_REFERENCE_ROWS: usize = 500;
+
+fn reference_row_limit() -> usize {
+    env::var("FERRUM_RDKIT_REFERENCE_ROWS")
+        .ok()
+        .and_then(|s| s.parse::<usize>().ok())
+        .filter(|&n| n > 0)
+        .unwrap_or(DEFAULT_MAX_REFERENCE_ROWS)
+}
 
 fn load_reference() -> Vec<(String, String, HashMap<String, String>)> {
     let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/rdkit_reference_coconut.csv");
@@ -80,6 +89,7 @@ fn load_reference() -> Vec<(String, String, HashMap<String, String>)> {
         .map(|s| s.to_string())
         .collect();
     let mut out = Vec::new();
+    let max_reference_rows = reference_row_limit();
     for rec in rdr.records() {
         let rec = rec.expect("valid CSV row");
         let smiles = rec[0].to_string();
@@ -89,7 +99,7 @@ fn load_reference() -> Vec<(String, String, HashMap<String, String>)> {
             vals.insert(h.clone(), rec[i].to_string());
         }
         out.push((smiles, name, vals));
-        if out.len() >= MAX_REFERENCE_ROWS {
+        if out.len() >= max_reference_rows {
             break;
         }
     }

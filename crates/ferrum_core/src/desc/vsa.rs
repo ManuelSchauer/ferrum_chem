@@ -14,8 +14,8 @@
 //! - Labute (2000) J. Mol. Graph. Model. 18, 464
 //! - Wildman & Crippen (1999) JCICS 39(5), 868
 
-use super::typed::{Descriptor, DescriptorValue};
 use super::logp::crippen_atom_contributions;
+use super::typed::{Descriptor, DescriptorValue};
 use crate::algo::electronic::compute_gasteiger_charges;
 use crate::mol::molecule::Molecule;
 use std::f64::consts::PI;
@@ -26,29 +26,91 @@ use std::f64::consts::PI;
 
 pub fn rb0_radius(an: u8) -> f64 {
     match an {
-         1 => 0.330,   2 => 0.700,   3 => 1.230,   4 => 0.900,
-         5 => 0.820,   6 => 0.770,   7 => 0.700,   8 => 0.660,
-         9 => 0.611,  10 => 0.700,  11 => 1.540,  12 => 1.360,
-        13 => 1.180,  14 => 0.937,  15 => 0.890,  16 => 1.040,
-        17 => 0.997,  18 => 1.740,  19 => 2.030,  20 => 1.740,
-        21 => 1.440,  22 => 1.320,  23 => 1.220,  24 => 1.180,
-        25 => 1.170,  26 => 1.170,  27 => 1.160,  28 => 1.150,
-        29 => 1.170,  30 => 1.250,  31 => 1.260,  32 => 1.188,
-        33 => 1.200,  34 => 1.170,  35 => 1.167,  36 => 1.910,
-        37 => 2.160,  38 => 1.910,  39 => 1.620,  40 => 1.450,
-        41 => 1.340,  42 => 1.300,  43 => 1.270,  44 => 1.250,
-        45 => 1.250,  46 => 1.280,  47 => 1.340,  48 => 1.480,
-        49 => 1.440,  50 => 1.385,  51 => 1.400,  52 => 1.378,
-        53 => 1.387,  54 => 1.980,  55 => 2.350,  56 => 1.980,
+        1 => 0.330,
+        2 => 0.700,
+        3 => 1.230,
+        4 => 0.900,
+        5 => 0.820,
+        6 => 0.770,
+        7 => 0.700,
+        8 => 0.660,
+        9 => 0.611,
+        10 => 0.700,
+        11 => 1.540,
+        12 => 1.360,
+        13 => 1.180,
+        14 => 0.937,
+        15 => 0.890,
+        16 => 1.040,
+        17 => 0.997,
+        18 => 1.740,
+        19 => 2.030,
+        20 => 1.740,
+        21 => 1.440,
+        22 => 1.320,
+        23 => 1.220,
+        24 => 1.180,
+        25 => 1.170,
+        26 => 1.170,
+        27 => 1.160,
+        28 => 1.150,
+        29 => 1.170,
+        30 => 1.250,
+        31 => 1.260,
+        32 => 1.188,
+        33 => 1.200,
+        34 => 1.170,
+        35 => 1.167,
+        36 => 1.910,
+        37 => 2.160,
+        38 => 1.910,
+        39 => 1.620,
+        40 => 1.450,
+        41 => 1.340,
+        42 => 1.300,
+        43 => 1.270,
+        44 => 1.250,
+        45 => 1.250,
+        46 => 1.280,
+        47 => 1.340,
+        48 => 1.480,
+        49 => 1.440,
+        50 => 1.385,
+        51 => 1.400,
+        52 => 1.378,
+        53 => 1.387,
+        54 => 1.980,
+        55 => 2.350,
+        56 => 1.980,
         // Lanthanides (57-71) and 3rd-row transition metals (72-80)
-        57 => 1.690,  58 => 1.650,  59 => 1.650,  60 => 1.640,
-        61 => 1.630,  62 => 1.620,  63 => 1.850,  64 => 1.610,
-        65 => 1.590,  66 => 1.590,  67 => 1.580,  68 => 1.570,
-        69 => 1.560,  70 => 1.700,  71 => 1.560,  72 => 1.440,
-        73 => 1.340,  74 => 1.300,  75 => 1.280,  76 => 1.260,
-        77 => 1.270,  78 => 1.300,  79 => 1.340,  80 => 1.490,
-        81 => 1.480,  82 => 1.470,  83 => 1.460,
-         _ => 0.770,
+        57 => 1.690,
+        58 => 1.650,
+        59 => 1.650,
+        60 => 1.640,
+        61 => 1.630,
+        62 => 1.620,
+        63 => 1.850,
+        64 => 1.610,
+        65 => 1.590,
+        66 => 1.590,
+        67 => 1.580,
+        68 => 1.570,
+        69 => 1.560,
+        70 => 1.700,
+        71 => 1.560,
+        72 => 1.440,
+        73 => 1.340,
+        74 => 1.300,
+        75 => 1.280,
+        76 => 1.260,
+        77 => 1.270,
+        78 => 1.300,
+        79 => 1.340,
+        80 => 1.490,
+        81 => 1.480,
+        82 => 1.470,
+        83 => 1.460,
+        _ => 0.770,
     }
 }
 
@@ -91,7 +153,9 @@ fn compute_labute_contribs(mol: &Molecule) -> (Vec<f64>, f64) {
         let j = bond.target as usize;
         let ai = mol.atoms[i].atomic_number;
         let aj = mol.atoms[j].atomic_number;
-        if ai <= 1 || aj <= 1 { continue; }
+        if ai <= 1 || aj <= 1 {
+            continue;
+        }
 
         let ri = rb0_radius(ai);
         let rj = rb0_radius(aj);
@@ -106,7 +170,9 @@ fn compute_labute_contribs(mol: &Molecule) -> (Vec<f64>, f64) {
     // Implicit H bonds: one correction per heavy atom (Labute approximation)
     for i in 0..n {
         let ai = mol.atoms[i].atomic_number;
-        if ai <= 1 { continue; }
+        if ai <= 1 {
+            continue;
+        }
         let ri = rb0_radius(ai);
         let bij = ri + r_h;
         let dij = (ri + r_h).min((ri - r_h).abs().max(bij));
@@ -119,7 +185,9 @@ fn compute_labute_contribs(mol: &Molecule) -> (Vec<f64>, f64) {
     let mut vsa = vec![0.0f64; n];
     for i in 0..n {
         let ai = mol.atoms[i].atomic_number;
-        if ai <= 1 { continue; }
+        if ai <= 1 {
+            continue;
+        }
         let ri = rb0_radius(ai);
         vsa[i] = 4.0 * PI * ri * ri - PI * ri * overlap[i];
     }
@@ -138,7 +206,17 @@ fn compute_labute_contribs(mol: &Molecule) -> (Vec<f64>, f64) {
 pub struct SlogpVSA;
 
 const SLOGP_BINS: [f64; 12] = [
-    -0.40, -0.20, 0.00, 0.10, 0.15, 0.20, 0.25, 0.30, 0.40, 0.50, 0.60,
+    -0.40,
+    -0.20,
+    0.00,
+    0.10,
+    0.15,
+    0.20,
+    0.25,
+    0.30,
+    0.40,
+    0.50,
+    0.60,
     f64::INFINITY,
 ];
 
@@ -149,17 +227,19 @@ impl Descriptor for SlogpVSA {
 
     fn calculate(&self, mol: &mut Molecule) -> DescriptorValue {
         let mut values = vec![0.0f32; 12];
-        
+
         let (vsa, _) = compute_labute_contribs(mol);
         let (logp_contrib, _) = crippen_atom_contributions(mol);
 
         for i in 0..mol.atoms.len() {
-            if mol.atoms[i].atomic_number <= 1 { continue; }
+            if mol.atoms[i].atomic_number <= 1 {
+                continue;
+            }
             let lp = logp_contrib[i];
             let bin = find_bin(lp, &SLOGP_BINS);
             values[bin] += vsa[i] as f32;
         }
-        
+
         DescriptorValue::FloatVec(values)
     }
 }
@@ -174,7 +254,15 @@ impl Descriptor for SlogpVSA {
 pub struct SmrVSA;
 
 const SMR_BINS: [f64; 10] = [
-    1.29, 1.82, 2.24, 2.45, 2.75, 3.05, 3.63, 3.80, 4.00,
+    1.29,
+    1.82,
+    2.24,
+    2.45,
+    2.75,
+    3.05,
+    3.63,
+    3.80,
+    4.00,
     f64::INFINITY,
 ];
 
@@ -185,17 +273,19 @@ impl Descriptor for SmrVSA {
 
     fn calculate(&self, mol: &mut Molecule) -> DescriptorValue {
         let mut values = vec![0.0f32; 10];
-        
+
         let (vsa, _) = compute_labute_contribs(mol);
         let (_, mr_contrib) = crippen_atom_contributions(mol);
 
         for i in 0..mol.atoms.len() {
-            if mol.atoms[i].atomic_number <= 1 { continue; }
+            if mol.atoms[i].atomic_number <= 1 {
+                continue;
+            }
             let mr = mr_contrib[i];
             let bin = find_bin(mr, &SMR_BINS);
             values[bin] += vsa[i] as f32;
         }
-        
+
         DescriptorValue::FloatVec(values)
     }
 }
@@ -231,8 +321,20 @@ impl Descriptor for LabuteASA {
 pub struct PeoeVsa;
 
 const PEOE_BINS: [f64; 14] = [
-    -0.30, -0.25, -0.20, -0.15, -0.10, -0.05, 0.00,
-    0.05,  0.10,  0.15,  0.20,  0.25,  0.30, f64::INFINITY,
+    -0.30,
+    -0.25,
+    -0.20,
+    -0.15,
+    -0.10,
+    -0.05,
+    0.00,
+    0.05,
+    0.10,
+    0.15,
+    0.20,
+    0.25,
+    0.30,
+    f64::INFINITY,
 ];
 
 impl Descriptor for PeoeVsa {
@@ -247,7 +349,9 @@ impl Descriptor for PeoeVsa {
         let (vsa, _) = compute_labute_contribs(mol);
 
         for i in 0..mol.atoms.len() {
-            if mol.atoms[i].atomic_number <= 1 { continue; }
+            if mol.atoms[i].atomic_number <= 1 {
+                continue;
+            }
             let charge = charges[i];
             let bin = find_bin(charge, &PEOE_BINS);
             values[bin] += vsa[i] as f32;
@@ -264,7 +368,9 @@ impl Descriptor for PeoeVsa {
 /// Find bin index: returns i where bins[i-1] <= val < bins[i], with bins[-1] = -∞.
 fn find_bin(val: f64, bins: &[f64]) -> usize {
     for (i, &upper) in bins.iter().enumerate() {
-        if val < upper { return i; }
+        if val < upper {
+            return i;
+        }
     }
     bins.len() - 1
 }
@@ -285,9 +391,9 @@ const _: () = {
 // ---------------------------------------------------------------------------
 #[cfg(test)]
 mod tests {
+    use super::super::typed::Descriptor;
     use super::*;
     use crate::io::smiles::parse_smiles;
-    use super::super::typed::Descriptor;
 
     fn calc_float_vec(d: &dyn Descriptor, smiles: &str) -> Vec<f32> {
         let mut mol = parse_smiles(smiles).expect("valid SMILES");
@@ -322,7 +428,9 @@ mod tests {
     fn test_vsa_benzene_symmetry() {
         let mol = parse_smiles("c1ccccc1").unwrap();
         let (vsa, _) = compute_labute_contribs(&mol);
-        let c_vsas: Vec<f64> = vsa.iter().copied()
+        let c_vsas: Vec<f64> = vsa
+            .iter()
+            .copied()
             .enumerate()
             .filter(|(i, _)| mol.atoms[*i].atomic_number == 6)
             .map(|(_, v)| v)
@@ -347,8 +455,12 @@ mod tests {
         let labute = calc_float(&LabuteASA, "CCO");
         let bin_sum: f32 = slogp.iter().sum();
         // Bin sum = heavy atom contributions only; LabuteASA includes H contribution
-        assert!(bin_sum > 0.0 && bin_sum < labute + 1.0,
-            "bin sum {} vs LabuteASA {}", bin_sum, labute);
+        assert!(
+            bin_sum > 0.0 && bin_sum < labute + 1.0,
+            "bin sum {} vs LabuteASA {}",
+            bin_sum,
+            labute
+        );
     }
 
     #[test]
@@ -373,8 +485,12 @@ mod tests {
         let labute = calc_float(&LabuteASA, "CCO");
         let bin_sum: f32 = smr.iter().sum();
         // Bin sum = heavy atom contributions only; LabuteASA includes H contribution
-        assert!(bin_sum > 0.0 && bin_sum < labute + 1.0,
-            "bin sum {} vs LabuteASA {}", bin_sum, labute);
+        assert!(
+            bin_sum > 0.0 && bin_sum < labute + 1.0,
+            "bin sum {} vs LabuteASA {}",
+            bin_sum,
+            labute
+        );
     }
 
     // -- LabuteASA --
@@ -389,8 +505,7 @@ mod tests {
     fn test_labute_larger_more() {
         let small = calc_float(&LabuteASA, "CC");
         let large = calc_float(&LabuteASA, "CCCCCCCCCC");
-        assert!(large > small,
-            "decane {} > ethane {}", large, small);
+        assert!(large > small, "decane {} > ethane {}", large, small);
     }
 
     #[test]
@@ -434,8 +549,16 @@ mod tests {
         // Bins 0-6 are negative charges, bins 7-13 are non-negative
         let neg_sum: f32 = v[..7].iter().sum();
         let pos_sum: f32 = v[7..].iter().sum();
-        assert!(neg_sum > 0.0, "O should contribute to negative bins: {:?}", v);
-        assert!(pos_sum > 0.0, "C should contribute to positive bins: {:?}", v);
+        assert!(
+            neg_sum > 0.0,
+            "O should contribute to negative bins: {:?}",
+            v
+        );
+        assert!(
+            pos_sum > 0.0,
+            "C should contribute to positive bins: {:?}",
+            v
+        );
     }
 
     #[test]
@@ -444,8 +567,12 @@ mod tests {
             let peoe = calc_float_vec(&PeoeVsa, smi);
             let bin_sum: f32 = peoe.iter().sum();
             // Bin sums only heavy atoms; should be positive and reasonable
-            assert!(bin_sum > 0.0,
-                "{}: PEOE_VSA sum {} should be positive", smi, bin_sum);
+            assert!(
+                bin_sum > 0.0,
+                "{}: PEOE_VSA sum {} should be positive",
+                smi,
+                bin_sum
+            );
         }
     }
 }

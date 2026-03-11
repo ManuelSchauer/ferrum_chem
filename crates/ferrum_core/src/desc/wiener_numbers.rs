@@ -158,7 +158,10 @@ mod tests {
     #[test]
     fn test_wiener_naphthalene() {
         let wiener = calculate_wiener("c1ccc2ccccc2c1");
-        assert!(wiener > 27.0, "Naphthalene should have higher W than benzene");
+        assert!(
+            wiener > 27.0,
+            "Naphthalene should have higher W than benzene"
+        );
     }
 
     #[test]
@@ -183,7 +186,11 @@ mod tests {
 
         for (smiles, expected, name) in test_cases {
             let actual = calculate_wiener(smiles);
-            assert_eq!(actual, expected, "{} ({}): expected W={}, got W={}", name, smiles, expected, actual);
+            assert_eq!(
+                actual, expected,
+                "{} ({}): expected W={}, got W={}",
+                name, smiles, expected, actual
+            );
         }
     }
 }

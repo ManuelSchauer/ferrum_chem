@@ -1,6 +1,7 @@
+use crate::algo::rings::find_symmetrized_sssr_bonds;
+use crate::desc::typed::{Descriptor, DescriptorValue};
 use crate::mol::molecule::Molecule;
 use crate::types::AtomIdx;
-use crate::desc::typed::{Descriptor, DescriptorValue};
 use std::collections::HashSet;
 
 /// Small ring descriptor - analyzes ring structure in molecules.
@@ -25,15 +26,15 @@ impl Descriptor for SmallRingDescriptor {
 
     fn calculate(&self, mol: &mut Molecule) -> DescriptorValue {
         let mut counts = vec![0u16; 11];
-        
-        // SSSR ring count = M - N + C (bonds - atoms + connected components)
-        // This matches RDKit's RingCount (cyclomatic number)
-        let sssr_count = compute_sssr_count(mol);
-        counts[0] = sssr_count as u16;
+
+        // RDKit ring counts are based on a symmetrized SSSR-like set, so bridged
+        // cages can contain more rings than the raw cycle rank.
+        let total_ring_count = compute_total_ring_count(mol);
+        counts[0] = total_ring_count as u16;
 
         // Find all small rings (3-9 members) for detailed size breakdown
         let rings = find_small_rings(mol, 3, 9);
-        
+
         // Count rings by size
         let mut size_counts = [0u16; 7]; // indices 0-6 for sizes 3-9
         for ring in &rings {
@@ -42,24 +43,24 @@ impl Descriptor for SmallRingDescriptor {
                 size_counts[size - 3] += 1;
             }
         }
-        
+
         // Set individual size counts (indices 4-10)
         for i in 0..7 {
             counts[4 + i] = size_counts[i];
         }
-        
+
         // Count aromatic rings
         let arom_ring_count = count_aromatic_rings(mol, &rings);
         counts[1] = arom_ring_count as u16;
-        
+
         // Count ring blocks (distinct ring systems)
         let ring_blocks = count_ring_blocks(mol);
         counts[2] = ring_blocks as u16;
-        
+
         // Count aromatically connected components
         let arom_blocks = count_aromatic_components(mol);
         counts[3] = arom_blocks as u16;
-        
+
         DescriptorValue::IntU16Vec(counts)
     }
 }
@@ -69,26 +70,8 @@ const _: () = {
     let _ = assert_send_sync::<SmallRingDescriptor>;
 };
 
-/// Compute SSSR count using the cyclomatic number: M - N + C.
-fn compute_sssr_count(mol: &Molecule) -> usize {
-    let n = mol.num_atoms();
-    if n == 0 { return 0; }
-    let m = mol.bonds.len();
-    // Count connected components via union-find
-    let mut parent: Vec<usize> = (0..n).collect();
-    fn find(parent: &mut [usize], i: usize) -> usize {
-        if parent[i] != i {
-            parent[i] = find(parent, parent[i]);
-        }
-        parent[i]
-    }
-    for bond in &mol.bonds {
-        let a = find(&mut parent, bond.source as usize);
-        let b = find(&mut parent, bond.target as usize);
-        if a != b { parent[a] = b; }
-    }
-    let components = (0..n).filter(|&i| find(&mut parent, i) == i).count();
-    (m + components).saturating_sub(n)
+fn compute_total_ring_count(mol: &Molecule) -> usize {
+    find_symmetrized_sssr_bonds(mol).len()
 }
 
 /// Find all small rings in a molecule (sizes min_size to max_size).
@@ -97,26 +80,26 @@ fn find_small_rings(mol: &Molecule, min_size: usize, max_size: usize) -> Vec<Vec
     if n_atoms == 0 {
         return Vec::new();
     }
-    
+
     // Mark atoms in rings using ring blocks
     let ring_blocks = identify_ring_blocks(mol);
-    
+
     let mut rings = Vec::new();
-    
+
     // Search for rings of each size
     for ring_size in min_size..=max_size {
         for start_atom in 0..n_atoms {
             let start_idx = start_atom as AtomIdx;
-            
+
             // Skip if not in a ring
             if ring_blocks[start_atom] == 0 {
                 continue;
             }
-            
+
             // Try to find a ring starting from this atom
             let mut path = vec![start_idx];
             let block_id = ring_blocks[start_atom];
-            
+
             find_rings_recursive(
                 mol,
                 &mut path,
@@ -128,7 +111,7 @@ fn find_small_rings(mol: &Molecule, min_size: usize, max_size: usize) -> Vec<Vec
             );
         }
     }
-    
+
     // Deduplicate rings
     deduplicate_rings(rings)
 }
@@ -144,7 +127,7 @@ fn find_rings_recursive(
     rings: &mut Vec<Vec<AtomIdx>>,
 ) {
     let current = *path.last().unwrap();
-    
+
     // If we've reached target size, check if we can close the ring
     if path.len() == target_size {
         // Check if current atom is connected to start
@@ -155,7 +138,7 @@ fn find_rings_recursive(
             } else {
                 bond.source
             };
-            
+
             if neighbor == start_atom {
                 // Found a ring!
                 rings.push(path.clone());
@@ -164,7 +147,7 @@ fn find_rings_recursive(
         }
         return;
     }
-    
+
     // Not at target size yet, explore neighbors
     for &bond_idx in &mol.adjacency[current as usize] {
         let bond = &mol.bonds[bond_idx as usize];
@@ -173,17 +156,17 @@ fn find_rings_recursive(
         } else {
             bond.source
         };
-        
+
         // Skip if not in same ring block
         if ring_blocks[neighbor as usize] != block_id {
             continue;
         }
-        
+
         // Skip if already in path (except we allow start atom at the end)
         if path.len() < target_size && path.contains(&neighbor) {
             continue;
         }
-        
+
         // Add to path and recurse
         path.push(neighbor);
         find_rings_recursive(
@@ -205,20 +188,20 @@ fn identify_ring_blocks(mol: &Molecule) -> Vec<usize> {
     let n_atoms = mol.num_atoms();
     let mut ring_blocks = vec![0; n_atoms];
     let mut visited = vec![false; n_atoms];
-    
+
     // Use DFS to find cycles and mark ring blocks
     let mut path = Vec::new();
     let mut next_block_id = 1;
-    
+
     for start in 0..n_atoms {
         if visited[start] {
             continue;
         }
-        
+
         path.clear();
         path.push(start as AtomIdx);
         visited[start] = true;
-        
+
         dfs_mark_rings(
             mol,
             &mut path,
@@ -227,7 +210,7 @@ fn identify_ring_blocks(mol: &Molecule) -> Vec<usize> {
             &mut next_block_id,
         );
     }
-    
+
     ring_blocks
 }
 
@@ -240,7 +223,7 @@ fn dfs_mark_rings(
     next_block_id: &mut usize,
 ) {
     let current = *path.last().unwrap();
-    
+
     for &bond_idx in &mol.adjacency[current as usize] {
         let bond = &mol.bonds[bond_idx as usize];
         let neighbor = if bond.source == current {
@@ -248,18 +231,18 @@ fn dfs_mark_rings(
         } else {
             bond.source
         };
-        
+
         if path.len() >= 2 && neighbor == path[path.len() - 2] {
             // Skip back edge to parent
             continue;
         }
-        
+
         if visited[neighbor as usize] {
             // Found a cycle - mark all atoms in the cycle
             if let Some(pos) = path.iter().position(|&a| a == neighbor) {
                 let block_id = *next_block_id;
                 *next_block_id += 1;
-                
+
                 for &atom in &path[pos..] {
                     if ring_blocks[atom as usize] == 0 {
                         ring_blocks[atom as usize] = block_id;
@@ -287,16 +270,14 @@ fn dfs_mark_rings(
 /// Count the number of distinct ring blocks (ring systems).
 fn count_ring_blocks(mol: &Molecule) -> usize {
     let ring_blocks = identify_ring_blocks(mol);
-    let unique_blocks: HashSet<usize> = ring_blocks.iter()
-        .filter(|&&id| id > 0)
-        .copied()
-        .collect();
+    let unique_blocks: HashSet<usize> = ring_blocks.iter().filter(|&&id| id > 0).copied().collect();
     unique_blocks.len()
 }
 
 /// Count aromatic rings.
 fn count_aromatic_rings(mol: &Molecule, rings: &[Vec<AtomIdx>]) -> usize {
-    rings.iter()
+    rings
+        .iter()
         .filter(|ring| is_ring_aromatic(mol, ring))
         .count()
 }
@@ -306,30 +287,31 @@ fn is_ring_aromatic(mol: &Molecule, ring: &[AtomIdx]) -> bool {
     if ring.is_empty() {
         return false;
     }
-    
+
     for i in 0..ring.len() {
         let atom1 = ring[i];
         let atom2 = ring[(i + 1) % ring.len()];
-        
+
         // Find bond between these atoms
         let mut bond_found = false;
         let mut bond_aromatic = false;
-        
+
         for &bond_idx in &mol.adjacency[atom1 as usize] {
             let bond = &mol.bonds[bond_idx as usize];
-            if (bond.source == atom1 && bond.target == atom2) ||
-               (bond.source == atom2 && bond.target == atom1) {
+            if (bond.source == atom1 && bond.target == atom2)
+                || (bond.source == atom2 && bond.target == atom1)
+            {
                 bond_found = true;
                 bond_aromatic = bond.bond_type == crate::types::BondType::Aromatic;
                 break;
             }
         }
-        
+
         if !bond_found || !bond_aromatic {
             return false;
         }
     }
-    
+
     true
 }
 
@@ -338,34 +320,34 @@ fn count_aromatic_components(mol: &Molecule) -> usize {
     let n_atoms = mol.num_atoms();
     let mut visited = vec![false; n_atoms];
     let mut component_count = 0;
-    
+
     for start in 0..n_atoms {
         if visited[start] || !mol.atoms[start].is_aromatic() {
             continue;
         }
-        
+
         // Found a new aromatic component
         component_count += 1;
-        
+
         // BFS to mark all atoms in this aromatic component
         let mut queue = vec![start as AtomIdx];
         visited[start] = true;
-        
+
         while let Some(current) = queue.pop() {
             for &bond_idx in &mol.adjacency[current as usize] {
                 let bond = &mol.bonds[bond_idx as usize];
-                
+
                 // Only follow aromatic bonds
                 if bond.bond_type != crate::types::BondType::Aromatic {
                     continue;
                 }
-                
+
                 let neighbor = if bond.source == current {
                     bond.target
                 } else {
                     bond.source
                 };
-                
+
                 if !visited[neighbor as usize] && mol.atoms[neighbor as usize].is_aromatic() {
                     visited[neighbor as usize] = true;
                     queue.push(neighbor);
@@ -373,7 +355,7 @@ fn count_aromatic_components(mol: &Molecule) -> usize {
             }
         }
     }
-    
+
     component_count
 }
 
@@ -381,28 +363,28 @@ fn count_aromatic_components(mol: &Molecule) -> usize {
 fn deduplicate_rings(mut rings: Vec<Vec<AtomIdx>>) -> Vec<Vec<AtomIdx>> {
     let mut unique = Vec::new();
     let mut seen_sets: Vec<HashSet<AtomIdx>> = Vec::new();
-    
+
     for ring in rings.drain(..) {
         let ring_set: HashSet<AtomIdx> = ring.iter().copied().collect();
-        
+
         // Check if we've seen this set of atoms before
         if !seen_sets.iter().any(|s| s == &ring_set) {
             seen_sets.push(ring_set);
             unique.push(ring);
         }
     }
-    
+
     unique
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::io::smiles::parse_smiles;
-    use crate::algo::valency::assign_implicit_hydrogens;
-    use crate::algo::rings::find_sssr;
     use crate::algo::aromaticity::perceive_aromaticity;
-    
+    use crate::algo::rings::find_sssr;
+    use crate::algo::valency::assign_implicit_hydrogens;
+    use crate::io::smiles::parse_smiles;
+
     fn prepare_molecule(smiles: &str) -> Molecule {
         let mut mol = parse_smiles(smiles).unwrap();
         assign_implicit_hydrogens(&mut mol).unwrap();
@@ -418,53 +400,78 @@ mod tests {
             other => panic!("expected IntU16Vec, got {:?}", other),
         }
     }
-    
+
     #[test]
     fn test_benzene() {
         let output = calc_small_ring("c1ccccc1");
-        
+
         assert_eq!(output[0], 1, "Should have 1 small ring");
         assert_eq!(output[1], 1, "Should have 1 aromatic ring");
         assert_eq!(output[2], 1, "Should have 1 ring block");
         assert!(output[3] >= 1, "Should have at least 1 aromatic component");
-        assert_eq!(output[4 + 3], 1, "Should have 1 six-membered ring (index 7)");
+        assert_eq!(
+            output[4 + 3],
+            1,
+            "Should have 1 six-membered ring (index 7)"
+        );
     }
-    
+
     #[test]
     fn test_naphthalene() {
         let output = calc_small_ring("c1ccc2ccccc2c1");
-        
+
         assert!(output[0] >= 2, "Should have at least 2 small rings");
         assert!(output[1] >= 2, "Should have at least 2 aromatic rings");
         assert_eq!(output[2], 1, "Should have 1 ring block (fused system)");
         assert_eq!(output[3], 1, "Should have 1 aromatic component");
     }
-    
+
     #[test]
     fn test_cyclohexane() {
         let output = calc_small_ring("C1CCCCC1");
-        
+
         assert_eq!(output[0], 1, "Should have 1 small ring");
         assert_eq!(output[1], 0, "Should have 0 aromatic rings");
         assert_eq!(output[2], 1, "Should have 1 ring block");
         assert_eq!(output[3], 0, "Should have 0 aromatic components");
         assert_eq!(output[4 + 3], 1, "Should have 1 six-membered ring");
     }
-    
+
     #[test]
     fn test_cyclopropane() {
         let output = calc_small_ring("C1CC1");
-        
+
         assert_eq!(output[0], 1, "Should have 1 small ring");
         assert_eq!(output[4], 1, "Should have 1 three-membered ring (index 4)");
     }
-    
+
+    #[test]
+    fn test_total_rings_uses_symmetrized_ring_count_for_cubane() {
+        let output = calc_small_ring("C12C3C4C1C5C2C3C45");
+        assert_eq!(
+            output[0], 6,
+            "Cubane should expose all 6 symmetrized face rings"
+        );
+    }
+
+    #[test]
+    fn test_total_rings_uses_symmetrized_ring_count_for_adamantane() {
+        let output = calc_small_ring("C1C2CC3CC1CC(C2)C3");
+        assert_eq!(
+            output[0], 4,
+            "Adamantane should expose 4 symmetrized face rings"
+        );
+    }
+
     #[test]
     fn test_no_rings() {
         let output = calc_small_ring("CCCC");
-        
+
         for i in 0..11 {
-            assert_eq!(output[i], 0, "All counts should be 0 for non-cyclic molecule");
+            assert_eq!(
+                output[i], 0,
+                "All counts should be 0 for non-cyclic molecule"
+            );
         }
     }
 }

@@ -9,7 +9,7 @@
 //! - Aromatic stability
 //! - Reactivity prediction
 
-use super::typed::{DescriptorValue, Descriptor};
+use super::typed::{Descriptor, DescriptorValue};
 use crate::mol::molecule::Molecule;
 use crate::types::{AtomIdx, BondType};
 use std::collections::HashSet;
@@ -17,11 +17,11 @@ use std::collections::HashSet;
 /// Check if an atom can participate in a π-system
 fn is_pi_atom(mol: &Molecule, atom_idx: AtomIdx) -> bool {
     let atom = &mol.atoms[atom_idx as usize];
-    
+
     if atom.is_aromatic() {
         return true;
     }
-    
+
     for bond in &mol.bonds {
         if bond.source == atom_idx || bond.target == atom_idx {
             match bond.bond_type {
@@ -30,7 +30,7 @@ fn is_pi_atom(mol: &Molecule, atom_idx: AtomIdx) -> bool {
             }
         }
     }
-    
+
     false
 }
 
@@ -44,10 +44,10 @@ fn dfs_pi_system(
     if visited.contains(&current) {
         return;
     }
-    
+
     visited.insert(current);
     system.insert(current);
-    
+
     for bond in &mol.bonds {
         let neighbor_idx = if bond.source == current {
             Some(bond.target)
@@ -56,12 +56,12 @@ fn dfs_pi_system(
         } else {
             None
         };
-        
+
         if let Some(neighbor_idx) = neighbor_idx {
             if visited.contains(&neighbor_idx) {
                 continue;
             }
-            
+
             if is_pi_atom(mol, neighbor_idx) {
                 dfs_pi_system(mol, neighbor_idx, visited, system);
             }
@@ -84,25 +84,25 @@ impl Descriptor for PiSystemCounts {
         let mut visited = HashSet::new();
         let mut largest_size = 0u16;
         let mut num_systems = 0u16;
-        
+
         for atom_idx in 0..mol.atoms.len() as AtomIdx {
             if visited.contains(&atom_idx) {
                 continue;
             }
-            
+
             if !is_pi_atom(mol, atom_idx) {
                 continue;
             }
-            
+
             let mut system = HashSet::new();
             dfs_pi_system(mol, atom_idx, &mut visited, &mut system);
-            
+
             if !system.is_empty() {
                 num_systems += 1;
                 largest_size = largest_size.max(system.len() as u16);
             }
         }
-        
+
         DescriptorValue::IntU16Vec(vec![largest_size, num_systems])
     }
 }
@@ -113,26 +113,28 @@ impl Descriptor for PiSystemCounts {
 pub struct LargestPiSystem;
 
 impl Descriptor for LargestPiSystem {
-    fn name(&self) -> &str { "LargestPiSystem" }
+    fn name(&self) -> &str {
+        "LargestPiSystem"
+    }
 
     fn calculate(&self, mol: &mut Molecule) -> DescriptorValue {
         let mut visited = HashSet::new();
         let mut largest_system_size = 0;
-        
+
         for i in 0..mol.atoms.len() {
             let atom_idx = i as AtomIdx;
-            
+
             if visited.contains(&atom_idx) {
                 continue;
             }
-            
+
             if is_pi_atom(mol, atom_idx) {
                 let mut system = HashSet::new();
                 dfs_pi_system(mol, atom_idx, &mut visited, &mut system);
                 largest_system_size = largest_system_size.max(system.len());
             }
         }
-        
+
         DescriptorValue::Int(largest_system_size as u32)
     }
 }
@@ -146,9 +148,9 @@ const _: () = {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::io::smiles::parse_smiles;
-    use crate::algo::valency::assign_implicit_hydrogens;
     use crate::algo::aromaticity::perceive_aromaticity;
+    use crate::algo::valency::assign_implicit_hydrogens;
+    use crate::io::smiles::parse_smiles;
 
     fn parse_and_prepare(smiles: &str) -> Molecule {
         let mut mol = parse_smiles(smiles).unwrap();
@@ -184,7 +186,10 @@ mod tests {
     #[test]
     fn test_pi_system_naphthalene() {
         let mut mol = parse_and_prepare("c1ccc2ccccc2c1");
-        assert_eq!(LargestPiSystem.calculate(&mut mol), DescriptorValue::Int(10));
+        assert_eq!(
+            LargestPiSystem.calculate(&mut mol),
+            DescriptorValue::Int(10)
+        );
     }
 
     #[test]

@@ -8,24 +8,21 @@ use crate::mol::molecule::Molecule;
 /// Compute total atom count (heavy atoms + hydrogens).
 pub fn compute_atom_count(mol: &Molecule) -> u32 {
     let heavy_count = mol.num_atoms() as u32;
-    let hydrogen_count: u32 = mol.atoms.iter()
-        .map(|atom| atom.total_h() as u32)
-        .sum();
+    let hydrogen_count: u32 = mol.atoms.iter().map(|atom| atom.total_h() as u32).sum();
     heavy_count + hydrogen_count
 }
 
 /// Compute heavy atom count (non-hydrogen atoms).
 pub fn compute_heavy_atom_count(mol: &Molecule) -> u32 {
-    mol.atoms.iter()
+    mol.atoms
+        .iter()
         .filter(|atom| atom.atomic_number > 1)
         .count() as u32
 }
 
 /// Compute aromatic atom count.
 pub fn compute_aromatic_atom_count(mol: &Molecule) -> u32 {
-    mol.atoms.iter()
-        .filter(|atom| atom.is_aromatic())
-        .count() as u32
+    mol.atoms.iter().filter(|atom| atom.is_aromatic()).count() as u32
 }
 
 // ---------------------------------------------------------------------------
@@ -72,34 +69,36 @@ impl Descriptor for ElementCounts {
 
     fn calculate(&self, mol: &mut Molecule) -> super::typed::DescriptorValue {
         let mut counts = vec![0u16; 12]; // C, N, O, S, P, F, Cl, Br, I, Others, H, Heavy
-        
+
         let mut hydrogen_count = 0u16;
         let mut heavy_count = 0u16;
 
         for atom in &mol.atoms {
             let an = atom.atomic_number;
-            if an <= 1 { continue; }
-            
+            if an <= 1 {
+                continue;
+            }
+
             heavy_count += 1;
             hydrogen_count += atom.total_h() as u16;
 
             let idx = match an {
-                6 => 0,   // C
-                7 => 1,   // N
-                8 => 2,   // O
-                16 => 3,  // S
-                15 => 4,  // P
-                9 => 5,   // F
-                17 => 6,  // Cl
-                35 => 7,  // Br
-                53 => 8,  // I
-                _ => 9,   // Others
+                6 => 0,  // C
+                7 => 1,  // N
+                8 => 2,  // O
+                16 => 3, // S
+                15 => 4, // P
+                9 => 5,  // F
+                17 => 6, // Cl
+                35 => 7, // Br
+                53 => 8, // I
+                _ => 9,  // Others
             };
             counts[idx] += 1;
         }
 
         counts[10] = hydrogen_count; // H
-        counts[11] = heavy_count;    // Heavy
+        counts[11] = heavy_count; // Heavy
 
         super::typed::DescriptorValue::IntU16Vec(counts)
     }
@@ -123,8 +122,7 @@ pub struct SingleAtomCount {
 
 impl SingleAtomCount {
     pub fn new(element: &str) -> Self {
-        let atomic_number = crate::mol::elements::symbol_to_atomic_number(element)
-            .unwrap_or(0);
+        let atomic_number = crate::mol::elements::symbol_to_atomic_number(element).unwrap_or(0);
         Self {
             element_symbol: element.to_string(),
             atomic_number,
@@ -140,12 +138,12 @@ impl Descriptor for SingleAtomCount {
     fn calculate(&self, mol: &mut Molecule) -> super::typed::DescriptorValue {
         if self.atomic_number == 1 {
             // Hydrogen: count explicit + implicit
-            let count: u32 = mol.atoms.iter()
-                .map(|a| a.total_h() as u32)
-                .sum();
+            let count: u32 = mol.atoms.iter().map(|a| a.total_h() as u32).sum();
             super::typed::DescriptorValue::Int(count)
         } else {
-            let count = mol.atoms.iter()
+            let count = mol
+                .atoms
+                .iter()
                 .filter(|a| a.atomic_number == self.atomic_number)
                 .count() as u32;
             super::typed::DescriptorValue::Int(count)
@@ -157,7 +155,9 @@ impl Descriptor for SingleAtomCount {
 pub struct AromaticAtomCount;
 
 impl Descriptor for AromaticAtomCount {
-    fn name(&self) -> &str { "AromaticAtomCount" }
+    fn name(&self) -> &str {
+        "AromaticAtomCount"
+    }
 
     fn calculate(&self, mol: &mut Molecule) -> super::typed::DescriptorValue {
         super::typed::DescriptorValue::Int(compute_aromatic_atom_count(mol))
@@ -177,21 +177,21 @@ const _: () = {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::io::smiles::parse_smiles;
     use crate::algo::aromaticity::perceive_aromaticity;
+    use crate::io::smiles::parse_smiles;
 
     #[test]
     fn test_atom_count() {
         let mut mol = parse_smiles("CCO").unwrap(); // Ethanol: C2H6O
         assert_eq!(AtomCount.calculate(&mut mol).as_int(), 9); // 2C + 1O + 6H
     }
-    
+
     #[test]
     fn test_atom_count_methane() {
         let mut mol = parse_smiles("C").unwrap(); // Methane: CH4
         assert_eq!(AtomCount.calculate(&mut mol).as_int(), 5); // 1C + 4H
     }
-    
+
     #[test]
     fn test_atom_count_benzene() {
         let mut mol = parse_smiles("c1ccccc1").unwrap(); // Benzene: C6H6

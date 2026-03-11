@@ -1,6 +1,6 @@
-use crate::mol::molecule::Molecule;
+use super::{aromaticity, canon, components, rings, valency};
 use crate::error::Result;
-use super::{components, valency, rings, aromaticity, canon};
+use crate::mol::molecule::Molecule;
 
 /// Die Pipeline of Truth.
 pub fn process(mut mol: Molecule) -> Result<Molecule> {

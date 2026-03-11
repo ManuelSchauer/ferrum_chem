@@ -10,7 +10,9 @@ pub fn compute_charges(mol: &Molecule) -> Vec<f64> {
 pub struct MaxPartialCharge;
 
 impl Descriptor for MaxPartialCharge {
-    fn name(&self) -> &str { "MaxPartialCharge" }
+    fn name(&self) -> &str {
+        "MaxPartialCharge"
+    }
 
     fn calculate(&self, mol: &mut Molecule) -> DescriptorValue {
         let charges = compute_charges(mol);
@@ -23,7 +25,9 @@ impl Descriptor for MaxPartialCharge {
 pub struct MinPartialCharge;
 
 impl Descriptor for MinPartialCharge {
-    fn name(&self) -> &str { "MinPartialCharge" }
+    fn name(&self) -> &str {
+        "MinPartialCharge"
+    }
 
     fn calculate(&self, mol: &mut Molecule) -> DescriptorValue {
         let charges = compute_charges(mol);
@@ -36,12 +40,21 @@ impl Descriptor for MinPartialCharge {
 pub struct MaxAbsPartialCharge;
 
 impl Descriptor for MaxAbsPartialCharge {
-    fn name(&self) -> &str { "MaxAbsPartialCharge" }
+    fn name(&self) -> &str {
+        "MaxAbsPartialCharge"
+    }
 
     fn calculate(&self, mol: &mut Molecule) -> DescriptorValue {
         let charges = compute_charges(mol);
-        let max_abs = charges.iter().map(|c| c.abs()).fold(f64::NEG_INFINITY, f64::max);
-        DescriptorValue::Float(if max_abs.is_finite() { max_abs as f32 } else { 0.0 })
+        let max_abs = charges
+            .iter()
+            .map(|c| c.abs())
+            .fold(f64::NEG_INFINITY, f64::max);
+        DescriptorValue::Float(if max_abs.is_finite() {
+            max_abs as f32
+        } else {
+            0.0
+        })
     }
 }
 
@@ -49,12 +62,21 @@ impl Descriptor for MaxAbsPartialCharge {
 pub struct MinAbsPartialCharge;
 
 impl Descriptor for MinAbsPartialCharge {
-    fn name(&self) -> &str { "MinAbsPartialCharge" }
+    fn name(&self) -> &str {
+        "MinAbsPartialCharge"
+    }
 
     fn calculate(&self, mol: &mut Molecule) -> DescriptorValue {
         let charges = compute_charges(mol);
-        let min_abs = charges.iter().map(|c| c.abs()).fold(f64::INFINITY, f64::min);
-        DescriptorValue::Float(if min_abs.is_finite() { min_abs as f32 } else { 0.0 })
+        let min_abs = charges
+            .iter()
+            .map(|c| c.abs())
+            .fold(f64::INFINITY, f64::min);
+        DescriptorValue::Float(if min_abs.is_finite() {
+            min_abs as f32
+        } else {
+            0.0
+        })
     }
 }
 
@@ -62,7 +84,9 @@ impl Descriptor for MinAbsPartialCharge {
 pub struct GasteigerCharges;
 
 impl Descriptor for GasteigerCharges {
-    fn name(&self) -> &str { "GasteigerCharges" }
+    fn name(&self) -> &str {
+        "GasteigerCharges"
+    }
 
     fn calculate(&self, mol: &mut Molecule) -> DescriptorValue {
         let charges = compute_charges(mol);
@@ -99,14 +123,20 @@ mod tests {
     fn test_max_partial_charge_formaldehyde() {
         let mut mol = parse("C=O");
         let max = calc_float(&MaxPartialCharge, &mut mol);
-        assert!(max > 0.0, "max charge on C=O should be positive (the C), got {max}");
+        assert!(
+            max > 0.0,
+            "max charge on C=O should be positive (the C), got {max}"
+        );
     }
 
     #[test]
     fn test_min_partial_charge_formaldehyde() {
         let mut mol = parse("C=O");
         let min = calc_float(&MinPartialCharge, &mut mol);
-        assert!(min < 0.0, "min charge on C=O should be negative (the O), got {min}");
+        assert!(
+            min < 0.0,
+            "min charge on C=O should be negative (the O), got {min}"
+        );
     }
 
     #[test]
@@ -115,8 +145,10 @@ mod tests {
         let max_abs = calc_float(&MaxAbsPartialCharge, &mut mol);
         let min = calc_float(&MinPartialCharge, &mut mol);
         // O should have largest |charge|
-        assert!((max_abs - min.abs()).abs() < 1e-6 || max_abs >= min.abs(),
-            "max abs should be >= |min|");
+        assert!(
+            (max_abs - min.abs()).abs() < 1e-6 || max_abs >= min.abs(),
+            "max abs should be >= |min|"
+        );
         assert!(max_abs > 0.0);
     }
 
@@ -125,7 +157,10 @@ mod tests {
         let mut mol = parse("C=O");
         let min_abs = calc_float(&MinAbsPartialCharge, &mut mol);
         let max_abs = calc_float(&MaxAbsPartialCharge, &mut mol);
-        assert!(min_abs <= max_abs, "min abs {min_abs} should be <= max abs {max_abs}");
+        assert!(
+            min_abs <= max_abs,
+            "min abs {min_abs} should be <= max abs {max_abs}"
+        );
     }
 
     #[test]
@@ -133,8 +168,11 @@ mod tests {
         let mut mol = parse("CCO");
         match GasteigerCharges.calculate(&mut mol) {
             DescriptorValue::FloatVec(v) => {
-                assert_eq!(v.len(), mol.atoms.len(),
-                    "vector length should equal num_atoms");
+                assert_eq!(
+                    v.len(),
+                    mol.atoms.len(),
+                    "vector length should equal num_atoms"
+                );
             }
             other => panic!("expected FloatVec, got {:?}", other),
         }
@@ -146,10 +184,22 @@ mod tests {
         let mut mol = parse("CC(=O)O");
         let charges = compute_charges(&mol);
         // Atom 1 is the carbonyl carbon (bonded to both O atoms)
-        assert!(charges[1] > 0.0, "carbonyl C should be positive, got {}", charges[1]);
+        assert!(
+            charges[1] > 0.0,
+            "carbonyl C should be positive, got {}",
+            charges[1]
+        );
         // Atom 2 is =O, Atom 3 is -OH — both should be negative
-        assert!(charges[2] < 0.0, "=O should be negative, got {}", charges[2]);
-        assert!(charges[3] < 0.0, "-OH oxygen should be negative, got {}", charges[3]);
+        assert!(
+            charges[2] < 0.0,
+            "=O should be negative, got {}",
+            charges[2]
+        );
+        assert!(
+            charges[3] < 0.0,
+            "-OH oxygen should be negative, got {}",
+            charges[3]
+        );
     }
 
     #[test]
@@ -157,24 +207,44 @@ mod tests {
         let mut mol = parse("c1ccccc1");
         let max = calc_float(&MaxPartialCharge, &mut mol);
         let min = calc_float(&MinPartialCharge, &mut mol);
-        assert!((max - min).abs() < 0.01,
-            "benzene should be symmetric: max={max}, min={min}");
+        assert!(
+            (max - min).abs() < 0.01,
+            "benzene should be symmetric: max={max}, min={min}"
+        );
     }
 
     #[test]
     fn test_empty_molecule() {
         let mut mol = Molecule::default();
-        assert_eq!(MaxPartialCharge.calculate(&mut mol), DescriptorValue::Float(0.0));
-        assert_eq!(MinPartialCharge.calculate(&mut mol), DescriptorValue::Float(0.0));
-        assert_eq!(MaxAbsPartialCharge.calculate(&mut mol), DescriptorValue::Float(0.0));
-        assert_eq!(MinAbsPartialCharge.calculate(&mut mol), DescriptorValue::Float(0.0));
-        assert_eq!(GasteigerCharges.calculate(&mut mol), DescriptorValue::FloatVec(vec![]));
+        assert_eq!(
+            MaxPartialCharge.calculate(&mut mol),
+            DescriptorValue::Float(0.0)
+        );
+        assert_eq!(
+            MinPartialCharge.calculate(&mut mol),
+            DescriptorValue::Float(0.0)
+        );
+        assert_eq!(
+            MaxAbsPartialCharge.calculate(&mut mol),
+            DescriptorValue::Float(0.0)
+        );
+        assert_eq!(
+            MinAbsPartialCharge.calculate(&mut mol),
+            DescriptorValue::Float(0.0)
+        );
+        assert_eq!(
+            GasteigerCharges.calculate(&mut mol),
+            DescriptorValue::FloatVec(vec![])
+        );
     }
 
     #[test]
     fn test_ethanol_oxygen_negative() {
         let mut mol = parse("CCO");
         let min = calc_float(&MinPartialCharge, &mut mol);
-        assert!(min < 0.0, "O in ethanol should give negative min charge, got {min}");
+        assert!(
+            min < 0.0,
+            "O in ethanol should give negative min charge, got {min}"
+        );
     }
 }

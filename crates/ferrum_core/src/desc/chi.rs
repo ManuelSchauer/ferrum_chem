@@ -15,7 +15,8 @@
 //! Reference: Kier, L.B. & Hall, L.H. (1986) "Molecular Connectivity in
 //!            Structure-Activity Analysis", Research Studies Press.
 
-use super::typed::{DescriptorValue, Descriptor};
+use super::typed::{Descriptor, DescriptorValue};
+use crate::algo::paths::find_all_paths_of_length;
 use crate::mol::elements::outer_electrons;
 use crate::mol::molecule::Molecule;
 use crate::types::AtomIdx;
@@ -33,30 +34,36 @@ fn simple_deltas(mol: &Molecule) -> Vec<f64> {
 /// where Zᵥ = valence electrons, Hᵢ = total H count, Z = atomic number.
 /// For hydrogen or denominator=0, returns 0.
 fn valence_deltas(mol: &Molecule) -> Vec<f64> {
-    mol.atoms.iter().map(|atom| {
-        let z = atom.atomic_number as f64;
-        let zv = outer_electrons(atom.atomic_number) as f64;
-        let h = atom.total_h() as f64;
-        let denom = z - zv - 1.0;
-        if denom <= 0.0 || atom.atomic_number <= 1 {
-            // For H and 1st-row elements where Z-Zv-1=0, use simple delta
-            // δᵥ(C) = (4-H)/(6-4-1) = (4-H)/1 = 4-H
-            // For H itself: return 0
-            if atom.atomic_number == 1 { return 0.0; }
-            // 1st row: C(6),N(7),O(8),F(9) → denom=1,1,1,1
-            // But O has Z-Zv-1 = 8-6-1=1, N has 7-5-1=1, C has 6-4-1=1
-            // Only H (1-1-1=-1) truly fails. For other elements where
-            // denom is exactly 0 (shouldn't happen for common elements), fallback:
-            zv - h
-        } else {
-            (zv - h) / denom
-        }
-    }).collect()
+    mol.atoms
+        .iter()
+        .map(|atom| {
+            let z = atom.atomic_number as f64;
+            let zv = outer_electrons(atom.atomic_number) as f64;
+            let h = atom.total_h() as f64;
+            let denom = z - zv - 1.0;
+            if denom <= 0.0 || atom.atomic_number <= 1 {
+                // For H and 1st-row elements where Z-Zv-1=0, use simple delta
+                // δᵥ(C) = (4-H)/(6-4-1) = (4-H)/1 = 4-H
+                // For H itself: return 0
+                if atom.atomic_number == 1 {
+                    return 0.0;
+                }
+                // 1st row: C(6),N(7),O(8),F(9) → denom=1,1,1,1
+                // But O has Z-Zv-1 = 8-6-1=1, N has 7-5-1=1, C has 6-4-1=1
+                // Only H (1-1-1=-1) truly fails. For other elements where
+                // denom is exactly 0 (shouldn't happen for common elements), fallback:
+                zv - h
+            } else {
+                (zv - h) / denom
+            }
+        })
+        .collect()
 }
 
 /// Chi-0 (zero-order): χ⁰ = Σ 1/√δᵢ for each atom with δ > 0.
 fn chi0(deltas: &[f64]) -> f64 {
-    deltas.iter()
+    deltas
+        .iter()
         .filter(|&&d| d > 0.0)
         .map(|&d| 1.0 / d.sqrt())
         .sum()
@@ -64,7 +71,8 @@ fn chi0(deltas: &[f64]) -> f64 {
 
 /// Chi-1 (first-order): χ¹ = Σ 1/√(δᵢ·δⱼ) over all bonds.
 fn chi1(mol: &Molecule, deltas: &[f64]) -> f64 {
-    mol.bonds.iter()
+    mol.bonds
+        .iter()
         .map(|bond| {
             let di = deltas[bond.source as usize];
             let dj = deltas[bond.target as usize];
@@ -77,11 +85,17 @@ fn chi1(mol: &Molecule, deltas: &[f64]) -> f64 {
 /// Find all paths of exactly `length` bonds and compute chi contribution.
 /// χⁿ = Σ 1/√(δ₁·δ₂·...·δₙ₊₁) over all n-bond paths.
 fn chi_path(mol: &Molecule, deltas: &[f64], length: usize) -> f64 {
-    if length == 0 { return chi0(deltas); }
-    if length == 1 { return chi1(mol, deltas); }
+    if length == 0 {
+        return chi0(deltas);
+    }
+    if length == 1 {
+        return chi1(mol, deltas);
+    }
 
     let n = mol.num_atoms();
-    if n < length + 1 { return 0.0; }
+    if n < length + 1 {
+        return 0.0;
+    }
 
     // DFS to enumerate all paths of exact length
     let mut sum = 0.0f64;
@@ -95,6 +109,22 @@ fn chi_path(mol: &Molecule, deltas: &[f64], length: usize) -> f64 {
 
     // Each path is found twice (forward + reverse), so divide by 2
     sum / 2.0
+}
+
+fn chi_path_rdkit_like(mol: &Molecule, deltas: &[f64], length: usize) -> f64 {
+    find_all_paths_of_length(mol, length)
+        .into_iter()
+        .map(|path| {
+            let atoms = if path.first() == path.last() {
+                &path[..path.len() - 1]
+            } else {
+                &path[..]
+            };
+
+            let prod: f64 = atoms.iter().map(|&idx| deltas[idx as usize]).product();
+            if prod > 0.0 { 1.0 / prod.sqrt() } else { 0.0 }
+        })
+        .sum()
 }
 
 fn dfs_paths(
@@ -116,7 +146,11 @@ fn dfs_paths(
     let current = *path.last().unwrap();
     for &bond_idx in &mol.adjacency[current as usize] {
         let bond = &mol.bonds[bond_idx as usize];
-        let neighbor = if bond.source == current { bond.target } else { bond.source };
+        let neighbor = if bond.source == current {
+            bond.target
+        } else {
+            bond.source
+        };
 
         // Avoid revisiting atoms in the current path (simple paths only)
         if !path.contains(&neighbor) {
@@ -139,16 +173,25 @@ fn chi_cluster(mol: &Molecule, deltas: &[f64], order: usize) -> f64 {
 
     for center in 0..n {
         let deg = mol.get_degree(center as AtomIdx);
-        if deg < k { continue; }
+        if deg < k {
+            continue;
+        }
 
         let dc = deltas[center];
-        if dc <= 0.0 { continue; }
+        if dc <= 0.0 {
+            continue;
+        }
 
         // Collect neighbor deltas
-        let neighbor_deltas: Vec<f64> = mol.adjacency[center].iter()
+        let neighbor_deltas: Vec<f64> = mol.adjacency[center]
+            .iter()
             .map(|&bi| {
                 let bond = &mol.bonds[bi as usize];
-                let nb = if bond.source == center as AtomIdx { bond.target } else { bond.source };
+                let nb = if bond.source == center as AtomIdx {
+                    bond.target
+                } else {
+                    bond.source
+                };
                 deltas[nb as usize]
             })
             .collect();
@@ -177,7 +220,9 @@ fn chi_cluster(mol: &Molecule, deltas: &[f64], order: usize) -> f64 {
 /// We enumerate by finding all connected subgraphs of size `order` with
 /// exactly one node of degree 3 (and no node of degree > 3).
 fn chi_pathcluster_order(mol: &Molecule, deltas: &[f64], order: usize) -> f64 {
-    if order < 4 { return 0.0; }
+    if order < 4 {
+        return 0.0;
+    }
 
     let n = mol.num_atoms();
     let mut sum = 0.0;
@@ -186,17 +231,26 @@ fn chi_pathcluster_order(mol: &Molecule, deltas: &[f64], order: usize) -> f64 {
     // For each potential branch point B with degree >= 3
     for b in 0..n {
         let b_idx = b as AtomIdx;
-        let b_neighbors: Vec<AtomIdx> = mol.adjacency[b].iter()
+        let b_neighbors: Vec<AtomIdx> = mol.adjacency[b]
+            .iter()
             .map(|&bi| {
                 let bond = &mol.bonds[bi as usize];
-                if bond.source == b_idx { bond.target } else { bond.source }
+                if bond.source == b_idx {
+                    bond.target
+                } else {
+                    bond.source
+                }
             })
             .collect();
 
-        if b_neighbors.len() < 3 { continue; }
+        if b_neighbors.len() < 3 {
+            continue;
+        }
 
         let db = deltas[b];
-        if db <= 0.0 { continue; }
+        if db <= 0.0 {
+            continue;
+        }
 
         // Pick 3 arms from B's neighbors, then extend each arm to total `order` atoms
         // The branch point + 3 arms must total `order` atoms.
@@ -207,10 +261,14 @@ fn chi_pathcluster_order(mol: &Molecule, deltas: &[f64], order: usize) -> f64 {
         for a1 in 1..=remaining {
             for a2 in 1..=(remaining - a1) {
                 let a3 = remaining - a1 - a2;
-                if a3 < 1 || a2 > a1 || a3 > a2 { continue; }
+                if a3 < 1 || a2 > a1 || a3 > a2 {
+                    continue;
+                }
 
                 // Skip pure clusters: all arms of length 1 = star subgraph
-                if a1 == 1 && a2 == 1 && a3 == 1 { continue; }
+                if a1 == 1 && a2 == 1 && a3 == 1 {
+                    continue;
+                }
 
                 // Generate all distinct permutations of arm lengths
                 let perms = distinct_permutations(a1, a2, a3);
@@ -222,10 +280,7 @@ fn chi_pathcluster_order(mol: &Molecule, deltas: &[f64], order: usize) -> f64 {
 
                     for perm in &perms {
                         let arm_lens = [perm[0], perm[1], perm[2]];
-                        let val = extend_arms_chi(
-                            mol, deltas, b_idx, db,
-                            &arm_starts, &arm_lens,
-                        );
+                        let val = extend_arms_chi(mol, deltas, b_idx, db, &arm_starts, &arm_lens);
                         sum += val;
                     }
                 }
@@ -255,7 +310,9 @@ fn extend_arms_chi(
         let mut excluded: Vec<AtomIdx> = vec![branch];
         // Exclude other arm starts to prevent overlap
         for other in 0..3 {
-            if other != arm { excluded.push(starts[other]); }
+            if other != arm {
+                excluded.push(starts[other]);
+            }
         }
         find_arm_paths(mol, &mut path, lengths[arm], &excluded, &mut arm_paths[arm]);
     }
@@ -266,10 +323,14 @@ fn extend_arms_chi(
     for p0 in &arm_paths[0] {
         for p1 in &arm_paths[1] {
             // Check no overlap between p0 and p1
-            if p0.iter().any(|a| p1.contains(a)) { continue; }
+            if p0.iter().any(|a| p1.contains(a)) {
+                continue;
+            }
             for p2 in &arm_paths[2] {
                 // Check no overlap with p0 or p1
-                if p2.iter().any(|a| p0.contains(a) || p1.contains(a)) { continue; }
+                if p2.iter().any(|a| p0.contains(a) || p1.contains(a)) {
+                    continue;
+                }
 
                 let mut prod = d_branch;
                 for &idx in p0.iter().chain(p1.iter()).chain(p2.iter()) {
@@ -302,8 +363,14 @@ fn find_arm_paths(
     let current = *path.last().unwrap();
     for &bond_idx in &mol.adjacency[current as usize] {
         let bond = &mol.bonds[bond_idx as usize];
-        let nb = if bond.source == current { bond.target } else { bond.source };
-        if path.contains(&nb) || excluded.contains(&nb) { continue; }
+        let nb = if bond.source == current {
+            bond.target
+        } else {
+            bond.source
+        };
+        if path.contains(&nb) || excluded.contains(&nb) {
+            continue;
+        }
         path.push(nb);
         find_arm_paths(mol, path, length, excluded, results);
         path.pop();
@@ -314,7 +381,13 @@ fn find_arm_paths(
 fn combinations_idx(items: &[AtomIdx], k: usize) -> Vec<Vec<AtomIdx>> {
     let mut result = Vec::new();
     let mut combo = Vec::with_capacity(k);
-    fn recurse(items: &[AtomIdx], k: usize, start: usize, combo: &mut Vec<AtomIdx>, result: &mut Vec<Vec<AtomIdx>>) {
+    fn recurse(
+        items: &[AtomIdx],
+        k: usize,
+        start: usize,
+        combo: &mut Vec<AtomIdx>,
+        result: &mut Vec<Vec<AtomIdx>>,
+    ) {
         if combo.len() == k {
             result.push(combo.clone());
             return;
@@ -333,7 +406,12 @@ fn combinations_idx(items: &[AtomIdx], k: usize) -> Vec<Vec<AtomIdx>> {
 fn distinct_permutations(a: usize, b: usize, c: usize) -> Vec<[usize; 3]> {
     let mut perms = vec![];
     let candidates = [
-        [a, b, c], [a, c, b], [b, a, c], [b, c, a], [c, a, b], [c, b, a],
+        [a, b, c],
+        [a, c, b],
+        [b, a, c],
+        [b, c, a],
+        [c, a, b],
+        [c, b, a],
     ];
     for p in &candidates {
         if !perms.contains(p) {
@@ -347,7 +425,13 @@ fn distinct_permutations(a: usize, b: usize, c: usize) -> Vec<[usize; 3]> {
 fn combinations(items: &[f64], k: usize) -> Vec<Vec<f64>> {
     let mut result = Vec::new();
     let mut combo = Vec::with_capacity(k);
-    fn recurse(items: &[f64], k: usize, start: usize, combo: &mut Vec<f64>, result: &mut Vec<Vec<f64>>) {
+    fn recurse(
+        items: &[f64],
+        k: usize,
+        start: usize,
+        combo: &mut Vec<f64>,
+        result: &mut Vec<Vec<f64>>,
+    ) {
         if combo.len() == k {
             result.push(combo.clone());
             return;
@@ -438,8 +522,12 @@ mod tests {
     fn test_chi_valence_differs() {
         // Valence path indices [8..16] should differ from simple path [0..8] for heteroatom molecules
         let c = calc_chi("CCO");
-        assert!((c[1] - c[9]).abs() > 0.001,
-            "simple χ¹={} vs valence χᵥ¹={}", c[1], c[9]);
+        assert!(
+            (c[1] - c[9]).abs() > 0.001,
+            "simple χ¹={} vs valence χᵥ¹={}",
+            c[1],
+            c[9]
+        );
     }
 
     #[test]
@@ -459,8 +547,12 @@ mod tests {
     fn test_chain_pentane() {
         let c = calc_chi("CCCCC");
         // χ³ch at index 18 should equal χ³path at index 3 for linear chain
-        assert!((c[18] - c[3]).abs() < 0.01,
-            "pentane χ³ch={} should equal χ³path={}", c[18], c[3]);
+        assert!(
+            (c[18] - c[3]).abs() < 0.01,
+            "pentane χ³ch={} should equal χ³path={}",
+            c[18],
+            c[3]
+        );
     }
 
     #[test]
@@ -475,6 +567,24 @@ mod tests {
         let c = calc_chi("CC(C)CCC");
         // χ⁵pc at index 24 should be > 0
         assert!(c[24] > 0.0, "should have χ⁵pc > 0: {}", c[24]);
+    }
+
+    #[test]
+    fn test_chi3v_counts_three_membered_ring_closure_like_rdkit() {
+        let c = calc_chi("C1CC1");
+        assert!((c[11] - 0.35355338).abs() < 1e-5, "χ3v = {}", c[11]);
+    }
+
+    #[test]
+    fn test_chi4v_counts_four_membered_ring_closure_like_rdkit() {
+        let c = calc_chi("C1CCC1");
+        assert!((c[12] - 0.25).abs() < 1e-5, "χ4v = {}", c[12]);
+    }
+
+    #[test]
+    fn test_chi4v_bicyclic_regression_matches_rdkit() {
+        let c = calc_chi("CC1(C)C2CC=CC1C2");
+        assert!((c[12] - 2.1899135).abs() < 1e-5, "χ4v = {}", c[12]);
     }
 }
 
@@ -499,23 +609,28 @@ impl Descriptor for ChiIndices {
 
     fn calculate(&self, mol: &mut Molecule) -> DescriptorValue {
         let mut values = Vec::with_capacity(26);
-        
+
         // ChiPath (8 values)
         let simple_delta = simple_deltas(mol);
         for order in 0..8 {
             values.push(chi_path(mol, &simple_delta, order) as f32);
         }
-        
+
         // ChiValencePath (8 values)
         let valence_delta = valence_deltas(mol);
         for order in 0..8 {
-            values.push(chi_path(mol, &valence_delta, order) as f32);
+            let value = if order >= 3 {
+                chi_path_rdkit_like(mol, &valence_delta, order)
+            } else {
+                chi_path(mol, &valence_delta, order)
+            };
+            values.push(value as f32);
         }
-        
+
         // ChiCluster (2 values)
         values.push(chi_cluster(mol, &simple_delta, 3) as f32);
         values.push(chi_cluster(mol, &simple_delta, 4) as f32);
-        
+
         // ChiChain (5 values)
         for i in 0..5 {
             let order = i + 3; // orders 3-7
@@ -524,12 +639,12 @@ impl Descriptor for ChiIndices {
             let pc = chi_pathcluster_order(mol, &simple_delta, order);
             values.push((path - cluster - pc).max(0.0) as f32);
         }
-        
+
         // ChiPathCluster (3 values)
         values.push(chi_pathcluster_order(mol, &simple_delta, 4) as f32);
         values.push(chi_pathcluster_order(mol, &simple_delta, 5) as f32);
         values.push(chi_pathcluster_order(mol, &simple_delta, 6) as f32);
-        
+
         DescriptorValue::FloatVec(values)
     }
 }

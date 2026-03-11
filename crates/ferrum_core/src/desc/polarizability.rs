@@ -26,23 +26,23 @@ const POLARIZABILITY: [f32; 54] = [
     1.64,  // 18 Ar
     0.0,   // 19 K
     0.0,   // 20 Ca
-    0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, // 21-29
-    0.0,   // 30 Zn
-    0.0,   // 31 Ga
-    0.0,   // 32 Ge
-    0.0,   // 33 As
-    0.0,   // 34 Se
-    3.05,  // 35 Br
-    2.48,  // 36 Kr
-    0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, // 37-45
-    0.0,   // 46 Pd
-    0.0,   // 47 Ag
-    0.0,   // 48 Cd
-    0.0,   // 49 In
-    0.0,   // 50 Sn
-    0.0,   // 51 Sb
-    0.0,   // 52 Te
-    5.35,  // 53 I
+    0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,  // 21-29
+    0.0,  // 30 Zn
+    0.0,  // 31 Ga
+    0.0,  // 32 Ge
+    0.0,  // 33 As
+    0.0,  // 34 Se
+    3.05, // 35 Br
+    2.48, // 36 Kr
+    0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,  // 37-45
+    0.0,  // 46 Pd
+    0.0,  // 47 Ag
+    0.0,  // 48 Cd
+    0.0,  // 49 In
+    0.0,  // 50 Sn
+    0.0,  // 51 Sb
+    0.0,  // 52 Te
+    5.35, // 53 I
 ];
 
 fn atom_pol(atomic_number: u8) -> f32 {
@@ -121,7 +121,10 @@ mod tests {
         // CCO: 2*1.76 + 0.802 + (3+2+1)*0.387 = 4.322 + 2.322 = 6.644
         let v = calc(&APol, "CCO");
         let expected = 2.0 * 1.76 + 0.802 + 6.0 * 0.387;
-        assert!((v - expected).abs() < 0.01, "APol ethanol = {v}, expected {expected}");
+        assert!(
+            (v - expected).abs() < 0.01,
+            "APol ethanol = {v}, expected {expected}"
+        );
     }
 
     #[test]
@@ -136,7 +139,10 @@ mod tests {
         // c1ccccc1: 6*1.76 + 6*0.387 = 10.56 + 2.322 = 12.882
         let v = calc(&APol, "c1ccccc1");
         let expected = 6.0 * 1.76 + 6.0 * 0.387;
-        assert!((v - expected).abs() < 0.01, "APol benzene = {v}, expected {expected}");
+        assert!(
+            (v - expected).abs() < 0.01,
+            "APol benzene = {v}, expected {expected}"
+        );
     }
 
     #[test]
@@ -151,7 +157,10 @@ mod tests {
         // CF: 1.76 + 0.557 + 3*0.387 = 3.478
         let v = calc(&APol, "CF");
         let expected = 1.76 + 0.557 + 3.0 * 0.387;
-        assert!((v - expected).abs() < 0.01, "APol CF = {v}, expected {expected}");
+        assert!(
+            (v - expected).abs() < 0.01,
+            "APol CF = {v}, expected {expected}"
+        );
     }
 
     #[test]

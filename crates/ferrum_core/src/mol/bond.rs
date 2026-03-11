@@ -21,21 +21,36 @@ const _: () = {
 
 impl Bond {
     pub fn new(u: AtomIdx, v: AtomIdx, t: BondType) -> Self {
-        Self { source: u, target: v, bond_type: t, flags: 0 }
+        Self {
+            source: u,
+            target: v,
+            bond_type: t,
+            flags: 0,
+        }
     }
 
     /// Check if this bond is aromatic (bit 0 of flags).
     /// Note: Aromatic bonds may have bond_type Single or Double after kekulization.
-    pub fn is_aromatic(&self) -> bool { 
-        self.flags & 0b01 != 0 
-    }
-    
-    pub fn set_aromatic(&mut self, val: bool) {
-        if val { self.flags |= 0b01; } else { self.flags &= !0b01; }
+    pub fn is_aromatic(&self) -> bool {
+        self.flags & 0b01 != 0
     }
 
-    pub fn is_in_ring(&self) -> bool { self.flags & 0b10 != 0 }
+    pub fn set_aromatic(&mut self, val: bool) {
+        if val {
+            self.flags |= 0b01;
+        } else {
+            self.flags &= !0b01;
+        }
+    }
+
+    pub fn is_in_ring(&self) -> bool {
+        self.flags & 0b10 != 0
+    }
     pub fn set_in_ring(&mut self, val: bool) {
-        if val { self.flags |= 0b10; } else { self.flags &= !0b10; }
+        if val {
+            self.flags |= 0b10;
+        } else {
+            self.flags &= !0b10;
+        }
     }
 }

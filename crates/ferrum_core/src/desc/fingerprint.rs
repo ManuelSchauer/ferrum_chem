@@ -12,12 +12,12 @@
 //! Reference: Rogers, D. & Hahn, M. (2010) "Extended-Connectivity Fingerprints"
 //! J. Chem. Inf. Model. 50(5), 742-754.
 
+use super::typed::{Descriptor, DescriptorValue};
 use crate::mol::molecule::Molecule;
 use crate::types::BondType;
+use bitvec::prelude::*;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
-use super::typed::{DescriptorValue, Descriptor};
-use bitvec::prelude::*;
 
 /// Compute a hash from a sequence of u64 values.
 fn combine_hash(values: &[u64]) -> u64 {
@@ -66,12 +66,11 @@ fn atom_invariant_fcfp(mol: &Molecule, atom_idx: usize) -> u64 {
     let is_acceptor = an == 7 || an == 8;
 
     // Positive Ionizable: N with positive charge, or basic amine (N with H, not amide-like)
-    let is_pos_ionizable = (an == 7 && charge > 0)
-        || (an == 7 && total_h > 0 && !atom.is_aromatic());
+    let is_pos_ionizable =
+        (an == 7 && charge > 0) || (an == 7 && total_h > 0 && !atom.is_aromatic());
 
     // Negative Ionizable: O with negative charge, or acidic O-H
-    let is_neg_ionizable = (an == 8 && charge < 0)
-        || (an == 8 && total_h > 0);
+    let is_neg_ionizable = (an == 8 && charge < 0) || (an == 8 && total_h > 0);
 
     // Aromatic
     let is_aromatic = atom.is_aromatic();
@@ -133,9 +132,7 @@ where
     }
 
     // Initialize with atom invariants (radius 0)
-    let mut current_hashes: Vec<u64> = (0..n)
-        .map(|i| init_fn(mol, i))
-        .collect();
+    let mut current_hashes: Vec<u64> = (0..n).map(|i| init_fn(mol, i)).collect();
 
     // Collect features: radius 0 features
     let mut all_features: Vec<u64> = Vec::with_capacity(n * (radius as usize + 1));
@@ -212,8 +209,12 @@ pub fn tanimoto_similarity(fp1: &BitVec<u8, Lsb0>, fp2: &BitVec<u8, Lsb0>) -> f3
     let mut or_count = 0u32;
 
     for (a, b) in fp1.iter().by_vals().zip(fp2.iter().by_vals()) {
-        if a && b { and_count += 1; }
-        if a || b { or_count += 1; }
+        if a && b {
+            and_count += 1;
+        }
+        if a || b {
+            or_count += 1;
+        }
     }
 
     if or_count == 0 {
@@ -276,17 +277,26 @@ pub type Morgan = ECFP;
 impl ECFP {
     /// Create ECFP2 (radius=1, 2048 bits).
     pub fn ecfp2() -> Self {
-        Self { radius: 1, num_bits: 2048 }
+        Self {
+            radius: 1,
+            num_bits: 2048,
+        }
     }
 
     /// Create ECFP4 (radius=2, 2048 bits) - most common variant.
     pub fn ecfp4() -> Self {
-        Self { radius: 2, num_bits: 2048 }
+        Self {
+            radius: 2,
+            num_bits: 2048,
+        }
     }
 
     /// Create ECFP6 (radius=3, 2048 bits).
     pub fn ecfp6() -> Self {
-        Self { radius: 3, num_bits: 2048 }
+        Self {
+            radius: 3,
+            num_bits: 2048,
+        }
     }
 
     /// Create with custom parameters.
@@ -347,17 +357,26 @@ pub struct FCFP {
 impl FCFP {
     /// Create FCFP2 (radius=1, 2048 bits).
     pub fn fcfp2() -> Self {
-        Self { radius: 1, num_bits: 2048 }
+        Self {
+            radius: 1,
+            num_bits: 2048,
+        }
     }
 
     /// Create FCFP4 (radius=2, 2048 bits) - most common variant.
     pub fn fcfp4() -> Self {
-        Self { radius: 2, num_bits: 2048 }
+        Self {
+            radius: 2,
+            num_bits: 2048,
+        }
     }
 
     /// Create FCFP6 (radius=3, 2048 bits).
     pub fn fcfp6() -> Self {
-        Self { radius: 3, num_bits: 2048 }
+        Self {
+            radius: 3,
+            num_bits: 2048,
+        }
     }
 
     /// Create with custom parameters.
@@ -436,7 +455,11 @@ mod tests {
     fn test_benzene_symmetry() {
         let mut mol = parse_smiles("c1ccccc1").unwrap();
         let features = morgan_features(&mol, 2);
-        assert!(features.len() <= 10, "Benzene has high symmetry, got {} features", features.len());
+        assert!(
+            features.len() <= 10,
+            "Benzene has high symmetry, got {} features",
+            features.len()
+        );
     }
 
     #[test]
@@ -450,7 +473,11 @@ mod tests {
     fn test_tanimoto_identical() {
         let fp = calc_fp("CCO", 2, 2048);
         let sim = tanimoto_similarity(&fp, &fp);
-        assert!((sim - 1.0).abs() < 1e-6, "Self-similarity should be 1.0, got {}", sim);
+        assert!(
+            (sim - 1.0).abs() < 1e-6,
+            "Self-similarity should be 1.0, got {}",
+            sim
+        );
     }
 
     #[test]
@@ -458,7 +485,11 @@ mod tests {
         let fp1 = calc_fp("c1ccc(O)cc1", 2, 2048);
         let fp2 = calc_fp("Cc1ccc(O)cc1", 2, 2048);
         let sim = tanimoto_similarity(&fp1, &fp2);
-        assert!(sim > 0.3, "Similar molecules should have Tanimoto > 0.3, got {}", sim);
+        assert!(
+            sim > 0.3,
+            "Similar molecules should have Tanimoto > 0.3, got {}",
+            sim
+        );
     }
 
     #[test]
@@ -466,7 +497,11 @@ mod tests {
         let fp1 = calc_fp("c1ccccc1", 2, 2048);
         let fp2 = calc_fp("CCCCCCCCCCCC", 2, 2048);
         let sim = tanimoto_similarity(&fp1, &fp2);
-        assert!(sim < 0.8, "Dissimilar molecules should have lower Tanimoto, got {}", sim);
+        assert!(
+            sim < 0.8,
+            "Dissimilar molecules should have lower Tanimoto, got {}",
+            sim
+        );
     }
 
     #[test]
@@ -474,8 +509,14 @@ mod tests {
         let fp2 = calc_fp("c1ccc(CC(=O)O)cc1", 1, 2048);
         let fp4 = calc_fp("c1ccc(CC(=O)O)cc1", 2, 2048);
         let fp6 = calc_fp("c1ccc(CC(=O)O)cc1", 3, 2048);
-        assert!(count_bits(&fp4) >= count_bits(&fp2), "ECFP4 should have >= bits than ECFP2");
-        assert!(count_bits(&fp6) >= count_bits(&fp4), "ECFP6 should have >= bits than ECFP4");
+        assert!(
+            count_bits(&fp4) >= count_bits(&fp2),
+            "ECFP4 should have >= bits than ECFP2"
+        );
+        assert!(
+            count_bits(&fp6) >= count_bits(&fp4),
+            "ECFP6 should have >= bits than ECFP4"
+        );
     }
 
     #[test]
@@ -494,7 +535,11 @@ mod tests {
         let fp1 = calc_fp("CCCCO", 2, 2048);
         let fp2 = calc_fp("CCOCC", 2, 2048);
         let sim = tanimoto_similarity(&fp1, &fp2);
-        assert!(sim < 1.0, "Isomers should not be identical, Tanimoto={}", sim);
+        assert!(
+            sim < 1.0,
+            "Isomers should not be identical, Tanimoto={}",
+            sim
+        );
     }
 
     #[test]
@@ -508,7 +553,11 @@ mod tests {
     fn test_aspirin_fp() {
         let fp = calc_fp("CC(=O)Oc1ccccc1C(=O)O", 2, 2048);
         let bits = count_bits(&fp);
-        assert!(bits > 5 && bits < 200, "Aspirin should have reasonable bit count: {}", bits);
+        assert!(
+            bits > 5 && bits < 200,
+            "Aspirin should have reasonable bit count: {}",
+            bits
+        );
     }
 
     #[test]
@@ -548,8 +597,12 @@ mod tests {
 
         let ecfp_sim = tanimoto_similarity(&ecfp_phenol, &ecfp_thiophenol);
         let fcfp_sim = tanimoto_similarity(&fcfp_phenol, &fcfp_thiophenol);
-        assert!(fcfp_sim >= ecfp_sim,
-            "FCFP should see pharmacophore analogs as more similar: FCFP={} vs ECFP={}", fcfp_sim, ecfp_sim);
+        assert!(
+            fcfp_sim >= ecfp_sim,
+            "FCFP should see pharmacophore analogs as more similar: FCFP={} vs ECFP={}",
+            fcfp_sim,
+            ecfp_sim
+        );
     }
 
     #[test]

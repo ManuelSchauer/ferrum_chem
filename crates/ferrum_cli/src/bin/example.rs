@@ -1,8 +1,8 @@
-use ferrum_core::io::smiles::parse_smiles;
-use ferrum_core::desc::molecular_weight::MolecularWeight;
-use ferrum_core::desc::Descriptor;
-use ferrum_core::algo::rings::find_sssr;
 use ferrum_core::algo::aromaticity::perceive_aromaticity;
+use ferrum_core::algo::rings::find_sssr;
+use ferrum_core::desc::Descriptor;
+use ferrum_core::desc::molecular_weight::MolecularWeight;
+use ferrum_core::io::smiles::parse_smiles;
 
 fn main() {
     println!("=== FerrumChem Example Usage ===\n");
@@ -22,8 +22,13 @@ fn main() {
     for (name, smiles) in &molecules {
         match parse_smiles(smiles) {
             Ok(mol) => {
-                println!("{:12} '{}' → {} atoms, {} bonds",
-                    name, smiles, mol.num_atoms(), mol.num_bonds());
+                println!(
+                    "{:12} '{}' → {} atoms, {} bonds",
+                    name,
+                    smiles,
+                    mol.num_atoms(),
+                    mol.num_bonds()
+                );
             }
             Err(e) => println!("{:12} ERROR: {}", name, e),
         }
@@ -53,27 +58,35 @@ fn main() {
     // Charged molecules
     let sodium_ion = parse_smiles("[Na+]").unwrap();
     println!("Sodium ion [Na+]:");
-    println!("  Atoms: {}, Charge: {}",
+    println!(
+        "  Atoms: {}, Charge: {}",
         sodium_ion.num_atoms(),
-        sodium_ion.atoms[0].formal_charge);
+        sodium_ion.atoms[0].formal_charge
+    );
 
     // Isotopes
     let mut heavy_water = parse_smiles("[2H]O[2H]").unwrap();
     println!("\nHeavy water [2H]O[2H]:");
     println!("  Atoms: {}", heavy_water.num_atoms());
-    println!("  Isotopes: {} and {}",
-        heavy_water.atoms[0].isotope,
-        heavy_water.atoms[2].isotope);
+    println!(
+        "  Isotopes: {} and {}",
+        heavy_water.atoms[0].isotope, heavy_water.atoms[2].isotope
+    );
 
     let mw_val = mw_descriptor.calculate(&mut heavy_water);
-    println!("  MW: {:.2} Da (vs 18.01 for normal water)", mw_val.as_float());
+    println!(
+        "  MW: {:.2} Da (vs 18.01 for normal water)",
+        mw_val.as_float()
+    );
 
     // Explicit hydrogens
     let mut methane = parse_smiles("[CH4]").unwrap();
     println!("\nMethane with explicit H [CH4]:");
-    println!("  Atoms: {}, Explicit H: {}",
+    println!(
+        "  Atoms: {}, Explicit H: {}",
         methane.num_atoms(),
-        methane.atoms[0].num_explicit_h);
+        methane.atoms[0].num_explicit_h
+    );
 
     let mw_val = mw_descriptor.calculate(&mut methane);
     println!("  MW: {:.2} Da", mw_val.as_float());
@@ -81,7 +94,11 @@ fn main() {
     // Aromatic systems
     let mut benzene = parse_smiles("c1ccccc1").unwrap();
     println!("\nBenzene c1ccccc1:");
-    println!("  Atoms: {}, Bonds: {}", benzene.num_atoms(), benzene.num_bonds());
+    println!(
+        "  Atoms: {}, Bonds: {}",
+        benzene.num_atoms(),
+        benzene.num_bonds()
+    );
     let aromatic_count = benzene.atoms.iter().filter(|a| a.is_aromatic()).count();
     println!("  Aromatic atoms: {}", aromatic_count);
     let implicit_h: u8 = benzene.atoms.iter().map(|a| a.num_implicit_h).sum();
@@ -104,8 +121,12 @@ fn main() {
     for (name, smiles) in &complex_molecules {
         if let Ok(mut mol) = parse_smiles(smiles) {
             let mw_val = mw_descriptor.calculate(&mut mol);
-            println!("{:15} → {} atoms, MW = {:.2} Da",
-                name, mol.num_atoms(), mw_val.as_float());
+            println!(
+                "{:15} → {} atoms, MW = {:.2} Da",
+                name,
+                mol.num_atoms(),
+                mw_val.as_float()
+            );
         }
     }
 
@@ -130,8 +151,10 @@ fn main() {
             let ring_atoms = mol.atoms.iter().filter(|a| a.is_in_ring()).count();
             let ring_bonds = mol.bonds.iter().filter(|b| b.is_in_ring()).count();
 
-            println!("{:20} → {} atoms in rings, {} bonds in rings",
-                name, ring_atoms, ring_bonds);
+            println!(
+                "{:20} → {} atoms in rings, {} bonds in rings",
+                name, ring_atoms, ring_bonds
+            );
         }
     }
 
@@ -156,8 +179,10 @@ fn main() {
             let aromatic_atoms = mol.atoms.iter().filter(|a| a.is_aromatic()).count();
             let total_atoms = mol.num_atoms();
 
-            println!("{:30} → {}/{} atoms aromatic",
-                name, aromatic_atoms, total_atoms);
+            println!(
+                "{:30} → {}/{} atoms aromatic",
+                name, aromatic_atoms, total_atoms
+            );
         }
     }
 
@@ -168,9 +193,9 @@ fn main() {
     println!("{}", "-".repeat(40));
 
     let invalid_smiles = vec![
-        "C(((C",  // Unmatched parenthesis
-        "C1CC",   // Unclosed ring
-        "C-",     // Dangling bond
+        "C(((C", // Unmatched parenthesis
+        "C1CC",  // Unclosed ring
+        "C-",    // Dangling bond
     ];
 
     for smiles in &invalid_smiles {
@@ -182,4 +207,3 @@ fn main() {
 
     println!("\n=== Example Complete ===");
 }
-

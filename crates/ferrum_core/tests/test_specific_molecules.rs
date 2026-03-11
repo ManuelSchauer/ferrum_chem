@@ -115,7 +115,10 @@ fn assert_aromatic_state_consistent(case: &RepresentativeCase) {
 
     let aromatic_basis_rings = find_minimum_cycle_basis_bonds(&mol)
         .into_iter()
-        .filter(|ring| ring.iter().all(|&bond_idx| mol.bonds[bond_idx].is_aromatic()))
+        .filter(|ring| {
+            ring.iter()
+                .all(|&bond_idx| mol.bonds[bond_idx].is_aromatic())
+        })
         .count() as u32;
     assert_eq!(
         aromatic_basis_rings,
@@ -164,7 +167,10 @@ fn cnp0515307_matches_rdkit_aromatic_targets() {
         REPRESENTATIVE_CASES[0].rdkit_aromatic_rings
     );
     for atom_idx in [44usize, 45, 46, 48, 49, 51] {
-        assert!(mol.atoms[atom_idx].is_aromatic(), "atom {atom_idx} should be aromatic");
+        assert!(
+            mol.atoms[atom_idx].is_aromatic(),
+            "atom {atom_idx} should be aromatic"
+        );
     }
 }
 
@@ -178,7 +184,10 @@ fn cnp0584384_matches_rdkit_aromatic_targets() {
         REPRESENTATIVE_CASES[4].rdkit_aromatic_rings
     );
     for atom_idx in [37usize, 38, 39, 40, 42, 44] {
-        assert!(mol.atoms[atom_idx].is_aromatic(), "atom {atom_idx} should be aromatic");
+        assert!(
+            mol.atoms[atom_idx].is_aromatic(),
+            "atom {atom_idx} should be aromatic"
+        );
     }
     for atom_idx in [33usize, 34, 35, 47] {
         assert!(
@@ -198,7 +207,10 @@ fn cnp0321538_matches_rdkit_aromatic_targets() {
         REPRESENTATIVE_CASES[5].rdkit_aromatic_rings
     );
     for atom_idx in [6usize, 7, 9, 17, 18, 19] {
-        assert!(mol.atoms[atom_idx].is_aromatic(), "atom {atom_idx} should be aromatic");
+        assert!(
+            mol.atoms[atom_idx].is_aromatic(),
+            "atom {atom_idx} should be aromatic"
+        );
     }
 }
 
@@ -212,7 +224,10 @@ fn cnp0539904_matches_rdkit_aromatic_targets() {
         REPRESENTATIVE_CASES[6].rdkit_aromatic_rings
     );
     for atom_idx in [1usize, 2, 3, 4, 8, 9, 10, 11, 15, 16, 17, 19, 20, 21, 22] {
-        assert!(mol.atoms[atom_idx].is_aromatic(), "atom {atom_idx} should be aromatic");
+        assert!(
+            mol.atoms[atom_idx].is_aromatic(),
+            "atom {atom_idx} should be aromatic"
+        );
     }
 }
 
@@ -225,9 +240,13 @@ fn cnp0331134_matches_rdkit_aromatic_targets() {
         compute_aromatic_ring_count(&mol),
         REPRESENTATIVE_CASES[7].rdkit_aromatic_rings
     );
-    for atom_idx in [1usize, 2, 3, 5, 6, 8, 9, 10, 12, 13, 14, 15, 16, 17, 18, 19, 20, 22, 24, 25, 26]
-    {
-        assert!(mol.atoms[atom_idx].is_aromatic(), "atom {atom_idx} should be aromatic");
+    for atom_idx in [
+        1usize, 2, 3, 5, 6, 8, 9, 10, 12, 13, 14, 15, 16, 17, 18, 19, 20, 22, 24, 25, 26,
+    ] {
+        assert!(
+            mol.atoms[atom_idx].is_aromatic(),
+            "atom {atom_idx} should be aromatic"
+        );
     }
 }
 
@@ -241,7 +260,10 @@ fn cnp0138771_matches_rdkit_aromatic_targets() {
         REPRESENTATIVE_CASES[8].rdkit_aromatic_rings
     );
     for atom_idx in [2usize, 3, 4, 7, 10, 11, 14, 15, 16, 17, 20, 21] {
-        assert!(mol.atoms[atom_idx].is_aromatic(), "atom {atom_idx} should be aromatic");
+        assert!(
+            mol.atoms[atom_idx].is_aromatic(),
+            "atom {atom_idx} should be aromatic"
+        );
     }
     for atom_idx in [8usize, 18] {
         assert!(
@@ -261,7 +283,10 @@ fn cnp0234360_matches_rdkit_aromatic_targets() {
         REPRESENTATIVE_CASES[9].rdkit_aromatic_rings
     );
     for atom_idx in [1usize, 2, 3, 5, 8, 9, 28, 29, 30, 31, 34, 35] {
-        assert!(mol.atoms[atom_idx].is_aromatic(), "atom {atom_idx} should be aromatic");
+        assert!(
+            mol.atoms[atom_idx].is_aromatic(),
+            "atom {atom_idx} should be aromatic"
+        );
     }
     for atom_idx in [6usize, 32] {
         assert!(
@@ -275,13 +300,19 @@ fn cnp0234360_matches_rdkit_aromatic_targets() {
 fn cnp0208621_matches_rdkit_aromatic_targets() {
     let mol = parse_smiles(REPRESENTATIVE_CASES[10].smiles).expect("valid representative SMILES");
     let aromatic_atoms = mol.atoms.iter().filter(|atom| atom.is_aromatic()).count();
-    assert_eq!(aromatic_atoms, REPRESENTATIVE_CASES[10].rdkit_aromatic_atoms);
+    assert_eq!(
+        aromatic_atoms,
+        REPRESENTATIVE_CASES[10].rdkit_aromatic_atoms
+    );
     assert_eq!(
         compute_aromatic_ring_count(&mol),
         REPRESENTATIVE_CASES[10].rdkit_aromatic_rings
     );
     for atom_idx in [1usize, 2, 3, 5, 8, 9, 11, 12, 24, 25, 28, 29] {
-        assert!(mol.atoms[atom_idx].is_aromatic(), "atom {atom_idx} should be aromatic");
+        assert!(
+            mol.atoms[atom_idx].is_aromatic(),
+            "atom {atom_idx} should be aromatic"
+        );
     }
     for atom_idx in [6usize, 26] {
         assert!(

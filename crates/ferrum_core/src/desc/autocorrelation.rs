@@ -12,7 +12,7 @@
 //!
 //! Reference: Moreau, G. & Broto, P. (1980) Nouv. J. Chim. 4, 359-360.
 
-use super::typed::{DescriptorValue, Descriptor};
+use super::typed::{Descriptor, DescriptorValue};
 use crate::mol::molecule::Molecule;
 use crate::types::AtomIdx;
 use std::collections::VecDeque;
@@ -24,19 +24,19 @@ use std::collections::VecDeque;
 /// Pauling electronegativity for common elements.
 fn electronegativity(atomic_number: u8) -> f64 {
     match atomic_number {
-        1 => 2.20,   // H
-        5 => 2.04,   // B
-        6 => 2.55,   // C
-        7 => 3.04,   // N
-        8 => 3.44,   // O
-        9 => 3.98,   // F
-        14 => 1.90,  // Si
-        15 => 2.19,  // P
-        16 => 2.58,  // S
-        17 => 3.16,  // Cl
-        35 => 2.96,  // Br
-        53 => 2.66,  // I
-        _ => 2.00,   // default
+        1 => 2.20,  // H
+        5 => 2.04,  // B
+        6 => 2.55,  // C
+        7 => 3.04,  // N
+        8 => 3.44,  // O
+        9 => 3.98,  // F
+        14 => 1.90, // Si
+        15 => 2.19, // P
+        16 => 2.58, // S
+        17 => 3.16, // Cl
+        35 => 2.96, // Br
+        53 => 2.66, // I
+        _ => 2.00,  // default
     }
 }
 
@@ -101,7 +101,11 @@ fn compute_distance_matrix(mol: &Molecule) -> Vec<u32> {
             let current_dist = distances[start * n + current as usize];
             for &bond_idx in &mol.adjacency[current as usize] {
                 let bond = &mol.bonds[bond_idx as usize];
-                let neighbor = if bond.source == current { bond.target } else { bond.source };
+                let neighbor = if bond.source == current {
+                    bond.target
+                } else {
+                    bond.source
+                };
                 let nd = &mut distances[start * n + neighbor as usize];
                 if *nd == u32::MAX {
                     *nd = current_dist + 1;
@@ -128,7 +132,9 @@ fn compute_ats(mol: &Molecule, dist: &[u32], weights: &[f64]) -> [f64; MAX_LAG] 
     for i in 0..n {
         for j in (i + 1)..n {
             let d = dist[i * n + j];
-            if d == 0 || d == u32::MAX { continue; }
+            if d == 0 || d == u32::MAX {
+                continue;
+            }
             let lag = d as usize;
             if lag >= 1 && lag <= MAX_LAG {
                 ats[lag - 1] += weights[i] * weights[j];
@@ -137,7 +143,9 @@ fn compute_ats(mol: &Molecule, dist: &[u32], weights: &[f64]) -> [f64; MAX_LAG] 
     }
 
     // Multiply by 2 since we only counted i<j
-    for v in ats.iter_mut() { *v *= 2.0; }
+    for v in ats.iter_mut() {
+        *v *= 2.0;
+    }
 
     ats
 }
@@ -165,7 +173,7 @@ impl Descriptor for Autocorrelation {
 
     fn calculate(&self, mol: &mut Molecule) -> DescriptorValue {
         let mut values = vec![0.0f32; MAX_LAG * 4];
-        
+
         let n = mol.num_atoms();
         if n < 2 {
             return DescriptorValue::FloatVec(values);
@@ -174,10 +182,18 @@ impl Descriptor for Autocorrelation {
         let dist = compute_distance_matrix(mol);
 
         // Compute weight vectors
-        let w_mass: Vec<f64> = (0..n).map(|i| atomic_mass(mol.atoms[i].atomic_number)).collect();
-        let w_pol: Vec<f64> = (0..n).map(|i| polarizability(mol.atoms[i].atomic_number)).collect();
-        let w_en: Vec<f64> = (0..n).map(|i| electronegativity(mol.atoms[i].atomic_number)).collect();
-        let w_vdw: Vec<f64> = (0..n).map(|i| vdw_volume(mol.atoms[i].atomic_number)).collect();
+        let w_mass: Vec<f64> = (0..n)
+            .map(|i| atomic_mass(mol.atoms[i].atomic_number))
+            .collect();
+        let w_pol: Vec<f64> = (0..n)
+            .map(|i| polarizability(mol.atoms[i].atomic_number))
+            .collect();
+        let w_en: Vec<f64> = (0..n)
+            .map(|i| electronegativity(mol.atoms[i].atomic_number))
+            .collect();
+        let w_vdw: Vec<f64> = (0..n)
+            .map(|i| vdw_volume(mol.atoms[i].atomic_number))
+            .collect();
 
         let ats_mass = compute_ats(mol, &dist, &w_mass);
         let ats_pol = compute_ats(mol, &dist, &w_pol);
@@ -190,7 +206,7 @@ impl Descriptor for Autocorrelation {
             values[MAX_LAG * 2 + i] = ats_en[i] as f32;
             values[MAX_LAG * 3 + i] = ats_vdw[i] as f32;
         }
-        
+
         DescriptorValue::FloatVec(values)
     }
 }

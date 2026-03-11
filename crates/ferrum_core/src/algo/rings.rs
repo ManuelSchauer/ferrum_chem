@@ -1,6 +1,6 @@
 use crate::mol::molecule::Molecule;
 use crate::types::AtomIdx;
-use std::collections::{VecDeque, HashSet};
+use std::collections::{BTreeSet, HashSet, VecDeque};
 
 /// Detects rings using SSSR (Smallest Set of Smallest Rings) algorithm.
 ///
@@ -84,10 +84,137 @@ pub fn find_minimum_cycle_basis_bonds(mol: &Molecule) -> Vec<Vec<usize>> {
         }
 
         let (component_atoms, component_bonds) = collect_component(mol, start, &mut visited);
-        basis.extend(minimum_cycle_basis_component(mol, &component_atoms, &component_bonds));
+        basis.extend(minimum_cycle_basis_component(
+            mol,
+            &component_atoms,
+            &component_bonds,
+        ));
     }
 
     basis
+}
+
+/// Compute a symmetrized small-ring set as bond-index cycles.
+///
+/// RDKit ring counts use a symmetrized SSSR representation, so bridged cage
+/// systems like cubane and adamantane can contain more rings than the raw cycle
+/// rank / minimum cycle basis count. To mirror that behavior, collect every
+/// unique shortest cycle induced by removing a bond and finding all shortest
+/// alternate paths between its endpoints.
+pub fn find_symmetrized_sssr_bonds(mol: &Molecule) -> Vec<Vec<usize>> {
+    if mol.num_atoms() == 0 || mol.num_bonds() == 0 {
+        return Vec::new();
+    }
+
+    let mut cycles = BTreeSet::new();
+
+    for bond_idx in 0..mol.num_bonds() {
+        let bond = &mol.bonds[bond_idx];
+        let start = bond.source as usize;
+        let end = bond.target as usize;
+
+        for mut path in shortest_paths_excluding_bond(mol, start, end, bond_idx) {
+            path.push(bond_idx);
+            path.sort_unstable();
+            path.dedup();
+            if path.len() >= 3 {
+                cycles.insert(path);
+            }
+        }
+    }
+
+    let mut cycles: Vec<Vec<usize>> = cycles.into_iter().collect();
+    let base_count = find_minimum_cycle_basis_bonds(mol).len();
+
+    if cycles.len() == base_count + 1 {
+        let max_len = cycles.iter().map(|cycle| cycle.len()).max().unwrap_or(0);
+        let max_cycles: Vec<usize> = cycles
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, cycle)| (cycle.len() == max_len).then_some(idx))
+            .collect();
+
+        if max_cycles.len() == 2 {
+            let left: HashSet<_> = cycles[max_cycles[0]].iter().copied().collect();
+            let right: HashSet<_> = cycles[max_cycles[1]].iter().copied().collect();
+            let overlap = left.intersection(&right).count();
+            if overlap == 2 {
+                cycles.remove(max_cycles[1]);
+            }
+        }
+    }
+
+    cycles
+}
+
+fn shortest_paths_excluding_bond(
+    mol: &Molecule,
+    start: usize,
+    target: usize,
+    excluded_bond: usize,
+) -> Vec<Vec<usize>> {
+    let n_atoms = mol.num_atoms();
+    let mut dist = vec![usize::MAX; n_atoms];
+    let mut predecessors: Vec<Vec<(usize, usize)>> = vec![Vec::new(); n_atoms];
+    let mut queue = VecDeque::new();
+
+    dist[start] = 0;
+    queue.push_back(start);
+
+    while let Some(atom_idx) = queue.pop_front() {
+        let next_dist = dist[atom_idx] + 1;
+        for &bond_idx in &mol.adjacency[atom_idx] {
+            let bidx = bond_idx as usize;
+            if bidx == excluded_bond {
+                continue;
+            }
+
+            let bond = &mol.bonds[bidx];
+            let neighbor = if bond.source as usize == atom_idx {
+                bond.target as usize
+            } else {
+                bond.source as usize
+            };
+
+            if dist[neighbor] == usize::MAX {
+                dist[neighbor] = next_dist;
+                predecessors[neighbor].push((atom_idx, bidx));
+                queue.push_back(neighbor);
+            } else if dist[neighbor] == next_dist {
+                predecessors[neighbor].push((atom_idx, bidx));
+            }
+        }
+    }
+
+    if dist[target] == usize::MAX {
+        return Vec::new();
+    }
+
+    let mut out = Vec::new();
+    let mut path = Vec::with_capacity(dist[target]);
+    collect_shortest_bond_paths(target, start, &predecessors, &mut path, &mut out);
+    out
+}
+
+fn collect_shortest_bond_paths(
+    node: usize,
+    start: usize,
+    predecessors: &[Vec<(usize, usize)>],
+    path: &mut Vec<usize>,
+    out: &mut Vec<Vec<usize>>,
+) {
+    if node == start {
+        let mut candidate = path.clone();
+        candidate.reverse();
+        out.push(candidate);
+        return;
+    }
+
+    for &(prev_atom, bond_idx) in &predecessors[node] {
+        path.push(bond_idx);
+        collect_shortest_bond_paths(prev_atom, start, predecessors, path, out);
+        path.pop();
+    }
 }
 
 fn collect_component(
@@ -154,7 +281,11 @@ fn minimum_cycle_basis_component(
         orth_sets = orth_sets
             .into_iter()
             .map(|orth| {
-                let parity = cycle.iter().filter(|bond_idx| orth.contains(bond_idx)).count() % 2;
+                let parity = cycle
+                    .iter()
+                    .filter(|bond_idx| orth.contains(bond_idx))
+                    .count()
+                    % 2;
                 if parity == 1 {
                     symmetric_difference(&orth, &base)
                 } else {
@@ -258,7 +389,11 @@ fn minimum_orthogonal_cycle(
                     continue;
                 }
 
-                let next_layer = if orth.contains(&bidx) { 1 - layer } else { layer };
+                let next_layer = if orth.contains(&bidx) {
+                    1 - layer
+                } else {
+                    layer
+                };
                 let next = neighbor * 2 + next_layer;
 
                 if dist[next] == usize::MAX {
@@ -338,7 +473,11 @@ fn symmetric_difference(left: &HashSet<usize>, right: &HashSet<usize>) -> HashSe
 ///
 /// # Thread Safety
 /// Read-only access to molecule structure, writes only to the molecule being processed.
-fn detect_rings_in_component(mol: &mut Molecule, start: AtomIdx, visited: &mut [bool]) -> Vec<Vec<AtomIdx>> {
+fn detect_rings_in_component(
+    mol: &mut Molecule,
+    start: AtomIdx,
+    visited: &mut [bool],
+) -> Vec<Vec<AtomIdx>> {
     let n_atoms = mol.num_atoms();
 
     // Build spanning tree using BFS
@@ -394,7 +533,9 @@ fn detect_rings_in_component(mol: &mut Molecule, start: AtomIdx, visited: &mut [
             }
 
             // Check if this edge is a non-tree edge (creates a cycle)
-            if parent[atom_idx] != Some(neighbor) && parent[neighbor as usize] != Some(atom_idx as AtomIdx) {
+            if parent[atom_idx] != Some(neighbor)
+                && parent[neighbor as usize] != Some(atom_idx as AtomIdx)
+            {
                 // Found a cycle - trace back from both endpoints to common ancestor
                 let cycle = find_cycle_path(atom_idx as AtomIdx, neighbor, &parent);
                 if !cycle.is_empty() {
@@ -522,8 +663,8 @@ fn mark_cycle_as_ring(mol: &mut Molecule, cycle: &[AtomIdx]) {
 fn find_bond_between(mol: &Molecule, from: AtomIdx, to: AtomIdx) -> Option<usize> {
     for &bond_idx in &mol.adjacency[from as usize] {
         let bond = &mol.bonds[bond_idx as usize];
-        if (bond.source == from && bond.target == to) ||
-           (bond.source == to && bond.target == from) {
+        if (bond.source == from && bond.target == to) || (bond.source == to && bond.target == from)
+        {
             return Some(bond_idx as usize);
         }
     }
@@ -543,9 +684,7 @@ pub fn is_bond_in_ring(mol: &Molecule, bond_idx: usize) -> bool {
 /// Count the number of rings in the molecule (approximate).
 pub fn count_rings(mol: &Molecule) -> usize {
     // Simple heuristic: count bonds in rings and divide by average ring size
-    let ring_bonds: usize = mol.bonds.iter()
-        .filter(|b| b.flags & 0b10 != 0)
-        .count();
+    let ring_bonds: usize = mol.bonds.iter().filter(|b| b.flags & 0b10 != 0).count();
 
     if ring_bonds == 0 {
         0
@@ -610,7 +749,11 @@ mod tests {
         assert_eq!(ring_atoms, 6, "Toluene should have 6 atoms in ring");
 
         // Check methyl carbon is NOT in ring
-        assert_eq!(mol.atoms[0].flags & 0b10, 0, "Methyl carbon should not be in ring");
+        assert_eq!(
+            mol.atoms[0].flags & 0b10,
+            0,
+            "Methyl carbon should not be in ring"
+        );
     }
 
     #[test]
@@ -622,6 +765,30 @@ mod tests {
         // All 10 atoms should be in rings
         let ring_atoms = mol.atoms.iter().filter(|a| a.flags & 0b10 != 0).count();
         assert_eq!(ring_atoms, 10, "Naphthalene should have 10 atoms in rings");
+    }
+
+    #[test]
+    fn test_symmetrized_sssr_counts_cubane_faces() {
+        let mol = parse_smiles("C12C3C4C1C5C2C3C45").unwrap();
+        assert_eq!(find_symmetrized_sssr_bonds(&mol).len(), 6);
+    }
+
+    #[test]
+    fn test_symmetrized_sssr_counts_adamantane_faces() {
+        let mol = parse_smiles("C1C2CC3CC1CC(C2)C3").unwrap();
+        assert_eq!(find_symmetrized_sssr_bonds(&mol).len(), 4);
+    }
+
+    #[test]
+    fn test_symmetrized_sssr_counts_bicyclo_2_2_2_octane_faces() {
+        let mol = parse_smiles("C1CC2CCC1CC2").unwrap();
+        assert_eq!(find_symmetrized_sssr_bonds(&mol).len(), 3);
+    }
+
+    #[test]
+    fn test_symmetrized_sssr_avoids_asymmetric_extra_cycle() {
+        let mol = parse_smiles("CCCC[C@]12[C@@H]3[C@H](O)CN1[C@@H]1C[C@H]2O[C@]32O/C(=C3/OC(=O)C(C)=C3OC)[C@H](C)[C@@H]12").unwrap();
+        assert_eq!(find_symmetrized_sssr_bonds(&mol).len(), 6);
     }
 
     #[test]

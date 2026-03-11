@@ -23,9 +23,17 @@ pub struct KnnRegressor {
 
 impl KnnRegressor {
     /// Train (store) the k-NN regressor.
-    pub fn fit(features: Array2<f64>, targets: Array1<f64>, k: usize, metric: DistanceMetric) -> Self {
+    pub fn fit(
+        features: Array2<f64>,
+        targets: Array1<f64>,
+        k: usize,
+        metric: DistanceMetric,
+    ) -> Self {
         assert_eq!(features.nrows(), targets.len());
-        assert!(k > 0 && k <= features.nrows(), "k must be in [1, n_samples]");
+        assert!(
+            k > 0 && k <= features.nrows(),
+            "k must be in [1, n_samples]"
+        );
         Self {
             k,
             metric,
@@ -45,7 +53,7 @@ impl KnnRegressor {
         Array1::from_vec(
             (0..features.nrows())
                 .map(|i| self.predict_one(features.row(i).as_slice().unwrap()))
-                .collect()
+                .collect(),
         )
     }
 
@@ -83,7 +91,12 @@ pub struct KnnClassifier {
 }
 
 impl KnnClassifier {
-    pub fn fit(features: Array2<f64>, targets: Array1<f64>, k: usize, metric: DistanceMetric) -> Self {
+    pub fn fit(
+        features: Array2<f64>,
+        targets: Array1<f64>,
+        k: usize,
+        metric: DistanceMetric,
+    ) -> Self {
         assert_eq!(features.nrows(), targets.len());
         assert!(k > 0 && k <= features.nrows());
         Self {
@@ -124,7 +137,7 @@ impl KnnClassifier {
         Array1::from_vec(
             (0..features.nrows())
                 .map(|i| self.predict_one(features.row(i).as_slice().unwrap()))
-                .collect()
+                .collect(),
         )
     }
 }
@@ -132,9 +145,12 @@ impl KnnClassifier {
 /// Compute distance between two vectors.
 pub fn compute_distance(a: &[f64], b: &[f64], metric: DistanceMetric) -> f64 {
     match metric {
-        DistanceMetric::Euclidean => {
-            a.iter().zip(b).map(|(&x, &y)| (x - y).powi(2)).sum::<f64>().sqrt()
-        }
+        DistanceMetric::Euclidean => a
+            .iter()
+            .zip(b)
+            .map(|(&x, &y)| (x - y).powi(2))
+            .sum::<f64>()
+            .sqrt(),
         DistanceMetric::Tanimoto => {
             // Tanimoto distance = 1 - Tanimoto similarity
             let mut ab = 0.0;
@@ -146,11 +162,7 @@ pub fn compute_distance(a: &[f64], b: &[f64], metric: DistanceMetric) -> f64 {
                 bb += y * y;
             }
             let denom = aa + bb - ab;
-            if denom < 1e-15 {
-                0.0
-            } else {
-                1.0 - ab / denom
-            }
+            if denom < 1e-15 { 0.0 } else { 1.0 - ab / denom }
         }
     }
 }
@@ -158,16 +170,12 @@ pub fn compute_distance(a: &[f64], b: &[f64], metric: DistanceMetric) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ndarray::{array, Array2};
+    use ndarray::{Array2, array};
 
     #[test]
     fn test_knn_regressor_simple() {
-        let features = Array2::from_shape_vec((4, 2), vec![
-            0.0, 0.0,
-            1.0, 0.0,
-            0.0, 1.0,
-            1.0, 1.0,
-        ]).unwrap();
+        let features =
+            Array2::from_shape_vec((4, 2), vec![0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 1.0, 1.0]).unwrap();
         let targets = array![0.0, 1.0, 1.0, 2.0];
         let model = KnnRegressor::fit(features, targets, 1, DistanceMetric::Euclidean);
 
@@ -189,14 +197,11 @@ mod tests {
 
     #[test]
     fn test_knn_classifier() {
-        let features = Array2::from_shape_vec((6, 2), vec![
-            0.0, 0.0,
-            0.1, 0.0,
-            0.0, 0.1,
-            1.0, 1.0,
-            1.1, 1.0,
-            1.0, 1.1,
-        ]).unwrap();
+        let features = Array2::from_shape_vec(
+            (6, 2),
+            vec![0.0, 0.0, 0.1, 0.0, 0.0, 0.1, 1.0, 1.0, 1.1, 1.0, 1.0, 1.1],
+        )
+        .unwrap();
         let targets = array![0.0, 0.0, 0.0, 1.0, 1.0, 1.0];
         let model = KnnClassifier::fit(features, targets, 3, DistanceMetric::Euclidean);
 

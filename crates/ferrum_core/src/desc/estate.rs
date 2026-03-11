@@ -16,7 +16,7 @@
 //! Reference: Kier, L.B. & Hall, L.H. (1999) "Molecular Structure
 //!            Description: The Electrotopological State", Academic Press.
 
-use super::typed::{DescriptorValue, Descriptor};
+use super::typed::{Descriptor, DescriptorValue};
 use crate::mol::elements::outer_electrons;
 use crate::mol::molecule::Molecule;
 use crate::types::AtomIdx;
@@ -30,46 +30,59 @@ use std::collections::VecDeque;
 /// I_i = ((2/N)² δᵥ + 1) / δ
 /// where N = principal quantum number, δᵥ = valence delta, δ = sigma electrons (degree).
 fn intrinsic_states(mol: &Molecule) -> Vec<f64> {
-    mol.atoms.iter().map(|atom| {
-        let an = atom.atomic_number;
-        if an == 0 || an == 1 { return 0.0; }
+    mol.atoms
+        .iter()
+        .map(|atom| {
+            let an = atom.atomic_number;
+            if an == 0 || an == 1 {
+                return 0.0;
+            }
 
-        let n = principal_quantum_number(an) as f64;
-        let zv = outer_electrons(an) as f64;
-        let h = atom.total_h() as f64;
-        let delta = mol.get_degree(0) as f64; // placeholder, fixed below
-        let delta_v = zv - h;
+            let n = principal_quantum_number(an) as f64;
+            let zv = outer_electrons(an) as f64;
+            let h = atom.total_h() as f64;
+            let delta = mol.get_degree(0) as f64; // placeholder, fixed below
+            let delta_v = zv - h;
 
-        // σ = number of sigma bonds to heavy atoms = degree
-        let sigma = 0.0; // placeholder
-        0.0 // placeholder
-    }).collect()
+            // σ = number of sigma bonds to heavy atoms = degree
+            let sigma = 0.0; // placeholder
+            0.0 // placeholder
+        })
+        .collect()
 }
 
 /// Compute E-State values for all heavy atoms.
 /// Returns (e_states, atom_types) where atom_types[i] is the E-State atom type index.
 fn compute_estates(mol: &Molecule) -> Vec<f64> {
     let n = mol.num_atoms();
-    if n == 0 { return vec![]; }
+    if n == 0 {
+        return vec![];
+    }
 
     // Step 1: compute intrinsic state for each atom
-    let intrinsic: Vec<f64> = (0..n).map(|i| {
-        let atom = &mol.atoms[i];
-        let an = atom.atomic_number;
-        if an == 0 || an == 1 { return 0.0; }
+    let intrinsic: Vec<f64> = (0..n)
+        .map(|i| {
+            let atom = &mol.atoms[i];
+            let an = atom.atomic_number;
+            if an == 0 || an == 1 {
+                return 0.0;
+            }
 
-        let pqn = principal_quantum_number(an) as f64;
-        let zv = outer_electrons(an) as f64;
-        let h = atom.total_h() as f64;
-        let delta = mol.get_degree(i as AtomIdx) as f64;
+            let pqn = principal_quantum_number(an) as f64;
+            let zv = outer_electrons(an) as f64;
+            let h = atom.total_h() as f64;
+            let delta = mol.get_degree(i as AtomIdx) as f64;
 
-        if delta == 0.0 { return 0.0; }
+            if delta == 0.0 {
+                return 0.0;
+            }
 
-        let delta_v = zv - h;
+            let delta_v = zv - h;
 
-        // I = ((2/N)^2 * δᵥ + 1) / δ
-        ((2.0 / pqn).powi(2) * delta_v + 1.0) / delta
-    }).collect();
+            // I = ((2/N)^2 * δᵥ + 1) / δ
+            ((2.0 / pqn).powi(2) * delta_v + 1.0) / delta
+        })
+        .collect();
 
     // Step 2: compute BFS distance matrix
     let dist = compute_distance_matrix(mol);
@@ -79,9 +92,13 @@ fn compute_estates(mol: &Molecule) -> Vec<f64> {
     for i in 0..n {
         let mut delta_i = 0.0f64;
         for j in 0..n {
-            if i == j { continue; }
+            if i == j {
+                continue;
+            }
             let d = dist[i * n + j];
-            if d == 0 || d == u32::MAX { continue; }
+            if d == 0 || d == u32::MAX {
+                continue;
+            }
             // ΔI_ij = (I_i - I_j) / (d_ij + 1)^2
             delta_i += (intrinsic[i] - intrinsic[j]) / ((d as f64 + 1.0).powi(2));
         }
@@ -116,7 +133,11 @@ fn compute_distance_matrix(mol: &Molecule) -> Vec<u32> {
             let current_dist = distances[start * n + current as usize];
             for &bond_idx in &mol.adjacency[current as usize] {
                 let bond = &mol.bonds[bond_idx as usize];
-                let neighbor = if bond.source == current { bond.target } else { bond.source };
+                let neighbor = if bond.source == current {
+                    bond.target
+                } else {
+                    bond.source
+                };
                 let nd = &mut distances[start * n + neighbor as usize];
                 if *nd == u32::MAX {
                     *nd = current_dist + 1;
@@ -142,64 +163,68 @@ fn classify_atom(mol: &Molecule, idx: usize) -> Option<usize> {
     let arom = atom.is_aromatic();
 
     match an {
-        6 => { // Carbon
+        6 => {
+            // Carbon
             if arom {
                 match (deg, h) {
-                    (2, 1) => Some(ESTATE_aCH),     // aromatic CH
-                    (2, 0) | (3, 0) => Some(ESTATE_aC),  // aromatic C (substituted)
+                    (2, 1) => Some(ESTATE_aCH),         // aromatic CH
+                    (2, 0) | (3, 0) => Some(ESTATE_aC), // aromatic C (substituted)
                     _ => Some(ESTATE_aCH),
                 }
             } else {
                 match (deg, h) {
-                    (1, 3) => Some(ESTATE_sCH3),     // -CH3
-                    (2, 2) => Some(ESTATE_ssCH2),    // -CH2-
-                    (3, 1) => Some(ESTATE_sssCH),    // >CH-
-                    (4, 0) => Some(ESTATE_ssssC),    // >C<
-                    (1, 2) => Some(ESTATE_dCH2),     // =CH2
-                    (2, 1) => Some(ESTATE_dsCH),     // =CH-
-                    (2, 0) => Some(ESTATE_ddC),      // =C= or =C(-)-
-                    (3, 0) => Some(ESTATE_dssC),     // =C<
-                    (1, 1) => Some(ESTATE_tCH),      // ≡CH
-                    (1, 0) => Some(ESTATE_tCH),      // ≡C (terminal)
+                    (1, 3) => Some(ESTATE_sCH3),  // -CH3
+                    (2, 2) => Some(ESTATE_ssCH2), // -CH2-
+                    (3, 1) => Some(ESTATE_sssCH), // >CH-
+                    (4, 0) => Some(ESTATE_ssssC), // >C<
+                    (1, 2) => Some(ESTATE_dCH2),  // =CH2
+                    (2, 1) => Some(ESTATE_dsCH),  // =CH-
+                    (2, 0) => Some(ESTATE_ddC),   // =C= or =C(-)-
+                    (3, 0) => Some(ESTATE_dssC),  // =C<
+                    (1, 1) => Some(ESTATE_tCH),   // ≡CH
+                    (1, 0) => Some(ESTATE_tCH),   // ≡C (terminal)
                     _ => Some(ESTATE_sCH3),
                 }
             }
         }
-        7 => { // Nitrogen
+        7 => {
+            // Nitrogen
             if arom {
                 match (deg, h) {
-                    (2, 0) => Some(ESTATE_aaN),      // aromatic N (pyridine-like)
-                    (2, 1) | (3, 1) => Some(ESTATE_aaNH),   // aromatic NH (pyrrole-like)
+                    (2, 0) => Some(ESTATE_aaN),           // aromatic N (pyridine-like)
+                    (2, 1) | (3, 1) => Some(ESTATE_aaNH), // aromatic NH (pyrrole-like)
                     _ => Some(ESTATE_aaN),
                 }
             } else {
                 match (deg, h) {
-                    (1, 2) => Some(ESTATE_sNH2),     // -NH2
-                    (2, 1) => Some(ESTATE_ssNH),     // >NH
-                    (3, 0) => Some(ESTATE_sssN),     // >N-
-                    (1, 0) => Some(ESTATE_tN),       // ≡N or =N
-                    (2, 0) => Some(ESTATE_dsN),      // =N-
+                    (1, 2) => Some(ESTATE_sNH2), // -NH2
+                    (2, 1) => Some(ESTATE_ssNH), // >NH
+                    (3, 0) => Some(ESTATE_sssN), // >N-
+                    (1, 0) => Some(ESTATE_tN),   // ≡N or =N
+                    (2, 0) => Some(ESTATE_dsN),  // =N-
                     _ => Some(ESTATE_sNH2),
                 }
             }
         }
-        8 => { // Oxygen
+        8 => {
+            // Oxygen
             if arom {
                 Some(ESTATE_aO)
             } else {
                 match (deg, h) {
-                    (1, 1) => Some(ESTATE_sOH),     // -OH
-                    (2, 0) => Some(ESTATE_ssO),      // -O-
-                    (1, 0) => Some(ESTATE_dO),       // =O
+                    (1, 1) => Some(ESTATE_sOH), // -OH
+                    (2, 0) => Some(ESTATE_ssO), // -O-
+                    (1, 0) => Some(ESTATE_dO),  // =O
                     _ => Some(ESTATE_sOH),
                 }
             }
         }
-        9 => Some(ESTATE_sF),     // F
-        17 => Some(ESTATE_sCl),   // Cl
-        35 => Some(ESTATE_sBr),   // Br
-        53 => Some(ESTATE_sI),    // I
-        16 => { // Sulfur
+        9 => Some(ESTATE_sF),   // F
+        17 => Some(ESTATE_sCl), // Cl
+        35 => Some(ESTATE_sBr), // Br
+        53 => Some(ESTATE_sI),  // I
+        16 => {
+            // Sulfur
             if arom {
                 Some(ESTATE_aS)
             } else {
@@ -213,7 +238,8 @@ fn classify_atom(mol: &Molecule, idx: usize) -> Option<usize> {
                 }
             }
         }
-        15 => { // Phosphorus
+        15 => {
+            // Phosphorus
             match (deg, h) {
                 (3, 0) | (3, _) => Some(ESTATE_sssP),
                 (4, 0) => Some(ESTATE_dsssP),
@@ -260,11 +286,11 @@ const ESTATE_ddssS: usize = 31;
 const ESTATE_sssP: usize = 32;
 const ESTATE_dsssP: usize = 33;
 // Additional combined types for summary statistics
-const ESTATE_sNH3: usize = 34;  // -NH3+ (charged)
-const ESTATE_dNH: usize = 35;   // =NH
+const ESTATE_sNH3: usize = 34; // -NH3+ (charged)
+const ESTATE_dNH: usize = 35; // =NH
 const ESTATE_ssNH2: usize = 36; // >NH2 (charged)
-const ESTATE_tC: usize = 37;    // ≡C-
-const ESTATE_ddsC: usize = 38;  // ==C-
+const ESTATE_tC: usize = 37; // ≡C-
+const ESTATE_ddsC: usize = 38; // ==C-
 const ESTATE_ssssN: usize = 39; // quaternary N
 const ESTATE_sssNH: usize = 40; // >NH (charged?)
 const ESTATE_ssPH: usize = 41;
@@ -274,15 +300,10 @@ const NUM_ESTATE_TYPES: usize = 44;
 
 /// E-State atom type names (for CSV headers).
 const ESTATE_NAMES: [&str; NUM_ESTATE_TYPES] = [
-    "sCH3", "ssCH2", "sssCH", "ssssC", "dCH2", "dsCH", "ddC", "dssC",
-    "tCH", "aCH", "aC",
-    "sNH2", "ssNH", "sssN", "tN", "dsN", "aaN", "aaNH",
-    "sOH", "ssO", "dO", "aO",
-    "sF", "sCl", "sBr", "sI",
-    "sSH", "ssS", "dS", "aS", "dssS", "ddssS",
-    "sssP", "dsssP",
-    "sNH3p", "dNH", "ssNH2p", "tC", "ddsC", "ssssNp", "sssNH", "ssPH",
-    "dsssS", "ddsssP",
+    "sCH3", "ssCH2", "sssCH", "ssssC", "dCH2", "dsCH", "ddC", "dssC", "tCH", "aCH", "aC", "sNH2",
+    "ssNH", "sssN", "tN", "dsN", "aaN", "aaNH", "sOH", "ssO", "dO", "aO", "sF", "sCl", "sBr", "sI",
+    "sSH", "ssS", "dS", "aS", "dssS", "ddssS", "sssP", "dsssP", "sNH3p", "dNH", "ssNH2p", "tC",
+    "ddsC", "ssssNp", "sssNH", "ssPH", "dsssS", "ddsssP",
 ];
 
 // ---------------------------------------------------------------------------
@@ -313,7 +334,12 @@ mod tests {
     fn test_estate_ethane() {
         let e = estates_raw("CC");
         assert_eq!(e.len(), 2);
-        assert!((e[0] - e[1]).abs() < 0.001, "symmetric: {} vs {}", e[0], e[1]);
+        assert!(
+            (e[0] - e[1]).abs() < 0.001,
+            "symmetric: {} vs {}",
+            e[0],
+            e[1]
+        );
     }
 
     #[test]
@@ -335,18 +361,26 @@ mod tests {
         let mol = parse_smiles("CCCC").expect("valid");
         let estates = compute_estates(&mol);
         let n = mol.num_atoms();
-        let intrinsic_sum: f64 = (0..n).map(|i| {
-            let atom = &mol.atoms[i];
-            let pqn = principal_quantum_number(atom.atomic_number) as f64;
-            let zv = outer_electrons(atom.atomic_number) as f64;
-            let h = atom.total_h() as f64;
-            let delta = mol.get_degree(i as AtomIdx) as f64;
-            if delta == 0.0 { return 0.0; }
-            ((2.0 / pqn).powi(2) * (zv - h) + 1.0) / delta
-        }).sum();
+        let intrinsic_sum: f64 = (0..n)
+            .map(|i| {
+                let atom = &mol.atoms[i];
+                let pqn = principal_quantum_number(atom.atomic_number) as f64;
+                let zv = outer_electrons(atom.atomic_number) as f64;
+                let h = atom.total_h() as f64;
+                let delta = mol.get_degree(i as AtomIdx) as f64;
+                if delta == 0.0 {
+                    return 0.0;
+                }
+                ((2.0 / pqn).powi(2) * (zv - h) + 1.0) / delta
+            })
+            .sum();
         let estate_sum: f64 = estates.iter().sum();
-        assert!((estate_sum - intrinsic_sum).abs() < 0.001,
-            "E-State sum {} ≈ intrinsic sum {}", estate_sum, intrinsic_sum);
+        assert!(
+            (estate_sum - intrinsic_sum).abs() < 0.001,
+            "E-State sum {} ≈ intrinsic sum {}",
+            estate_sum,
+            intrinsic_sum
+        );
     }
 
     #[test]
@@ -360,7 +394,11 @@ mod tests {
     #[test]
     fn test_estate_atom_types_benzene() {
         let v = calc_estate("c1ccccc1");
-        assert!(v[3 + ESTATE_aCH] != 0.0, "benzene should have aCH: {}", v[3 + ESTATE_aCH]);
+        assert!(
+            v[3 + ESTATE_aCH] != 0.0,
+            "benzene should have aCH: {}",
+            v[3 + ESTATE_aCH]
+        );
     }
 
     #[test]
@@ -374,8 +412,12 @@ mod tests {
         let e = estates_raw("c1ccccc1");
         let first = e[0];
         for val in &e[1..] {
-            assert!((val - first).abs() < 0.001,
-                "benzene atoms should be equal: {} vs {}", val, first);
+            assert!(
+                (val - first).abs() < 0.001,
+                "benzene atoms should be equal: {} vs {}",
+                val,
+                first
+            );
         }
     }
 
@@ -405,9 +447,9 @@ impl Descriptor for EStateIndices {
 
     fn calculate(&self, mol: &mut Molecule) -> DescriptorValue {
         let mut values = Vec::with_capacity(47);
-        
+
         let estates = compute_estates(mol);
-        
+
         // Summary (3 values)
         if estates.is_empty() {
             values.push(0.0);
@@ -421,7 +463,7 @@ impl Descriptor for EStateIndices {
             values.push(min as f32);
             values.push(max as f32);
         }
-        
+
         // Atom types (44 values)
         let mut atom_type_sums = vec![0.0f32; NUM_ESTATE_TYPES];
         for i in 0..mol.num_atoms() {
@@ -430,7 +472,7 @@ impl Descriptor for EStateIndices {
             }
         }
         values.extend(atom_type_sums);
-        
+
         DescriptorValue::FloatVec(values)
     }
 }

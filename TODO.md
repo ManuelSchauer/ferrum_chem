@@ -15,19 +15,31 @@ See [`THREAD_SAFETY.md`](THREAD_SAFETY.md) for guidelines.
 All parity validation should be run in `--release` mode.
 
 - Scalar parity: **10976/11000 = 99.78%**
-- Ring parity: **1919/2000 = 95.95%**
-- VSA parity: **17975/18000 = 99.86%**
-- Chi/Kappa parity: **4905/5000 = 98.10%**
-- Exact on the 500-row RDKit slice: **AromaticAtomCount, AromaticRingCount, AromaticRings(RT), HBondAcceptor, NumAmideBonds, QED, RotatableBonds**
-- Highest-value remaining gaps: **Ipc, AliphaticRings, SaturatedRings, TotalRings, Chi3v, Chi4v, Kappa3**
+- Ring parity: **2000/2000 = 100.0%**
+- VSA parity: **18000/18000 = 100.0%**
+- Chi/Kappa parity: **5000/5000 = 100.0%**
+- 1000-row scalar audit: **21945/22000 = 99.75%**
+- 1000-row ring audit: **3998/4000 = 99.95%**
+- 1000-row VSA audit: **35988/36000 = 99.97%**
+- 1000-row Chi/Kappa audit: **10000/10000 = 100.0%**
+- Exact on the 500-row RDKit slice: **AromaticAtomCount, AromaticRingCount, AliphaticRings, AromaticRings(RT), SaturatedRings, TotalRings, HBondAcceptor, NumAmideBonds, QED, RotatableBonds, Chi3v, Chi4v, Kappa3**
+- Exact on the 1000-row audit: **FractionCSP3, HallKierAlpha, all Chi/Kappa values, all PEOE_VSA bins**
+- Remaining validated 500-row gap: **Ipc**
+- Dominant 1000-row non-Ipc cluster: **CNP0594395.1** (fused heteroaromatic aromaticity/ring/HBA/amide/LogP/TPSA/VSA cascade)
 
 ## 🎯 Active Descriptor Backlog
 
-- [ ] Close the remaining **Ipc** mismatches (current: **476/500**)
-- [ ] Align independent ring descriptor semantics: **AliphaticRings 470/500**, **SaturatedRings 479/500**, **TotalRings 470/500**
-- [ ] Fix higher-order connectivity descriptors: **Chi3v 470/500**, **Chi4v 464/500**, **Kappa3 471/500**
-- [ ] Polish the last non-perfect **PEOE VSA** buckets while preserving the current high-parity baseline
+- [ ] Close the fused heteroaromatic `CNP0594395.1` descriptor cascade (aromaticity/ring typing, HBA, amide count, LogP/TPSA, SlogP_VSA, SMR_VSA)
+- [ ] Resolve the isolated `RotatableBonds` 1000-row miss on `CNP0329403.3`
+- [ ] Decide whether to emulate RDKit/NumPy-sensitive **Ipc** behavior (current: **476/500** on the default slice, **953/1000** on the audit; deprioritized for ML use)
+- [x] Close the hybridization-driven `CNP0581766.1` / `CNP0165392.0` outliers by matching RDKit's SP3 radical-carbon and allene-SP semantics
+- [x] Close **PEOE_VSA** parity at **18000/18000** by matching RDKit's conjugated charge-splitting behavior
 - [ ] Resume **Phase 14 / TUI** work after the descriptor parity cleanup stabilizes
+
+## ✅ Recently Closed on the 500-row RDKit Slice
+
+- [x] Independent ring descriptor semantics: **AliphaticRings 500/500**, **SaturatedRings 500/500**, **TotalRings 500/500**
+- [x] Higher-order connectivity descriptors: **Chi3v 500/500**, **Chi4v 500/500**, **Kappa3 500/500**
 
 ## ✅ Phase 1-8: Complete (Core Functionality + MACCS Keys)
 
@@ -398,7 +410,7 @@ All parity validation should be run in `--release` mode.
 - ✅ Release-mode validation is the default for parity runs
 - ✅ Total descriptors: 72 implementations, 17,710+ dimensions
 - ✅ RDKit torture-set validation: 1944/1944 exact matches across 27 molecules
-- ✅ RDKit 500-row parity: scalar 99.78%, ring 95.95%, VSA 99.86%, Chi/Kappa 98.10%
+- ✅ RDKit 500-row parity: scalar 99.78%, ring 100.0%, VSA 100.0%, Chi/Kappa 100.0%
 - ✅ Fingerprints: MACCS (166), PubChem (881), ECFP (6144), FCFP (6144), AtomPair (2048), Torsion (2048)
 
 ## 🎯 Milestones
@@ -434,7 +446,10 @@ All parity validation should be run in `--release` mode.
 - [x] Aromatic atom/ring metrics closed at 500/500 on the 500-row slice
 - [x] QED, NumAmideBonds, and RotatableBonds closed at 500/500
 - [x] Scalar parity raised to **10976/11000 = 99.78%**
-- [ ] Finish descriptor-local cleanup for Ipc, independent ring semantics, and higher-order Chi/Kappa
+- [x] VSA parity raised to **18000/18000 = 100.0%**
+- [x] Hybridization-driven 1000-row outliers (`CNP0581766.1`, `CNP0165392.0`) closed; Chi/Kappa is now **10000/10000** and VSA is **35988/36000**
+- [ ] Close the fused heteroaromatic `CNP0594395.1` descriptor cluster
+- [ ] Decide whether to revisit exact **Ipc** emulation (currently deferred for ML use)
 
 ### v0.10.0 - Phase 14: TUI
 - [ ] Interactive model training wizard
@@ -448,11 +463,10 @@ All parity validation should be run in `--release` mode.
 ---
 
 **Last Updated**: March 2026  
-**Status**: RDKit parity push in progress — scalar **99.78%**, ring **95.95%**, VSA **99.86%**, Chi/Kappa **98.10%**  
-**Validation**: release-mode parser / SMARTS / QED / rotatable tests plus scalar, ring, VSA, and Chi/Kappa parity suites ✅  
+**Status**: RDKit parity push in progress — 500-row scalar **99.78%**, ring **100.0%**, VSA **100.0%**, Chi/Kappa **100.0%**; 1000-row scalar **99.75%**, ring **99.95%**, VSA **99.97%**, Chi/Kappa **100.0%**  
+**Validation**: release-mode parser / SMARTS / QED / rotatable tests plus scalar, ring, VSA, and Chi/Kappa parity suites and 1000-row audits ✅  
 **Descriptors**: 72 implementations, 17,710+ dimensions  
-**RDKit 500-row wins**: AromaticAtomCount 100% · AromaticRingCount 100% · AromaticRings(RT) 100% · HBondAcceptor 100% · NumAmideBonds 100% · QED 100% · RotatableBonds 100%  
+**RDKit 500-row wins**: AromaticAtomCount 100% · AromaticRingCount 100% · AliphaticRings 100% · AromaticRings(RT) 100% · SaturatedRings 100% · TotalRings 100% · HBondAcceptor 100% · NumAmideBonds 100% · QED 100% · RotatableBonds 100% · Chi3v 100% · Chi4v 100% · Kappa3 100%  
 **ML Pipeline**: QsarDataset, Scalers, PCA, k-NN, RF, PLS, ElasticNet, ART-2A, AD, QsarPipeline, AutoQsar, CV, Metrics  
 **API**: Single `Descriptor` trait with `DescriptorValue` enum returns  
-**Next Priority**: Descriptor-local cleanup for **Ipc**, **Aliphatic/Saturated/TotalRings**, and **Chi3v/Chi4v/Kappa3**
-
+**Next Priority**: Close the fused heteroaromatic `CNP0594395.1` cluster; keep exact **Ipc** emulation deferred unless strict RDKit reproduction becomes necessary

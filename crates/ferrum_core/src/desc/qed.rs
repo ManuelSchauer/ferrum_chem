@@ -6,8 +6,8 @@
 //! Nature Chemistry 4, 90-98.
 
 use super::typed::{Descriptor, DescriptorValue};
-use crate::algo::rings::find_sssr;
 use crate::algo::iso::count_matches;
+use crate::algo::rings::find_sssr;
 use crate::desc::bond_count::compute_rotatable_bond_count;
 use crate::desc::hbond::compute_hbond_donors;
 use crate::desc::logp::compute_logp;
@@ -536,8 +536,9 @@ mod tests {
 
     #[test]
     fn test_qed_matches_rdkit_cnp0298191() {
-        let mol = parse_smiles("CCOCC1=C2/C(=C\\[C@@]3(C)CC[C@](O)(O3)[C@@](C)(O)C[C@H]2OC(C)=O)OC1=O")
-            .unwrap();
+        let mol =
+            parse_smiles("CCOCC1=C2/C(=C\\[C@@]3(C)CC[C@](O)(O3)[C@@](C)(O)C[C@H]2OC(C)=O)OC1=O")
+                .unwrap();
         assert_eq!(compute_qed_hbond_acceptors(&mol), 8);
         assert_eq!(compute_qed_aromatic_ring_count(&mol), 0);
         assert_eq!(compute_structural_alerts(&mol), 1);
@@ -550,5 +551,4 @@ mod tests {
         assert_eq!(compute_structural_alerts(&mol), 1);
         assert!((compute_qed(&mol) - 0.5200628922737999).abs() < 1e-3);
     }
-
 }

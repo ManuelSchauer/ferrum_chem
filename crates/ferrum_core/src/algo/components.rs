@@ -16,7 +16,11 @@ fn connected_components(mol: &Molecule) -> Vec<usize> {
         while let Some(u) = queue.pop_front() {
             for &bi in &mol.adjacency[u] {
                 let b = &mol.bonds[bi as usize];
-                let v = if b.source as usize == u { b.target as usize } else { b.source as usize };
+                let v = if b.source as usize == u {
+                    b.target as usize
+                } else {
+                    b.source as usize
+                };
                 if comp[v] == usize::MAX {
                     comp[v] = label;
                     queue.push_back(v);

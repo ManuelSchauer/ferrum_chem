@@ -1,5 +1,5 @@
-use ferrum_core::io::smiles::parse_smiles;
 use ferrum_core::desc::{Descriptor, molecular_weight::MolecularWeight};
+use ferrum_core::io::smiles::parse_smiles;
 use rayon::prelude::*;
 use std::sync::Arc;
 
@@ -17,7 +17,11 @@ fn main() {
         .collect();
     let duration = start.elapsed();
 
-    println!("✓ Parsed {} molecules in {:.2}ms", molecules.len(), duration.as_secs_f64() * 1000.0);
+    println!(
+        "✓ Parsed {} molecules in {:.2}ms",
+        molecules.len(),
+        duration.as_secs_f64() * 1000.0
+    );
     println!("✓ All molecules are Send + Sync: Can be shared across threads safely\n");
 
     // Test 2: Concurrent descriptor calculation
@@ -27,13 +31,15 @@ fn main() {
     let start = std::time::Instant::now();
     let weights: Vec<f32> = molecules
         .par_iter_mut()
-        .map(|mol| {
-            descriptor.calculate(mol).as_float()
-        })
+        .map(|mol| descriptor.calculate(mol).as_float())
         .collect();
     let duration = start.elapsed();
 
-    println!("✓ Calculated {} weights in {:.2}ms", weights.len(), duration.as_secs_f64() * 1000.0);
+    println!(
+        "✓ Calculated {} weights in {:.2}ms",
+        weights.len(),
+        duration.as_secs_f64() * 1000.0
+    );
     println!("✓ Descriptor is Send + Sync: Can be called from multiple threads\n");
 
     // Test 3: Sharing molecules across threads with Arc
@@ -93,7 +99,10 @@ fn main() {
         });
     let duration = start.elapsed();
 
-    println!("✓ Processed 1000 molecules with 100 threads in {:.2}ms", duration.as_secs_f64() * 1000.0);
+    println!(
+        "✓ Processed 1000 molecules with 100 threads in {:.2}ms",
+        duration.as_secs_f64() * 1000.0
+    );
     println!("✓ No data races, no panics, no deadlocks\n");
 
     // Summary
@@ -107,4 +116,3 @@ fn main() {
     println!("✅ Zero data races (guaranteed by Rust's type system)");
     println!("✅ Production-ready for parallel ML pipelines");
 }
-

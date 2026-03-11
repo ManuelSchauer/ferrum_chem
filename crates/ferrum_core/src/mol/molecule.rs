@@ -1,9 +1,9 @@
-use smallvec::SmallVec;
 use crate::mol::{atom::Atom, bond::Bond};
 use crate::types::{AtomIdx, BondIdx};
+use smallvec::SmallVec;
 
 /// Molecular graph representation.
-/// 
+///
 /// # Thread Safety
 /// `Molecule` is `Send + Sync`, making it safe to share across threads.
 /// This is critical for parallel batch processing with Rayon.
@@ -24,10 +24,16 @@ const _: () = {
 };
 
 impl Molecule {
-    pub fn new() -> Self { Self::default() }
+    pub fn new() -> Self {
+        Self::default()
+    }
 
-    pub fn num_atoms(&self) -> usize { self.atoms.len() }
-    pub fn num_bonds(&self) -> usize { self.bonds.len() }
+    pub fn num_atoms(&self) -> usize {
+        self.atoms.len()
+    }
+    pub fn num_bonds(&self) -> usize {
+        self.bonds.len()
+    }
 
     pub fn get_degree(&self, atom: AtomIdx) -> usize {
         self.adjacency[atom as usize].len()

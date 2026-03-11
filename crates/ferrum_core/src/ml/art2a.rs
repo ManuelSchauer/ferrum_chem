@@ -25,8 +25,14 @@ pub struct Art2a {
 impl Art2a {
     /// Create a new ART-2A model with given hyperparameters.
     pub fn new(vigilance: f64, learning_rate: f64, max_iter: usize) -> Self {
-        assert!((0.0..1.0).contains(&vigilance), "vigilance must be in (0, 1)");
-        assert!((0.0..=1.0).contains(&learning_rate), "learning_rate must be in (0, 1]");
+        assert!(
+            (0.0..1.0).contains(&vigilance),
+            "vigilance must be in (0, 1)"
+        );
+        assert!(
+            (0.0..=1.0).contains(&learning_rate),
+            "learning_rate must be in (0, 1]"
+        );
         Self {
             vigilance,
             learning_rate,
@@ -47,9 +53,7 @@ impl Art2a {
         }
 
         // L2-normalize all inputs
-        let normalized: Vec<Array1<f64>> = data.iter()
-            .map(|v| l2_normalize(v))
-            .collect();
+        let normalized: Vec<Array1<f64>> = data.iter().map(|v| l2_normalize(v)).collect();
 
         self.prototypes.clear();
         self.labels = vec![0; n];
@@ -171,7 +175,11 @@ mod tests {
         model.fit(&data);
 
         // Should find 2 clusters (group near [1,0,0] and group near [0,0,1])
-        assert!(model.n_clusters() >= 2, "Found {} clusters", model.n_clusters());
+        assert!(
+            model.n_clusters() >= 2,
+            "Found {} clusters",
+            model.n_clusters()
+        );
 
         // Samples in same group should have same label
         assert_eq!(model.labels[0], model.labels[1]);
@@ -182,11 +190,7 @@ mod tests {
 
     #[test]
     fn test_art2a_vigilance_effect() {
-        let data = vec![
-            vec![1.0, 0.0],
-            vec![0.7, 0.3],
-            vec![0.0, 1.0],
-        ];
+        let data = vec![vec![1.0, 0.0], vec![0.7, 0.3], vec![0.0, 1.0]];
 
         // Low vigilance → fewer clusters
         let mut model_low = Art2a::new(0.3, 0.3, 20);
@@ -199,16 +203,14 @@ mod tests {
         assert!(
             model_high.n_clusters() >= model_low.n_clusters(),
             "High vig: {} clusters, low vig: {} clusters",
-            model_high.n_clusters(), model_low.n_clusters()
+            model_high.n_clusters(),
+            model_low.n_clusters()
         );
     }
 
     #[test]
     fn test_art2a_applicability_domain() {
-        let data = vec![
-            vec![1.0, 0.0, 0.0],
-            vec![0.9, 0.1, 0.0],
-        ];
+        let data = vec![vec![1.0, 0.0, 0.0], vec![0.9, 0.1, 0.0]];
 
         let mut model = Art2a::new(0.8, 0.3, 10);
         model.fit(&data);

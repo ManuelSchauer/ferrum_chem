@@ -1,5 +1,5 @@
-use ferrum_core::io::smiles::parse_smiles;
 use ferrum_core::desc::{Descriptor, molecular_weight};
+use ferrum_core::io::smiles::parse_smiles;
 use std::time::Instant;
 
 fn main() {
@@ -13,7 +13,10 @@ fn main() {
         ("Caffeine", "CN1C=NC2=C1C(=O)N(C(=O)N2C)C"),
         ("Aspirin", "CC(=O)Oc1ccccc1C(=O)O"),
         ("Ibuprofen", "CC(C)Cc1ccc(cc1)C(C)C(=O)O"),
-        ("Complex", "CC(C)Cc1ccc(cc1)[C@@H](C)C(=O)O.CN1C=NC2=C1C(=O)N(C(=O)N2C)C"),
+        (
+            "Complex",
+            "CC(C)Cc1ccc(cc1)[C@@H](C)C(=O)O.CN1C=NC2=C1C(=O)N(C(=O)N2C)C",
+        ),
     ];
 
     println!("--- SMILES Parsing Performance (with automatic implicit H) ---");
@@ -31,7 +34,10 @@ fn main() {
 
         println!(
             "{:12} ({:2} chars): {:6} ns/parse  ({:8.0} molecules/sec)",
-            name, smiles.len(), per_parse, per_second
+            name,
+            smiles.len(),
+            per_parse,
+            per_second
         );
     }
 
@@ -125,4 +131,3 @@ fn main() {
         );
     }
 }
-

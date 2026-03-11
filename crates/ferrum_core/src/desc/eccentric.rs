@@ -17,15 +17,15 @@ use std::collections::VecDeque;
 fn compute_distance_matrix(mol: &Molecule) -> Vec<u32> {
     let n = mol.num_atoms();
     let mut dist = vec![u32::MAX; n * n];
-    
+
     for start in 0..n {
         let mut queue = VecDeque::new();
         queue.push_back(start);
         dist[start * n + start] = 0;
-        
+
         while let Some(current) = queue.pop_front() {
             let current_dist = dist[start * n + current];
-            
+
             // adjacency[i] stores bond indices, not atom indices!
             for &bond_idx in &mol.adjacency[current] {
                 let bond = &mol.bonds[bond_idx as usize];
@@ -34,7 +34,7 @@ fn compute_distance_matrix(mol: &Molecule) -> Vec<u32> {
                 } else {
                     bond.source as usize
                 };
-                
+
                 if dist[start * n + neighbor] == u32::MAX {
                     dist[start * n + neighbor] = current_dist + 1;
                     queue.push_back(neighbor);
@@ -42,7 +42,7 @@ fn compute_distance_matrix(mol: &Molecule) -> Vec<u32> {
             }
         }
     }
-    
+
     dist
 }
 
@@ -57,18 +57,18 @@ fn compute_distance_matrix(mol: &Molecule) -> Vec<u32> {
 /// - Branched: varies with structure
 pub fn calculate(mol: &Molecule) -> u32 {
     let n = mol.num_atoms();
-    
+
     if n == 0 {
         return 0;
     }
-    
+
     if n == 1 {
         return 0; // Single atom has no eccentricity
     }
-    
+
     // Compute distance matrix
     let dist = compute_distance_matrix(mol);
-    
+
     // Calculate eccentricity for each atom
     let mut eccentricities = vec![0u32; n];
     for i in 0..n {
@@ -81,14 +81,14 @@ pub fn calculate(mol: &Molecule) -> u32 {
         }
         eccentricities[i] = max_dist;
     }
-    
+
     // Sum degree × eccentricity
     let mut eci = 0u32;
     for i in 0..n {
         let degree = mol.get_degree(i as u16) as u32;
         eci += degree * eccentricities[i];
     }
-    
+
     eci
 }
 
@@ -96,18 +96,18 @@ pub fn calculate(mol: &Molecule) -> u32 {
 mod tests {
     use super::*;
     use crate::io::smiles::parse_smiles;
-    
+
     fn parse(smiles: &str) -> Molecule {
         parse_smiles(smiles).unwrap()
     }
-    
+
     #[test]
     fn test_eccentric_methane() {
         let mol = parse("C");
         let eci = calculate(&mol);
         assert_eq!(eci, 0); // Single atom
     }
-    
+
     #[test]
     fn test_eccentric_ethane() {
         let mol = parse("CC");
@@ -116,7 +116,7 @@ mod tests {
         // ECI = 1*1 + 1*1 = 2
         assert_eq!(eci, 2);
     }
-    
+
     #[test]
     fn test_eccentric_propane() {
         let mol = parse("CCC");
@@ -125,7 +125,7 @@ mod tests {
         // ECI = 1*2 + 2*1 + 1*2 = 6
         assert_eq!(eci, 6);
     }
-    
+
     #[test]
     fn test_eccentric_butane() {
         let mol = parse("CCCC");
@@ -134,7 +134,7 @@ mod tests {
         // ECI = 1*3 + 2*2 + 2*2 + 1*3 = 14
         assert_eq!(eci, 14);
     }
-    
+
     #[test]
     fn test_eccentric_isobutane() {
         let mol = parse("CC(C)C");
@@ -143,7 +143,7 @@ mod tests {
         // ECI = 1*2 + 3*1 + 1*2 + 1*2 = 9
         assert_eq!(eci, 9);
     }
-    
+
     #[test]
     fn test_eccentric_benzene() {
         let mol = parse("c1ccccc1");
@@ -152,7 +152,7 @@ mod tests {
         // ECI = 6 * (2*3) = 36
         assert_eq!(eci, 36);
     }
-    
+
     #[test]
     fn test_eccentric_cyclohexane() {
         let mol = parse("C1CCCCC1");
@@ -160,7 +160,7 @@ mod tests {
         // Same as benzene structure-wise
         assert_eq!(eci, 36);
     }
-    
+
     #[test]
     fn test_eccentric_naphthalene() {
         let mol = parse("c1ccc2ccccc2c1");
@@ -168,7 +168,7 @@ mod tests {
         // 10 atoms, varies by position
         assert!(eci > 40); // More extended than benzene
     }
-    
+
     #[test]
     fn test_eccentric_path_vs_branched() {
         let linear = parse("CCCCC"); // Pentane

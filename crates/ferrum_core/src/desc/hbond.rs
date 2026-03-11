@@ -1,4 +1,4 @@
-use super::typed::{DescriptorValue, Descriptor};
+use super::typed::{Descriptor, DescriptorValue};
 use crate::mol::molecule::Molecule;
 
 /// Compute the number of hydrogen bond donors (Lipinski definition).
@@ -6,8 +6,8 @@ use crate::mol::molecule::Molecule;
 /// Matches: N with H (v3 or v4+), O/S with exactly 1H, aromatic nH.
 /// SMARTS: [$([N;!H0;v3]),$([N;!H0;+1;v4]),$([O,S;H1;+0]),$([n;H1;+0])]
 pub fn compute_hbond_donors(mol: &Molecule) -> u32 {
-    use crate::io::smarts::parse_smarts;
     use crate::algo::iso::count_matches;
+    use crate::io::smarts::parse_smarts;
     use once_cell::sync::Lazy;
 
     static HBD_SMARTS: Lazy<crate::io::smarts::QueryGraph> = Lazy::new(|| {
@@ -22,8 +22,8 @@ pub fn compute_hbond_donors(mol: &Molecule) -> u32 {
 ///
 /// Matches specific N/O/S patterns per RDKit's HAcceptorSmarts.
 pub fn compute_hbond_acceptors(mol: &Molecule) -> u32 {
-    use crate::io::smarts::parse_smarts;
     use crate::algo::iso::count_matches;
+    use crate::io::smarts::parse_smarts;
     use once_cell::sync::Lazy;
 
     static HBA_SMARTS: Lazy<crate::io::smarts::QueryGraph> = Lazy::new(|| {
@@ -204,8 +204,6 @@ mod tests {
         // 2 C=O (H0,v2) + ester O (H0,v2) = 3; COOH's OH excluded
         assert_eq!(compute_hbond_acceptors(&mol), 3);
     }
-
-    
 
     #[test]
     fn test_hbond_donor_descriptor() {

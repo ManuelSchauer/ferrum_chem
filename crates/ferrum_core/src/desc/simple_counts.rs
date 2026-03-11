@@ -1,5 +1,5 @@
-use super::typed::{DescriptorValue, Descriptor};
-use crate::mol::{molecule::Molecule, elements};
+use super::typed::{Descriptor, DescriptorValue};
+use crate::mol::{elements, molecule::Molecule};
 
 /// Valence Electrons: Total number of valence electrons in the molecule.
 ///
@@ -42,10 +42,14 @@ impl Descriptor for ValenceElectrons {
 pub struct RadicalElectrons;
 
 impl Descriptor for RadicalElectrons {
-    fn name(&self) -> &str { "RadicalElectrons" }
+    fn name(&self) -> &str {
+        "RadicalElectrons"
+    }
 
     fn calculate(&self, mol: &mut Molecule) -> DescriptorValue {
-        let count: u32 = mol.atoms.iter()
+        let count: u32 = mol
+            .atoms
+            .iter()
             .map(|_atom| 0u32) // No radical electron field in Atom yet
             .sum();
         DescriptorValue::Int(count)
@@ -67,7 +71,9 @@ impl Descriptor for HeteroatomCount {
     }
 
     fn calculate(&self, mol: &mut Molecule) -> DescriptorValue {
-        let count = mol.atoms.iter()
+        let count = mol
+            .atoms
+            .iter()
             .filter(|atom| atom.atomic_number > 1 && atom.atomic_number != 6)
             .count() as u32;
         DescriptorValue::Int(count)
@@ -85,13 +91,17 @@ impl Descriptor for HeteroatomCount {
 pub struct HybridizationRatio;
 
 impl Descriptor for HybridizationRatio {
-    fn name(&self) -> &str { "HybridizationRatio" }
+    fn name(&self) -> &str {
+        "HybridizationRatio"
+    }
 
     fn calculate(&self, mol: &mut Molecule) -> DescriptorValue {
         let mut sp3_count = 0u32;
         let mut sp2_count = 0u32;
         for (idx, atom) in mol.atoms.iter().enumerate() {
-            if atom.atomic_number != 6 { continue; }
+            if atom.atomic_number != 6 {
+                continue;
+            }
             let total_neighbors = mol.get_degree(idx as u16) + atom.total_h() as usize;
             match total_neighbors {
                 4 => sp3_count += 1,
@@ -118,7 +128,9 @@ impl Descriptor for HybridizationRatio {
 pub struct VAdjMa;
 
 impl Descriptor for VAdjMa {
-    fn name(&self) -> &str { "VAdjMa" }
+    fn name(&self) -> &str {
+        "VAdjMa"
+    }
 
     fn calculate(&self, mol: &mut Molecule) -> DescriptorValue {
         let m = mol.num_bonds() as f32;
@@ -160,7 +172,10 @@ mod tests {
     #[test]
     fn test_valence_electrons_co2() {
         let val = calc_float(&ValenceElectrons, "O=C=O");
-        assert!((val - 16.0).abs() < 1.0, "CO2 should have ~16 valence electrons");
+        assert!(
+            (val - 16.0).abs() < 1.0,
+            "CO2 should have ~16 valence electrons"
+        );
     }
 
     // Radical Electrons Tests
@@ -182,7 +197,10 @@ mod tests {
 
     #[test]
     fn test_heteroatom_caffeine() {
-        assert_eq!(calc_int(&HeteroatomCount, "CN1C=NC2=C1C(=O)N(C(=O)N2C)C"), 6);
+        assert_eq!(
+            calc_int(&HeteroatomCount, "CN1C=NC2=C1C(=O)N(C(=O)N2C)C"),
+            6
+        );
     }
 
     // Hybridization Ratio Tests
@@ -200,7 +218,10 @@ mod tests {
     #[test]
     fn test_hybridization_mixed() {
         let ratio = calc_float(&HybridizationRatio, "CCc1ccccc1");
-        assert!((ratio - 2.0/6.0).abs() < 0.01, "Ethylbenzene should have ratio ~0.33");
+        assert!(
+            (ratio - 2.0 / 6.0).abs() < 0.01,
+            "Ethylbenzene should have ratio ~0.33"
+        );
     }
 
     // VAdjMa Tests

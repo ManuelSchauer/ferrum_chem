@@ -8,11 +8,18 @@ High-performance QSAR (Quantitative Structure-Activity Relationship) engine for 
 Current parity validation is run in `--release` mode and is now descriptor-local rather than parser/aromaticity-wide:
 
 - Scalar parity: **10976/11000 = 99.78%**
-- Ring parity: **1919/2000 = 95.95%**
-- VSA parity: **17975/18000 = 99.86%**
-- Chi/Kappa parity: **4905/5000 = 98.10%**
-- Exact on the 500-row RDKit slice: **AromaticAtomCount, AromaticRingCount, AromaticRings(RT), HBondAcceptor, NumAmideBonds, QED, RotatableBonds**
-- Remaining highest-value work: **Ipc**, independent ring semantics (**AliphaticRings / SaturatedRings / TotalRings**), and higher-order connectivity descriptors (**Chi3v / Chi4v / Kappa3**)
+- Ring parity: **2000/2000 = 100.0%**
+- VSA parity: **18000/18000 = 100.0%**
+- Chi/Kappa parity: **5000/5000 = 100.0%**
+- 1000-row scalar audit: **21945/22000 = 99.75%**
+- 1000-row ring audit: **3998/4000 = 99.95%**
+- 1000-row VSA audit: **35988/36000 = 99.97%**
+- 1000-row Chi/Kappa audit: **10000/10000 = 100.0%**
+- Exact on the 500-row RDKit slice: **AromaticAtomCount, AromaticRingCount, AliphaticRings, AromaticRings(RT), SaturatedRings, TotalRings, HBondAcceptor, NumAmideBonds, QED, RotatableBonds, Chi3v, Chi4v, Kappa3**
+- Exact on the 1000-row audit: **FractionCSP3, HallKierAlpha, all Chi/Kappa values, all PEOE_VSA bins**
+- Remaining validated 500-row gap: **Ipc**
+- Highest-value non-Ipc cleanup: fused heteroaromatic `CNP0594395.1` aromaticity/ring/HBA/amide/VSA cascade
+- Exact `Ipc` emulation is currently deferred for ML use because the mismatch appears NumPy/Accelerate-specific rather than chemical
 
 The detailed phase-by-phase implementation history remains below; the immediate roadmap is now focused on those remaining descriptor mismatches before returning to broader platform work like the TUI and infrastructure phases.
 
@@ -646,11 +653,10 @@ Before tackling Gasteiger charges (2 weeks) or 3D conformers (3 weeks), we have 
 ---
 
 **Last Updated**: March 2026  
-**Status**: Phase 13 complete; RDKit parity push now at scalar **99.78%**, ring **95.95%**, VSA **99.86%**, Chi/Kappa **98.10%**  
-**Validation**: release-mode parser / SMARTS / descriptor suites plus RDKit scalar, ring, VSA, and Chi/Kappa parity runs ✅  
+**Status**: Phase 13 complete; RDKit parity push now at 500-row scalar **99.78%**, ring **100.0%**, VSA **100.0%**, Chi/Kappa **100.0%** and 1000-row scalar **99.75%**, ring **99.95%**, VSA **99.97%**, Chi/Kappa **100.0%**  
+**Validation**: release-mode parser / SMARTS / descriptor suites plus RDKit scalar, ring, VSA, and Chi/Kappa parity runs and 1000-row audits ✅  
 **Descriptors**: 72 implementations, 17,710+ dimensions  
 **ML Pipeline**: QsarDataset, Scalers, PCA, k-NN, RF, PLS, ElasticNet, ART-2A, AD, QsarPipeline, AutoQsar, CV, Metrics  
 **API**: Single `Descriptor` trait with `DescriptorValue` enum returns  
-**Next Priority**: Close the remaining **Ipc**, **AliphaticRings / SaturatedRings / TotalRings**, and **Chi3v / Chi4v / Kappa3** gaps before resuming Phase 14  
+**Next Priority**: Close the fused heteroaromatic `CNP0594395.1` cluster before resuming Phase 14; keep exact **Ipc** emulation deferred unless exact RDKit parity becomes a hard requirement  
 **Code**: ~20,500+ lines Rust
-

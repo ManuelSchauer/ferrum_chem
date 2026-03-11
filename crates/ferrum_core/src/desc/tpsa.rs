@@ -4,9 +4,9 @@
 //! and blood-brain barrier penetration. It's defined as the sum of surfaces of
 //! polar atoms (usually oxygen and nitrogen) in a molecule.
 //!
-//! Reference: Ertl, P., Rohde, B., & Selzer, P. (2000). Fast calculation of 
-//! molecular polar surface area as a sum of fragment-based contributions and 
-//! its application to the prediction of drug transport properties. 
+//! Reference: Ertl, P., Rohde, B., & Selzer, P. (2000). Fast calculation of
+//! molecular polar surface area as a sum of fragment-based contributions and
+//! its application to the prediction of drug transport properties.
 //! Journal of medicinal chemistry, 43(20), 3714-3717.
 //!
 //! ## Implementation
@@ -18,7 +18,7 @@
 //! - TPSA ≤ 60 Ų: Good blood-brain barrier penetration
 //! - TPSA > 140 Ų: Poor oral absorption
 
-use super::typed::{DescriptorValue, Descriptor};
+use super::typed::{Descriptor, DescriptorValue};
 use crate::mol::molecule::Molecule;
 use crate::types::BondType;
 
@@ -28,24 +28,24 @@ use crate::types::BondType;
 /// Matches RDKit's `CalcTPSA(mol, includeSandP)`.
 pub fn compute_tpsa(mol: &Molecule, include_sp: bool) -> f64 {
     let n_atoms = mol.atoms.len();
-    
+
     // Count bond types for each atom (excluding H bonds)
-    let mut n_nbrs = vec![0i32; n_atoms];  // Total neighbors (degree)
-    let mut n_sing = vec![0i32; n_atoms];  // Single bonds
-    let mut n_doub = vec![0i32; n_atoms];  // Double bonds
-    let mut n_trip = vec![0i32; n_atoms];  // Triple bonds
-    let mut n_arom = vec![0i32; n_atoms];  // Aromatic bonds
-    let mut n_hs = vec![0i32; n_atoms];    // Hydrogen count
-    
+    let mut n_nbrs = vec![0i32; n_atoms]; // Total neighbors (degree)
+    let mut n_sing = vec![0i32; n_atoms]; // Single bonds
+    let mut n_doub = vec![0i32; n_atoms]; // Double bonds
+    let mut n_trip = vec![0i32; n_atoms]; // Triple bonds
+    let mut n_arom = vec![0i32; n_atoms]; // Aromatic bonds
+    let mut n_hs = vec![0i32; n_atoms]; // Hydrogen count
+
     // Count bonds (following RDKit's exact algorithm)
     for bond in &mol.bonds {
         let begin = bond.source as usize;
         let end = bond.target as usize;
-        
+
         // Skip H-X bonds (hydrogens handled separately)
         let begin_is_h = mol.atoms[begin].atomic_number == 1;
         let end_is_h = mol.atoms[end].atomic_number == 1;
-        
+
         if begin_is_h && !end_is_h {
             n_hs[end] += 1;
         } else if end_is_h && !begin_is_h {
@@ -85,40 +85,48 @@ pub fn compute_tpsa(mol: &Molecule, include_sp: bool) -> f64 {
             n_nbrs[end] += 1;
         }
     }
-    
+
     // Add hydrogens (both implicit and explicit from bracket notation)
     for i in 0..n_atoms {
         let atom = &mol.atoms[i];
         n_hs[i] += atom.total_h() as i32;
     }
-    
+
     let mut tpsa = 0.0;
-    
+
     // Calculate TPSA contribution for each atom
     for i in 0..n_atoms {
         let atom = &mol.atoms[i];
         let atomic_num = atom.atomic_number as u32;
-        
+
         // Only process N, O, S, P
-        if atomic_num != 7 && atomic_num != 8 &&
-           (!include_sp || (atomic_num != 15 && atomic_num != 16)) {
+        if atomic_num != 7
+            && atomic_num != 8
+            && (!include_sp || (atomic_num != 15 && atomic_num != 16))
+        {
             continue;
         }
-        
+
         let chg = atom.formal_charge;
         let in_3_ring = is_in_3_ring(mol, i);
-        
+
         let contribution = match atomic_num {
-            7 => calculate_n_contribution(n_nbrs[i], n_hs[i], chg, n_sing[i], n_doub[i], n_trip[i], n_arom[i], in_3_ring),
-            8 => calculate_o_contribution(n_nbrs[i], n_hs[i], chg, n_sing[i], n_doub[i], n_arom[i], in_3_ring),
+            7 => calculate_n_contribution(
+                n_nbrs[i], n_hs[i], chg, n_sing[i], n_doub[i], n_trip[i], n_arom[i], in_3_ring,
+            ),
+            8 => calculate_o_contribution(
+                n_nbrs[i], n_hs[i], chg, n_sing[i], n_doub[i], n_arom[i], in_3_ring,
+            ),
             15 => calculate_p_contribution(n_nbrs[i], n_hs[i], chg, n_sing[i], n_doub[i]),
-            16 => calculate_s_contribution(n_nbrs[i], n_hs[i], chg, n_sing[i], n_doub[i], n_arom[i]),
+            16 => {
+                calculate_s_contribution(n_nbrs[i], n_hs[i], chg, n_sing[i], n_doub[i], n_arom[i])
+            }
             _ => 0.0,
         };
-        
+
         tpsa += contribution;
     }
-    
+
     tpsa
 }
 
@@ -129,7 +137,11 @@ fn is_in_3_ring(mol: &Molecule, atom_idx: usize) -> bool {
         .iter()
         .map(|&bi| {
             let b = &mol.bonds[bi as usize];
-            if b.source as usize == atom_idx { b.target as usize } else { b.source as usize }
+            if b.source as usize == atom_idx {
+                b.target as usize
+            } else {
+                b.source as usize
+            }
         })
         .collect();
     for i in 0..nbrs.len() {
@@ -146,32 +158,41 @@ fn is_in_3_ring(mol: &Molecule, atom_idx: usize) -> bool {
 }
 
 /// Calculate nitrogen contribution (exact RDKit algorithm)
-fn calculate_n_contribution(n_nbrs: i32, n_hs: i32, chg: i8, n_sing: i32, n_doub: i32, n_trip: i32, n_arom: i32, in_3_ring: bool) -> f64 {
+fn calculate_n_contribution(
+    n_nbrs: i32,
+    n_hs: i32,
+    chg: i8,
+    n_sing: i32,
+    n_doub: i32,
+    n_trip: i32,
+    n_arom: i32,
+    in_3_ring: bool,
+) -> f64 {
     match n_nbrs {
         1 => {
             if n_hs == 0 && chg == 0 && n_trip == 1 {
-                23.79  // -C≡N (nitrile)
+                23.79 // -C≡N (nitrile)
             } else if n_hs == 1 && chg == 0 && n_doub == 1 {
-                23.85  // =NH (imine with H)
+                23.85 // =NH (imine with H)
             } else if n_hs == 2 && chg == 0 && n_sing == 1 {
-                26.02  // -NH2 (primary amine)
+                26.02 // -NH2 (primary amine)
             } else if n_hs == 2 && chg == 1 && n_doub == 1 {
-                25.59  // =NH2+ (protonated imine)
+                25.59 // =NH2+ (protonated imine)
             } else if n_hs == 3 && chg == 1 && n_sing == 1 {
-                27.64  // -NH3+ (ammonium)
+                27.64 // -NH3+ (ammonium)
             } else {
                 fallback_n(n_nbrs, n_hs)
             }
         }
         2 => {
             if n_hs == 0 && chg == 0 && n_sing == 1 && n_doub == 1 {
-                12.36  // -N= (imine)
+                12.36 // -N= (imine)
             } else if n_hs == 0 && chg == 0 && n_trip == 1 && n_doub == 1 {
-                13.60  // -N≡+ or similar
+                13.60 // -N≡+ or similar
             } else if n_hs == 1 && chg == 0 && n_sing == 2 && in_3_ring {
-                21.94  // -NH- in 3-membered ring
+                21.94 // -NH- in 3-membered ring
             } else if n_hs == 1 && chg == 0 && n_sing == 2 && !in_3_ring {
-                12.03  // -NH- (secondary amine)
+                12.03 // -NH- (secondary amine)
             } else if n_hs == 0 && chg == 1 && n_trip == 1 && n_sing == 1 {
                 4.36
             } else if n_hs == 1 && chg == 1 && n_doub == 1 && n_sing == 1 {
@@ -179,32 +200,32 @@ fn calculate_n_contribution(n_nbrs: i32, n_hs: i32, chg: i8, n_sing: i32, n_doub
             } else if n_hs == 2 && chg == 1 && n_sing == 2 {
                 16.61
             } else if n_hs == 0 && chg == 0 && n_arom == 2 {
-                12.89  // =n- (aromatic imine, pyridine)
+                12.89 // =n- (aromatic imine, pyridine)
             } else if n_hs == 1 && chg == 0 && n_arom == 2 {
-                15.79  // -nH (aromatic pyrrole)
+                15.79 // -nH (aromatic pyrrole)
             } else if n_hs == 1 && chg == 1 && n_arom == 2 {
-                14.14  // -nH+ (protonated aromatic)
+                14.14 // -nH+ (protonated aromatic)
             } else {
                 fallback_n(n_nbrs, n_hs)
             }
         }
         3 => {
             if n_hs == 0 && chg == 0 && n_sing == 3 && in_3_ring {
-                3.01  // N in 3-membered ring
+                3.01 // N in 3-membered ring
             } else if n_hs == 0 && chg == 0 && n_sing == 3 && !in_3_ring {
-                3.24  // >N- (tertiary amine)
+                3.24 // >N- (tertiary amine)
             } else if n_hs == 0 && chg == 0 && n_sing == 1 && n_doub == 2 {
-                11.68  // -N(=O)=O (nitro N, neutral)
+                11.68 // -N(=O)=O (nitro N, neutral)
             } else if n_hs == 0 && chg == 1 && n_sing == 2 && n_doub == 1 {
-                3.01  // >N+=O (N-oxide)
+                3.01 // >N+=O (N-oxide)
             } else if n_hs == 1 && chg == 1 && n_sing == 3 {
                 4.44
             } else if n_hs == 0 && chg == 0 && n_arom == 3 {
-                4.41  // aromatic N with 3 aromatic bonds
+                4.41 // aromatic N with 3 aromatic bonds
             } else if n_hs == 0 && chg == 0 && n_sing == 1 && n_arom == 2 {
-                4.93  // -n< (N-alkylated aromatic)
+                4.93 // -n< (N-alkylated aromatic)
             } else if n_hs == 0 && chg == 0 && n_doub == 1 && n_arom == 2 {
-                8.39  // =n< (aromatic with exocyclic double bond)
+                8.39 // =n< (aromatic with exocyclic double bond)
             } else if n_hs == 0 && chg == 1 && n_arom == 3 {
                 4.10
             } else if n_hs == 0 && chg == 1 && n_sing == 1 && n_arom == 2 {
@@ -215,12 +236,12 @@ fn calculate_n_contribution(n_nbrs: i32, n_hs: i32, chg: i8, n_sing: i32, n_doub
         }
         4 => {
             if n_hs == 0 && n_sing == 4 && chg == 1 {
-                0.0  // R4N+ (quaternary ammonium)
+                0.0 // R4N+ (quaternary ammonium)
             } else {
                 fallback_n(n_nbrs, n_hs)
             }
         }
-        _ => fallback_n(n_nbrs, n_hs)
+        _ => fallback_n(n_nbrs, n_hs),
     }
 }
 
@@ -231,31 +252,39 @@ fn fallback_n(n_nbrs: i32, n_hs: i32) -> f64 {
 }
 
 /// Calculate oxygen contribution (exact RDKit algorithm)
-fn calculate_o_contribution(n_nbrs: i32, n_hs: i32, chg: i8, n_sing: i32, n_doub: i32, n_arom: i32, in_3_ring: bool) -> f64 {
+fn calculate_o_contribution(
+    n_nbrs: i32,
+    n_hs: i32,
+    chg: i8,
+    n_sing: i32,
+    n_doub: i32,
+    n_arom: i32,
+    in_3_ring: bool,
+) -> f64 {
     match n_nbrs {
         1 => {
             if n_hs == 0 && chg == 0 && n_doub == 1 {
-                17.07  // =O (carbonyl)
+                17.07 // =O (carbonyl)
             } else if n_hs == 1 && chg == 0 && n_sing == 1 {
-                20.23  // -OH (hydroxyl)
+                20.23 // -OH (hydroxyl)
             } else if n_hs == 0 && chg == -1 && n_sing == 1 {
-                23.06  // -O- (negatively charged, carboxylate)
+                23.06 // -O- (negatively charged, carboxylate)
             } else {
                 fallback_o(n_nbrs, n_hs)
             }
         }
         2 => {
             if n_hs == 0 && chg == 0 && n_sing == 2 && in_3_ring {
-                12.53  // O in 3-membered ring (epoxide)
+                12.53 // O in 3-membered ring (epoxide)
             } else if n_hs == 0 && chg == 0 && n_sing == 2 && !in_3_ring {
-                9.23  // -O- (ether)
+                9.23 // -O- (ether)
             } else if n_hs == 0 && chg == 0 && n_arom == 2 {
-                13.14  // o (aromatic oxygen, furan)
+                13.14 // o (aromatic oxygen, furan)
             } else {
                 fallback_o(n_nbrs, n_hs)
             }
         }
-        _ => fallback_o(n_nbrs, n_hs)
+        _ => fallback_o(n_nbrs, n_hs),
     }
 }
 
@@ -291,27 +320,34 @@ fn calculate_p_contribution(n_nbrs: i32, n_hs: i32, chg: i8, n_sing: i32, n_doub
                 0.0
             }
         }
-        _ => 0.0
+        _ => 0.0,
     }
 }
 
 /// Calculate sulfur contribution (exact RDKit algorithm)
-fn calculate_s_contribution(n_nbrs: i32, n_hs: i32, chg: i8, n_sing: i32, n_doub: i32, n_arom: i32) -> f64 {
+fn calculate_s_contribution(
+    n_nbrs: i32,
+    n_hs: i32,
+    chg: i8,
+    n_sing: i32,
+    n_doub: i32,
+    n_arom: i32,
+) -> f64 {
     match n_nbrs {
         1 => {
             if n_hs == 0 && chg == 0 && n_doub == 1 {
-                32.09  // =S (thione)
+                32.09 // =S (thione)
             } else if n_hs == 1 && chg == 0 && n_sing == 1 {
-                38.80  // -SH (thiol)
+                38.80 // -SH (thiol)
             } else {
                 0.0
             }
         }
         2 => {
             if n_hs == 0 && chg == 0 && n_sing == 2 {
-                25.30  // -S- (thioether)
+                25.30 // -S- (thioether)
             } else if n_hs == 0 && chg == 0 && n_arom == 2 {
-                28.24  // s (aromatic sulfur, thiophene)
+                28.24 // s (aromatic sulfur, thiophene)
             } else {
                 0.0
             }
@@ -320,19 +356,19 @@ fn calculate_s_contribution(n_nbrs: i32, n_hs: i32, chg: i8, n_sing: i32, n_doub
             if n_hs == 0 && chg == 0 && n_arom == 2 && n_doub == 1 {
                 21.70
             } else if n_hs == 0 && chg == 0 && n_sing == 2 && n_doub == 1 {
-                19.21  // sulfoxide
+                19.21 // sulfoxide
             } else {
                 0.0
             }
         }
         4 => {
             if n_hs == 0 && chg == 0 && n_sing == 2 && n_doub == 2 {
-                8.38  // sulfone
+                8.38 // sulfone
             } else {
                 0.0
             }
         }
-        _ => 0.0
+        _ => 0.0,
     }
 }
 
@@ -402,10 +438,10 @@ mod tests {
             ("NC(=O)c1ccccc1", "Benzamide", 43.09),
             ("Oc1ccccc1O", "Catechol", 40.46),
         ];
-        
+
         let mut failures = Vec::new();
         let mut count = 0;
-        
+
         for (smi, name, expected) in &cases {
             match parse_smiles(smi) {
                 Ok(mol) => {
@@ -413,7 +449,9 @@ mod tests {
                     let err = (got - expected).abs();
                     count += 1;
                     if err > 0.01 {
-                        failures.push(format!("{name}: got {got:.2}, expected {expected:.2}, err {err:.2}"));
+                        failures.push(format!(
+                            "{name}: got {got:.2}, expected {expected:.2}, err {err:.2}"
+                        ));
                     }
                 }
                 Err(e) => {
@@ -421,16 +459,20 @@ mod tests {
                 }
             }
         }
-        
+
         if !failures.is_empty() {
             println!("\nTPSA Failures ({}/{count}):", failures.len());
             for f in &failures {
                 println!("  {f}");
             }
         }
-        
-        assert!(failures.is_empty(), 
-                "TPSA mismatches ({}/{count}):\n{}", failures.len(), failures.join("\n"));
+
+        assert!(
+            failures.is_empty(),
+            "TPSA mismatches ({}/{count}):\n{}",
+            failures.len(),
+            failures.join("\n")
+        );
     }
 
     #[test]
@@ -508,7 +550,10 @@ mod tests {
         // Epoxides: O in 3-ring → 12.53 (vs 9.23 for normal ether)
         assert!((tpsa("C1CO1") - 12.53).abs() < 0.01, "ethylene oxide");
         assert!((tpsa("CC1CO1") - 12.53).abs() < 0.01, "propylene oxide");
-        assert!((tpsa("c1ccc(C2CO2)cc1") - 12.53).abs() < 0.01, "styrene oxide");
+        assert!(
+            (tpsa("c1ccc(C2CO2)cc1") - 12.53).abs() < 0.01,
+            "styrene oxide"
+        );
         // glycidol: epoxide O (12.53) + hydroxyl OH (20.23) = 32.76
         assert!((tpsa("OCC1CO1") - 32.76).abs() < 0.01, "glycidol");
     }
@@ -522,17 +567,35 @@ mod tests {
         // >N- in 3-ring → 3.01 (vs 3.24 for normal tertiary amine)
         assert!((tpsa("CN1CC1") - 3.01).abs() < 0.01, "N-methylaziridine");
         // aziridine-2-carboxamide: NH-3ring (21.94) + amide C(=O)N (43.09) = 65.03
-        assert!((tpsa("O=C(N)C1CN1") - 65.03).abs() < 0.01, "aziridine-2-carboxamide");
+        assert!(
+            (tpsa("O=C(N)C1CN1") - 65.03).abs() < 0.01,
+            "aziridine-2-carboxamide"
+        );
     }
 
     #[test]
     fn test_tpsa_3ring_vs_larger_rings() {
         // Confirm non-3-ring molecules get normal (non-3-ring) values
-        assert!((tpsa("C1CCO1") - 9.23).abs() < 0.01, "oxetane (4-ring O → 9.23 ether)");
-        assert!((tpsa("C1CCOC1") - 9.23).abs() < 0.01, "THF (5-ring O → 9.23 ether)");
-        assert!((tpsa("C1CCN1") - 12.03).abs() < 0.01, "azetidine (4-ring N → 12.03)");
-        assert!((tpsa("C1CCNCC1") - 12.03).abs() < 0.01, "piperidine (6-ring N → 12.03)");
-        assert!((tpsa("C1COCCN1") - 21.26).abs() < 0.01, "morpholine (O + NH → 9.23 + 12.03)");
+        assert!(
+            (tpsa("C1CCO1") - 9.23).abs() < 0.01,
+            "oxetane (4-ring O → 9.23 ether)"
+        );
+        assert!(
+            (tpsa("C1CCOC1") - 9.23).abs() < 0.01,
+            "THF (5-ring O → 9.23 ether)"
+        );
+        assert!(
+            (tpsa("C1CCN1") - 12.03).abs() < 0.01,
+            "azetidine (4-ring N → 12.03)"
+        );
+        assert!(
+            (tpsa("C1CCNCC1") - 12.03).abs() < 0.01,
+            "piperidine (6-ring N → 12.03)"
+        );
+        assert!(
+            (tpsa("C1COCCN1") - 21.26).abs() < 0.01,
+            "morpholine (O + NH → 9.23 + 12.03)"
+        );
     }
 }
 

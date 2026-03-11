@@ -53,7 +53,11 @@ impl Pca {
         indices.sort_by(|&a, &b| eigenvalues[b].partial_cmp(&eigenvalues[a]).unwrap());
 
         let total_var: f64 = eigenvalues.iter().sum();
-        let total_var = if total_var.abs() < 1e-15 { 1.0 } else { total_var };
+        let total_var = if total_var.abs() < 1e-15 {
+            1.0
+        } else {
+            total_var
+        };
 
         let mut components = Array2::<f64>::zeros((nc, p));
         let mut explained_variance = Array1::<f64>::zeros(nc);
@@ -84,7 +88,8 @@ impl Pca {
         for i in 0..n {
             let centered = &data.row(i).to_owned() - &self.mean;
             for j in 0..nc {
-                let dot: f64 = centered.iter()
+                let dot: f64 = centered
+                    .iter()
                     .zip(self.components.row(j).iter())
                     .map(|(&a, &b)| a * b)
                     .sum();
@@ -212,13 +217,11 @@ mod tests {
     #[test]
     fn test_pca_basic() {
         // 2D data with clear principal axis along x=y
-        let data = Array2::from_shape_vec((5, 2), vec![
-            1.0, 1.0,
-            2.0, 2.0,
-            3.0, 3.0,
-            4.0, 4.0,
-            5.0, 5.0,
-        ]).unwrap();
+        let data = Array2::from_shape_vec(
+            (5, 2),
+            vec![1.0, 1.0, 2.0, 2.0, 3.0, 3.0, 4.0, 4.0, 5.0, 5.0],
+        )
+        .unwrap();
         let pca = Pca::fit(&data, 2);
         assert_eq!(pca.n_components(), 2);
         // First component should explain nearly all variance
@@ -227,12 +230,11 @@ mod tests {
 
     #[test]
     fn test_pca_dimensionality_reduction() {
-        let data = Array2::from_shape_vec((4, 3), vec![
-            1.0, 2.0, 3.0,
-            2.0, 4.0, 6.0,
-            3.0, 6.0, 9.0,
-            4.0, 8.0, 12.0,
-        ]).unwrap();
+        let data = Array2::from_shape_vec(
+            (4, 3),
+            vec![1.0, 2.0, 3.0, 2.0, 4.0, 6.0, 3.0, 6.0, 9.0, 4.0, 8.0, 12.0],
+        )
+        .unwrap();
         let (pca, transformed) = Pca::fit_transform(&data, 1);
         assert_eq!(transformed.ncols(), 1);
         // Reconstruction should be close to original for rank-1 data
@@ -242,7 +244,8 @@ mod tests {
                 assert!(
                     (reconstructed[[i, j]] - data[[i, j]]).abs() < 1e-6,
                     "Reconstruction error at [{i},{j}]: {} vs {}",
-                    reconstructed[[i, j]], data[[i, j]]
+                    reconstructed[[i, j]],
+                    data[[i, j]]
                 );
             }
         }
@@ -250,14 +253,14 @@ mod tests {
 
     #[test]
     fn test_pca_transform_dimensions() {
-        let data = Array2::from_shape_vec((6, 4), vec![
-            1.0, 0.0, 0.0, 0.0,
-            0.0, 1.0, 0.0, 0.0,
-            0.0, 0.0, 1.0, 0.0,
-            1.0, 1.0, 0.0, 0.0,
-            0.0, 1.0, 1.0, 0.0,
-            1.0, 0.0, 1.0, 0.0,
-        ]).unwrap();
+        let data = Array2::from_shape_vec(
+            (6, 4),
+            vec![
+                1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0, 0.0,
+                0.0, 1.0, 1.0, 0.0, 1.0, 0.0, 1.0, 0.0,
+            ],
+        )
+        .unwrap();
         let (_, transformed) = Pca::fit_transform(&data, 2);
         assert_eq!(transformed.nrows(), 6);
         assert_eq!(transformed.ncols(), 2);

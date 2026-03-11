@@ -20,11 +20,7 @@ impl QsarDataset {
     /// Create a new dataset from features, targets, and feature names.
     ///
     /// Panics if dimensions are inconsistent.
-    pub fn new(
-        features: Array2<f64>,
-        targets: Array1<f64>,
-        feature_names: Vec<String>,
-    ) -> Self {
+    pub fn new(features: Array2<f64>, targets: Array1<f64>, feature_names: Vec<String>) -> Self {
         assert_eq!(
             features.nrows(),
             targets.len(),
@@ -119,7 +115,9 @@ impl QsarDataset {
         let mut names = Vec::with_capacity(n_new);
 
         for (new_j, &old_j) in col_indices.iter().enumerate() {
-            features.column_mut(new_j).assign(&self.features.column(old_j));
+            features
+                .column_mut(new_j)
+                .assign(&self.features.column(old_j));
             names.push(self.feature_names[old_j].clone());
         }
 
@@ -135,7 +133,7 @@ impl QsarDataset {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ndarray::{array, Array2};
+    use ndarray::{Array2, array};
 
     #[test]
     fn test_new_dataset() {
@@ -160,7 +158,8 @@ mod tests {
 
     #[test]
     fn test_subset() {
-        let features = Array2::from_shape_vec((4, 2), vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]).unwrap();
+        let features =
+            Array2::from_shape_vec((4, 2), vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]).unwrap();
         let targets = array![0.1, 0.2, 0.3, 0.4];
         let names = vec!["f1".into(), "f2".into()];
         let ds = QsarDataset::new(features, targets, names);

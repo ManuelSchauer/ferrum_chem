@@ -1,9 +1,9 @@
 //! Cross-validation — K-Fold, Leave-One-Out, Y-randomization.
 
 use crate::ml::dataset::QsarDataset;
-use rand::seq::SliceRandom;
 use rand::SeedableRng;
 use rand::rngs::StdRng;
+use rand::seq::SliceRandom;
 
 /// K-Fold cross-validation split indices.
 pub struct KFoldSplits {
@@ -28,7 +28,8 @@ pub fn k_fold(n_samples: usize, k: usize, seed: u64) -> KFoldSplits {
     for i in 0..k {
         let end = start + fold_size + if i < remainder { 1 } else { 0 };
         let test_indices: Vec<usize> = indices[start..end].to_vec();
-        let train_indices: Vec<usize> = indices[..start].iter()
+        let train_indices: Vec<usize> = indices[..start]
+            .iter()
             .chain(indices[end..].iter())
             .copied()
             .collect();

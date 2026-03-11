@@ -19,7 +19,11 @@ pub fn rank_atoms(mol: &Molecule) -> Vec<usize> {
             let mut nbr_ranks: Vec<u64> = Vec::new();
             for &bi in &mol.adjacency[i] {
                 let b = &mol.bonds[bi as usize];
-                let nbr = if b.source as usize == i { b.target as usize } else { b.source as usize };
+                let nbr = if b.source as usize == i {
+                    b.target as usize
+                } else {
+                    b.source as usize
+                };
                 nbr_ranks.push(rank[nbr]);
             }
             nbr_ranks.sort();
@@ -31,7 +35,12 @@ pub fn rank_atoms(mol: &Molecule) -> Vec<usize> {
             new_rank[i] = h;
         }
         // Compress to sequential ranks
-        let mut sorted: Vec<(u64, usize)> = new_rank.iter().copied().enumerate().map(|(i, v)| (v, i)).collect();
+        let mut sorted: Vec<(u64, usize)> = new_rank
+            .iter()
+            .copied()
+            .enumerate()
+            .map(|(i, v)| (v, i))
+            .collect();
         sorted.sort();
         let mut compressed = vec![0usize; n];
         let mut cur_rank = 0;

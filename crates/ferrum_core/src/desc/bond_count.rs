@@ -94,7 +94,11 @@ pub fn compute_rotatable_bond_count(mol: &Molecule) -> u32 {
     count
 }
 
-fn is_tert_butyl_like_rotor_blocked(mol: &Molecule, bond_idx: usize, heavy_degree: &[usize]) -> bool {
+fn is_tert_butyl_like_rotor_blocked(
+    mol: &Molecule,
+    bond_idx: usize,
+    heavy_degree: &[usize],
+) -> bool {
     let bond = &mol.bonds[bond_idx];
     let a = bond.source as usize;
     let b = bond.target as usize;
@@ -109,7 +113,11 @@ fn is_tert_butyl_like_center(
     heavy_degree: &[usize],
 ) -> bool {
     let atom = &mol.atoms[center_idx];
-    if atom.atomic_number != 6 || atom.is_aromatic() || atom.is_in_ring() || heavy_degree[center_idx] != 4 {
+    if atom.atomic_number != 6
+        || atom.is_aromatic()
+        || atom.is_in_ring()
+        || heavy_degree[center_idx] != 4
+    {
         return false;
     }
 
@@ -308,7 +316,8 @@ fn is_carbonyl_os_single_bond(mol: &Molecule, bond_idx: usize) -> bool {
             b2.source as usize
         };
 
-        if b2.bond_type == BondType::Double && matches!(mol.atoms[other].atomic_number, 7 | 8 | 16) {
+        if b2.bond_type == BondType::Double && matches!(mol.atoms[other].atomic_number, 7 | 8 | 16)
+        {
             has_conjugated_hetero_double = true;
             continue;
         }
@@ -338,8 +347,7 @@ fn is_restricted_conjugated_carbon_n_bond(mol: &Molecule, bond_idx: usize) -> bo
     };
 
     let n = &mol.atoms[n_idx];
-    n.formal_charge == 0
-        && is_restricted_conjugated_center_for_n(mol, c_idx, n_idx)
+    n.formal_charge == 0 && is_restricted_conjugated_center_for_n(mol, c_idx, n_idx)
 }
 
 fn is_restricted_conjugated_center_for_n(mol: &Molecule, carbon_idx: usize, n_idx: usize) -> bool {
@@ -358,7 +366,9 @@ fn is_restricted_conjugated_center_for_n(mol: &Molecule, carbon_idx: usize, n_id
             bond.source as usize
         };
 
-        if bond.bond_type == BondType::Double && matches!(mol.atoms[other].atomic_number, 7 | 8 | 16) {
+        if bond.bond_type == BondType::Double
+            && matches!(mol.atoms[other].atomic_number, 7 | 8 | 16)
+        {
             has_conjugated_hetero_double = true;
             continue;
         }
@@ -371,7 +381,11 @@ fn is_restricted_conjugated_center_for_n(mol: &Molecule, carbon_idx: usize, n_id
     has_conjugated_hetero_double && has_other_heavy_substituent
 }
 
-fn is_conjugated_nitrogen_pair_bond(mol: &Molecule, bond_idx: usize, conjugated_n: &[bool]) -> bool {
+fn is_conjugated_nitrogen_pair_bond(
+    mol: &Molecule,
+    bond_idx: usize,
+    conjugated_n: &[bool],
+) -> bool {
     let bond = &mol.bonds[bond_idx];
     if bond.bond_type != BondType::Single || bond.is_aromatic() {
         return false;

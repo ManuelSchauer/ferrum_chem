@@ -14,10 +14,15 @@ pub enum BondType {
     Triple,
     Aromatic,
     Dative,
-    Unknown
+    Unknown,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Hybridization {
-    SP, SP2, SP3, SP3D, SP3D2, Unspecified
+    SP,
+    SP2,
+    SP3,
+    SP3D,
+    SP3D2,
+    Unspecified,
 }

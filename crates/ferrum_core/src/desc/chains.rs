@@ -9,7 +9,7 @@
 //! - Lipophilicity
 //! - Molecular complexity
 
-use super::typed::{DescriptorValue, Descriptor};
+use super::typed::{Descriptor, DescriptorValue};
 use crate::mol::molecule::Molecule;
 use crate::types::AtomIdx;
 use std::collections::HashSet;
@@ -29,45 +29,47 @@ impl LongestAliphaticChain {
         depth: usize,
     ) -> usize {
         visited.insert(current);
-        
+
         let mut max_length = depth;
-        
+
         for &neighbor_idx in &mol.adjacency[current as usize] {
             if visited.contains(&neighbor_idx) {
                 continue;
             }
-            
+
             let neighbor = &mol.atoms[neighbor_idx as usize];
-            
+
             if neighbor.atomic_number == 6 && !neighbor.is_aromatic() {
                 let length = Self::dfs_aliphatic(mol, neighbor_idx, visited, depth + 1);
                 max_length = max_length.max(length);
             }
         }
-        
+
         visited.remove(&current);
         max_length
     }
 
     fn compute(mol: &Molecule) -> u32 {
         let mut max_chain = 0;
-        
+
         for i in 0..mol.atoms.len() {
             let atom = &mol.atoms[i];
-            
+
             if atom.atomic_number == 6 && !atom.is_aromatic() {
                 let mut visited = HashSet::new();
                 let length = Self::dfs_aliphatic(mol, i as AtomIdx, &mut visited, 1);
                 max_chain = max_chain.max(length);
             }
         }
-        
+
         max_chain as u32
     }
 }
 
 impl Descriptor for LongestAliphaticChain {
-    fn name(&self) -> &str { "LongestAliphaticChain" }
+    fn name(&self) -> &str {
+        "LongestAliphaticChain"
+    }
 
     fn calculate(&self, mol: &mut Molecule) -> DescriptorValue {
         DescriptorValue::Int(Self::compute(mol))
@@ -89,35 +91,37 @@ impl LargestChain {
         depth: usize,
     ) -> usize {
         visited.insert(current);
-        
+
         let mut max_length = depth;
-        
+
         for &neighbor_idx in &mol.adjacency[current as usize] {
             if !visited.contains(&neighbor_idx) {
                 let length = Self::dfs_any(mol, neighbor_idx, visited, depth + 1);
                 max_length = max_length.max(length);
             }
         }
-        
+
         visited.remove(&current);
         max_length
     }
 
     fn compute(mol: &Molecule) -> u32 {
         let mut max_chain = 0;
-        
+
         for i in 0..mol.atoms.len() {
             let mut visited = HashSet::new();
             let length = Self::dfs_any(mol, i as AtomIdx, &mut visited, 1);
             max_chain = max_chain.max(length);
         }
-        
+
         max_chain as u32
     }
 }
 
 impl Descriptor for LargestChain {
-    fn name(&self) -> &str { "LargestChain" }
+    fn name(&self) -> &str {
+        "LargestChain"
+    }
 
     fn calculate(&self, mol: &mut Molecule) -> DescriptorValue {
         DescriptorValue::Int(Self::compute(mol))
@@ -133,9 +137,9 @@ const _: () = {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::io::smiles::parse_smiles;
-    use crate::algo::valency::assign_implicit_hydrogens;
     use crate::algo::aromaticity::perceive_aromaticity;
+    use crate::algo::valency::assign_implicit_hydrogens;
+    use crate::io::smiles::parse_smiles;
 
     fn parse_and_prepare(smiles: &str) -> Molecule {
         let mut mol = parse_smiles(smiles).unwrap();
@@ -147,31 +151,46 @@ mod tests {
     #[test]
     fn test_longest_aliphatic_chain_linear() {
         let mut mol = parse_and_prepare("CCCCCC");
-        assert_eq!(LongestAliphaticChain.calculate(&mut mol), DescriptorValue::Int(6));
+        assert_eq!(
+            LongestAliphaticChain.calculate(&mut mol),
+            DescriptorValue::Int(6)
+        );
     }
 
     #[test]
     fn test_longest_aliphatic_chain_branched() {
         let mut mol = parse_and_prepare("CC(C)CCC");
-        assert_eq!(LongestAliphaticChain.calculate(&mut mol), DescriptorValue::Int(6));
+        assert_eq!(
+            LongestAliphaticChain.calculate(&mut mol),
+            DescriptorValue::Int(6)
+        );
     }
 
     #[test]
     fn test_longest_aliphatic_chain_aromatic() {
         let mut mol = parse_and_prepare("CCCc1ccccc1");
-        assert_eq!(LongestAliphaticChain.calculate(&mut mol), DescriptorValue::Int(3));
+        assert_eq!(
+            LongestAliphaticChain.calculate(&mut mol),
+            DescriptorValue::Int(3)
+        );
     }
 
     #[test]
     fn test_longest_aliphatic_chain_aromatic_only() {
         let mut mol = parse_and_prepare("c1ccccc1");
-        assert_eq!(LongestAliphaticChain.calculate(&mut mol), DescriptorValue::Int(0));
+        assert_eq!(
+            LongestAliphaticChain.calculate(&mut mol),
+            DescriptorValue::Int(0)
+        );
     }
 
     #[test]
     fn test_longest_aliphatic_chain_complex() {
         let mut mol = parse_and_prepare("CCCCC(CC)CCCC");
-        assert_eq!(LongestAliphaticChain.calculate(&mut mol), DescriptorValue::Int(11));
+        assert_eq!(
+            LongestAliphaticChain.calculate(&mut mol),
+            DescriptorValue::Int(11)
+        );
     }
 
     #[test]

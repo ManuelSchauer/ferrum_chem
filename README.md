@@ -6,14 +6,14 @@
 [![Validation](https://img.shields.io/badge/validation-release--mode%20tracked-brightgreen)]()
 [![RDKit Match](https://img.shields.io/badge/RDKit%20match-100%25%20(1944%2F1944)-brightgreen)]()
 [![500-row scalar](https://img.shields.io/badge/500--row%20scalar-99.78%25-brightgreen)]()
-[![500-row rings](https://img.shields.io/badge/500--row%20rings-95.95%25-yellowgreen)]()
+[![500-row rings](https://img.shields.io/badge/500--row%20rings-100%25-brightgreen)]()
 [![Performance](https://img.shields.io/badge/throughput-1M%2B%20mol%2Fsec-blue)]()
 [![Descriptors](https://img.shields.io/badge/descriptors-72%20typed-blue)]()
 [![Dimensions](https://img.shields.io/badge/dimensions-17.7k-purple)]()
 [![Memory](https://img.shields.io/badge/memory-32x%20reduction-green)]()
 [![SDF parser](https://img.shields.io/badge/SDF%20parser-deferred-yellow)]()
 
-FerrumChem is a blazingly fast molecular descriptor calculation engine designed for machine learning applications in chemistry. Built in Rust for maximum performance and memory efficiency, it can process millions of molecules per second with comprehensive QSAR descriptor coverage.
+FerrumChem is a high-performance molecular descriptor calculation engine designed for machine learning applications in chemistry. Built in Rust for maximum performance and memory efficiency, it parses simple molecules at multi-million-molecule throughput and provides comprehensive QSAR descriptor coverage through a typed Rust API.
 
 ## ✨ Features
 
@@ -21,27 +21,28 @@ FerrumChem is a blazingly fast molecular descriptor calculation engine designed 
 - **⚡ High-performance descriptors**: 72 typed descriptors, 17,710+ dimensions
 - **💾 32x Memory Reduction**: Typed API with bit-packing (67.5 GB → 2.13 GB for 1M mols)
 - **🔬 100% RDKit accuracy**: Validated against 27 torture molecules × 72 descriptors (1944/1944 exact match)
-- **📈 Current 500-row parity**: Scalar 99.78%, VSA 99.86%, Chi/Kappa 98.10%, Rings 95.95%
+- **📈 Current 500-row parity**: Scalar 99.78%, Rings 100.0%, VSA 100.0%, Chi/Kappa 100.0%
+- **📈 Current 1000-row audit**: Scalar 99.75%, Rings 99.95%, VSA 99.97%, Chi/Kappa 100.0%
 - **🔧 Parallel processing**: Built-in Rayon support for batch calculations
 - **📊 ML-ready**: Single `Descriptor` trait + direct ndarray integration
 - **🔒 Thread-safe**: All data structures are `Send + Sync`
 - **✅ Type-safe**: Strongly-typed descriptor values (Int, Float, Binary, etc.)
 
-## 🎯 Status: 99.78% Scalar RDKit Parity on the 500-row Slice ✅
+## 🎯 Status: 500-row parity stable; 1000-row audit now at 99.75% scalar / 100.0% Chi-Kappa ✅
 
 FerrumChem still has **100% RDKit match** across the 27-molecule torture set (**1944/1944**) and now also reaches:
 
-- **Scalar parity**: **10976/11000 = 99.78%**
-- **Ring parity**: **1919/2000 = 95.95%**
-- **VSA parity**: **17975/18000 = 99.86%**
-- **Chi/Kappa parity**: **4905/5000 = 98.10%**
+- **500-row reference slice**: **Scalar 10976/11000 = 99.78%**, **Ring 2000/2000 = 100.0%**, **VSA 18000/18000 = 100.0%**, **Chi/Kappa 5000/5000 = 100.0%**
+- **1000-row audit**: **Scalar 21945/22000 = 99.75%**, **Ring 3998/4000 = 99.95%**, **VSA 35988/36000 = 99.97%**, **Chi/Kappa 10000/10000 = 100.0%**
+- **Latest 1000-row closures**: `FractionCSP3`, `HallKierAlpha`, and all Chi/Kappa values now match RDKit on **1000/1000** molecules; all `PEOE_VSA` bins remain **1000/1000**
 
-The remaining work is now concentrated in a small set of descriptor-local mismatches rather than broad parser or aromaticity issues.
+The only remaining validated gap on the 500-row RDKit comparison slices is `Ipc`. On the broader 1000-row audit, the remaining non-Ipc misses are dominated by one fused heteroaromatic outlier (`CNP0594395.1`) plus one isolated `RotatableBonds` miss; exact `Ipc` emulation is intentionally deferred for ML use because the current mismatch looks NumPy/Accelerate-specific rather than chemical.
 
 ✅ **Implemented**:
 - **72 Typed Descriptors** with DescriptorValue enum (Int, Float, IntVec, IntU16Vec, FloatVec, Binary)
 - **100% RDKit Accuracy**: 1944/1944 descriptor comparisons across 27 challenging molecules (metals, charged species, aromatic edge cases)
-- **500/500 on the 500-row RDKit slice**: AromaticAtomCount, AromaticRingCount, AromaticRings(RT), HBondAcceptor, NumAmideBonds, QED, RotatableBonds
+- **500/500 on the 500-row RDKit slice**: AromaticAtomCount, AromaticRingCount, AliphaticRings, AromaticRings(RT), SaturatedRings, TotalRings, HBondAcceptor, NumAmideBonds, QED, RotatableBonds, Chi3v, Chi4v, Kappa3
+- **1000/1000 on the 1000-row audit**: FractionCSP3, HallKierAlpha, Chi0/0v/1/1v/2v/3v/4v, Kappa1/2/3, and all PEOE_VSA bins
 - **32x Memory Reduction** via bit-packing + type optimization (validated with benchmarks)
 - **Release-mode validation workflow** for parity and focused regression suites
 - **17,710+ Total Dimensions** (17,431 fingerprint bits + 279 continuous)
@@ -61,7 +62,8 @@ The remaining work is now concentrated in a small set of descriptor-local mismat
   - Transition metals: Dative bond detection, extended element tables (Z=1–83)
 
 🚧 **Current roadmap**:
-- **Current descriptor cleanup**: Ipc, AliphaticRings / SaturatedRings / TotalRings, Chi3v / Chi4v / Kappa3
+- **Current descriptor cleanup**: fused heteroaromatic `CNP0594395.1` aromaticity / ring typing / HBA / amide / surface-area cascade
+- **Deferred exact parity work**: `Ipc` numerical emulation (revisit only if exact RDKit reproduction becomes mandatory)
 - **Phase 13**: ✅ Complete — ML pipeline (k-NN, RF, PLS, Elastic Net, ART-2A — all from scratch, no linfa)
 - **Phase 14**: Terminal UI (interactive QSAR workflows)
 - **Phase 15**: Infrastructure (SDF parser, canonical SMILES writer, Python bindings, crates.io)
@@ -134,6 +136,12 @@ fn main() {
 
 ```bash
 cargo run --release --bin benchmark
+
+# Matched single-thread Ferrum vs RDKit descriptor bundle benchmark (57 outputs)
+OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 VECLIB_MAXIMUM_THREADS=1 RAYON_NUM_THREADS=1 \
+  cargo run -p ferrum_cli --release --bin parity_bundle_benchmark
+OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 VECLIB_MAXIMUM_THREADS=1 \
+  python scripts/benchmark_rdkit_parity_bundle.py
 ```
 
 ### Run Tests
@@ -167,16 +175,31 @@ Benchmarked on Apple Silicon (M-series):
 | TPSA | 200k-500k mol/sec | Complex bond counting |
 | MACCS Keys | 50k mol/sec | 163 SMARTS patterns |
 | ECFP4 | 100k-300k mol/sec | Morgan algorithm |
-| **Full pipeline** | **1-10M molecules/sec** | Parse + all descriptors |
 
-**Full pipeline** = Parse + Calculate Implicit H + All Descriptors + Fingerprints
+The table above is for isolated kernels and parser-heavy microbenchmarks. For an apples-to-apples Ferrum-vs-RDKit run over the same descriptor bundle, use the matched benchmark below.
 
 **Batch processing scales linearly** up to 100k+ molecules with excellent cache utilization.
 
+### Ferrum vs RDKit: matched descriptor bundle
+
+Single-threaded benchmark on Apple Silicon (M-series), using 10,000 repeated molecules after 25 warmup iterations. Both tools parse SMILES and compute the same 57-output bundle: 21 scalar descriptors plus `SlogP_VSA`, `SMR_VSA`, and `PEOE_VSA` (36 bins total). `Ipc`, ring groups, and CHI/KAPPA groups are excluded here so the two sides measure the same public output surface.
+
+| Case | Heavy atoms | FerrumChem | RDKit | Relative result |
+|------|-------------|------------|-------|-----------------|
+| Ethane | 2 | 0.091 s total, 109,357.89 mol/s | 2.185 s total, 4,576.48 mol/s | FerrumChem 23.90x faster |
+| Aspirin | 13 | 4.873 s total, 2,052.06 mol/s | 5.399 s total, 1,852.29 mol/s | FerrumChem 1.11x faster |
+| Caffeine | 14 | 6.561 s total, 1,524.20 mol/s | 5.736 s total, 1,743.30 mol/s | RDKit 1.14x faster |
+| Large drug-like amide | 30 | 109.641 s total, 91.21 mol/s | 11.700 s total, 854.71 mol/s | RDKit 9.37x faster |
+
+These numbers are machine-specific, but they show the current shape of the performance envelope clearly: FerrumChem is already very strong on simple molecules and still slightly ahead on aspirin, while the current Gasteiger/VSA-heavy path on larger drug-like molecules remains a real optimization target.
+
 ### Accuracy & Validation
 - **100% RDKit match**: 1944/1944 descriptor comparisons across 27 torture molecules
-- **Current 500-row parity**: scalar 99.78%, ring 95.95%, VSA 99.86%, Chi/Kappa 98.10%
-- **Exact 500/500 descriptors**: AromaticAtomCount, AromaticRingCount, AromaticRings(RT), HBondAcceptor, NumAmideBonds, QED, RotatableBonds
+- **Current 500-row parity**: scalar 99.78%, ring 100.0%, VSA 100.0%, Chi/Kappa 100.0%
+- **Current 1000-row audit**: scalar 99.75%, ring 99.95%, VSA 99.97%, Chi/Kappa 100.0%
+- **Exact 500/500 descriptors**: AromaticAtomCount, AromaticRingCount, AliphaticRings, AromaticRings(RT), SaturatedRings, TotalRings, HBondAcceptor, NumAmideBonds, QED, RotatableBonds, Chi3v, Chi4v, Kappa3
+- **Exact 1000/1000 descriptors**: FractionCSP3, HallKierAlpha, all Chi/Kappa values, and all PEOE_VSA bins
+- **Remaining 1000-row non-Ipc misses**: one fused heteroaromatic `CNP0594395.1` cascade plus one isolated `RotatableBonds` discrepancy
 - **Torture set includes**: Cisplatin (transition metal), nitrobenzene (charged NO₂), Grignard (Mg), cyclopentadienyl anion, sodium acetate, pyrene, isatin, aspirin, caffeine, and more
 - **Molecular weights**: ±0.01 Da
 - **TPSA**: RDKit-exact (50/50 molecules, ±0.01 Ų)
@@ -185,10 +208,10 @@ Benchmarked on Apple Silicon (M-series):
 - **Validation policy**: run parity suites in `--release` mode
 
 ### Performance vs Other Tools
-- **10-100x faster than RDKit** (Python/C++)
-- **20-200x faster than CDK** (Java)
-- **20-45x more memory efficient** than RDKit/CDK
-- **Native Rust performance**: No GIL, no FFI overhead
+- **Matched descriptor-bundle throughput is workload-dependent**: FerrumChem currently wins on ethane and aspirin, while RDKit is ahead on caffeine and the 30-heavy-atom drug-like case above
+- **Largest current performance hotspot**: larger VSA / Gasteiger-heavy molecules
+- **20-45x more memory efficient** than RDKit/CDK in the typed FerrumChem pipeline
+- **Native Rust deployment**: No GIL and no Python↔Rust FFI boundary inside Rust-first workflows
 
 ## 🏗️ Architecture
 
@@ -234,12 +257,13 @@ ferrum_chem/
 ### Current Roadmap
 
 **Phase 13**: ✅ Complete — ML pipeline (k-NN, RF, PLS, Elastic Net, ART-2A — all from scratch, no external ML deps)  
-**Current descriptor parity push**: Ipc, AliphaticRings / SaturatedRings / TotalRings, Chi3v / Chi4v / Kappa3  
+**Current descriptor parity push**: close the fused heteroaromatic `CNP0594395.1` descriptor cascade  
+**Deferred exact parity work**: `Ipc` numerical emulation (not currently required for ML use)  
 **Phase 14**: Terminal UI (interactive QSAR model training/prediction)  
 **Phase 15**: Infrastructure (SDF parser, canonical SMILES writer, Python bindings, crates.io)  
 **Phase 16**: 3D descriptors (conformers, PMI, shape — special cases only)
 
-**Current Status**: Production-ready typed QSAR library with 72 typed descriptors, 100% torture-set RDKit agreement, and **99.78% scalar parity** on the current 500-row RDKit slice ✅
+**Current Status**: Production-ready typed QSAR library with 72 typed descriptors, 100% torture-set RDKit agreement, stable **500-row parity** (scalar **99.78%**, ring/VSA/Chi-Kappa **100.0%**) and a broader **1000-row audit** at scalar **99.75%**, ring **99.95%**, VSA **99.97%**, Chi/Kappa **100.0%** ✅
 
 ## 🎓 Use Cases
 

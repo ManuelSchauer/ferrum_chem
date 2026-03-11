@@ -19,9 +19,19 @@ fn atomic_mass(an: u8) -> f64 {
 
 fn electronegativity(an: u8) -> f64 {
     match an {
-        1 => 2.20, 5 => 2.04, 6 => 2.55, 7 => 3.04, 8 => 3.44,
-        9 => 3.98, 14 => 1.90, 15 => 2.19, 16 => 2.58, 17 => 3.16,
-        35 => 2.96, 53 => 2.66, _ => 2.00,
+        1 => 2.20,
+        5 => 2.04,
+        6 => 2.55,
+        7 => 3.04,
+        8 => 3.44,
+        9 => 3.98,
+        14 => 1.90,
+        15 => 2.19,
+        16 => 2.58,
+        17 => 3.16,
+        35 => 2.96,
+        53 => 2.66,
+        _ => 2.00,
     }
 }
 
@@ -33,7 +43,9 @@ fn weighted_paths(mol: &Molecule, weights: &[f64]) -> [f64; MAX_PATH_LEN] {
     let n = mol.num_atoms();
     let mut wp = [0.0f64; MAX_PATH_LEN];
 
-    if n < 2 { return wp; }
+    if n < 2 {
+        return wp;
+    }
 
     let mut path = Vec::with_capacity(MAX_PATH_LEN + 1);
 
@@ -44,17 +56,14 @@ fn weighted_paths(mol: &Molecule, weights: &[f64]) -> [f64; MAX_PATH_LEN] {
     }
 
     // Each path found twice (forward + reverse)
-    for v in wp.iter_mut() { *v /= 2.0; }
+    for v in wp.iter_mut() {
+        *v /= 2.0;
+    }
 
     wp
 }
 
-fn dfs_wp(
-    mol: &Molecule,
-    weights: &[f64],
-    path: &mut Vec<AtomIdx>,
-    wp: &mut [f64; MAX_PATH_LEN],
-) {
+fn dfs_wp(mol: &Molecule, weights: &[f64], path: &mut Vec<AtomIdx>, wp: &mut [f64; MAX_PATH_LEN]) {
     let depth = path.len();
     if depth >= 2 {
         let k = depth - 1; // path length in bonds
@@ -63,12 +72,18 @@ fn dfs_wp(
             wp[k - 1] += prod / (k as f64);
         }
     }
-    if depth > MAX_PATH_LEN { return; }
+    if depth > MAX_PATH_LEN {
+        return;
+    }
 
     let current = *path.last().unwrap();
     for &bond_idx in &mol.adjacency[current as usize] {
         let bond = &mol.bonds[bond_idx as usize];
-        let nb = if bond.source == current { bond.target } else { bond.source };
+        let nb = if bond.source == current {
+            bond.target
+        } else {
+            bond.source
+        };
         if !path.contains(&nb) {
             path.push(nb);
             dfs_wp(mol, weights, path, wp);
@@ -91,14 +106,18 @@ impl Descriptor for WeightedPath {
 
     fn calculate(&self, mol: &mut Molecule) -> DescriptorValue {
         let mut values = vec![0.0f32; MAX_PATH_LEN * 2];
-        
+
         let n = mol.num_atoms();
         if n < 2 {
             return DescriptorValue::FloatVec(values);
         }
 
-        let w_mass: Vec<f64> = (0..n).map(|i| atomic_mass(mol.atoms[i].atomic_number)).collect();
-        let w_en: Vec<f64> = (0..n).map(|i| electronegativity(mol.atoms[i].atomic_number)).collect();
+        let w_mass: Vec<f64> = (0..n)
+            .map(|i| atomic_mass(mol.atoms[i].atomic_number))
+            .collect();
+        let w_en: Vec<f64> = (0..n)
+            .map(|i| electronegativity(mol.atoms[i].atomic_number))
+            .collect();
 
         let wp_mass = weighted_paths(mol, &w_mass);
         let wp_en = weighted_paths(mol, &w_en);
@@ -107,7 +126,7 @@ impl Descriptor for WeightedPath {
             values[i] = wp_mass[i] as f32;
             values[MAX_PATH_LEN + i] = wp_en[i] as f32;
         }
-        
+
         DescriptorValue::FloatVec(values)
     }
 }
@@ -119,9 +138,9 @@ const _: () = {
 
 #[cfg(test)]
 mod tests {
+    use super::super::typed::Descriptor;
     use super::*;
     use crate::io::smiles::parse_smiles;
-    use super::super::typed::Descriptor;
 
     fn calc_wp(smiles: &str) -> Vec<f32> {
         let mut mol = parse_smiles(smiles).expect("valid SMILES");

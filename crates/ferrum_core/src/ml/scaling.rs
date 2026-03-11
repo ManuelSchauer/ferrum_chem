@@ -120,12 +120,8 @@ mod tests {
 
     #[test]
     fn test_standard_scaler_zero_mean() {
-        let data = Array2::from_shape_vec((4, 2), vec![
-            1.0, 10.0,
-            2.0, 20.0,
-            3.0, 30.0,
-            4.0, 40.0,
-        ]).unwrap();
+        let data = Array2::from_shape_vec((4, 2), vec![1.0, 10.0, 2.0, 20.0, 3.0, 30.0, 4.0, 40.0])
+            .unwrap();
         let (scaler, transformed) = StandardScaler::fit_transform(&data);
         // Mean of each column should be ~0
         let col_means = transformed.mean_axis(Axis(0)).unwrap();
@@ -142,12 +138,8 @@ mod tests {
 
     #[test]
     fn test_standard_scaler_unit_variance() {
-        let data = Array2::from_shape_vec((4, 2), vec![
-            1.0, 10.0,
-            2.0, 20.0,
-            3.0, 30.0,
-            4.0, 40.0,
-        ]).unwrap();
+        let data = Array2::from_shape_vec((4, 2), vec![1.0, 10.0, 2.0, 20.0, 3.0, 30.0, 4.0, 40.0])
+            .unwrap();
         let (_, transformed) = StandardScaler::fit_transform(&data);
         // Variance of each column should be ~1
         for j in 0..2 {
@@ -160,11 +152,7 @@ mod tests {
 
     #[test]
     fn test_minmax_scaler_range() {
-        let data = Array2::from_shape_vec((3, 2), vec![
-            1.0, -5.0,
-            5.0,  0.0,
-            3.0,  5.0,
-        ]).unwrap();
+        let data = Array2::from_shape_vec((3, 2), vec![1.0, -5.0, 5.0, 0.0, 3.0, 5.0]).unwrap();
         let (scaler, transformed) = MinMaxScaler::fit_transform(&data);
         // Min should be 0, max should be 1
         for j in 0..2 {
@@ -186,11 +174,7 @@ mod tests {
     #[test]
     fn test_constant_feature() {
         // Constant column should not produce NaN
-        let data = Array2::from_shape_vec((3, 2), vec![
-            5.0, 1.0,
-            5.0, 2.0,
-            5.0, 3.0,
-        ]).unwrap();
+        let data = Array2::from_shape_vec((3, 2), vec![5.0, 1.0, 5.0, 2.0, 5.0, 3.0]).unwrap();
         let (_, t1) = StandardScaler::fit_transform(&data);
         assert!(t1.iter().all(|v| v.is_finite()));
         let (_, t2) = MinMaxScaler::fit_transform(&data);

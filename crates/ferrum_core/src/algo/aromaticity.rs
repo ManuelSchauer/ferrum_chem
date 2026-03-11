@@ -697,16 +697,55 @@ fn match_fused_quinonoid_perimeter(
         }
     }
 
-    if !bond_matches(mol, ring[0], ring[1], &[BondType::Single, BondType::Aromatic])
-        || !bond_matches(mol, ring[1], ring[2], &[BondType::Double, BondType::Aromatic])
-        || !bond_matches(mol, ring[2], ring[3], &[BondType::Single, BondType::Aromatic])
-        || !bond_matches(mol, ring[3], ring[4], &[BondType::Double, BondType::Aromatic])
-        || !bond_matches(mol, ring[4], ring[5], &[BondType::Single, BondType::Aromatic])
-        || !bond_matches(mol, ring[5], ring[6], &[BondType::Single, BondType::Aromatic])
-        || !bond_matches(mol, ring[6], ring[7], &[BondType::Aromatic])
-        || !bond_matches(mol, ring[7], ring[8], &[BondType::Single, BondType::Aromatic])
-        || !bond_matches(mol, ring[8], ring[9], &[BondType::Double, BondType::Aromatic])
-        || !bond_matches(mol, ring[9], ring[0], &[BondType::Single, BondType::Aromatic])
+    if !bond_matches(
+        mol,
+        ring[0],
+        ring[1],
+        &[BondType::Single, BondType::Aromatic],
+    ) || !bond_matches(
+        mol,
+        ring[1],
+        ring[2],
+        &[BondType::Double, BondType::Aromatic],
+    ) || !bond_matches(
+        mol,
+        ring[2],
+        ring[3],
+        &[BondType::Single, BondType::Aromatic],
+    ) || !bond_matches(
+        mol,
+        ring[3],
+        ring[4],
+        &[BondType::Double, BondType::Aromatic],
+    ) || !bond_matches(
+        mol,
+        ring[4],
+        ring[5],
+        &[BondType::Single, BondType::Aromatic],
+    ) || !bond_matches(
+        mol,
+        ring[5],
+        ring[6],
+        &[BondType::Single, BondType::Aromatic],
+    ) || !bond_matches(mol, ring[6], ring[7], &[BondType::Aromatic])
+        || !bond_matches(
+            mol,
+            ring[7],
+            ring[8],
+            &[BondType::Single, BondType::Aromatic],
+        )
+        || !bond_matches(
+            mol,
+            ring[8],
+            ring[9],
+            &[BondType::Double, BondType::Aromatic],
+        )
+        || !bond_matches(
+            mol,
+            ring[9],
+            ring[0],
+            &[BondType::Single, BondType::Aromatic],
+        )
     {
         return None;
     }
@@ -764,16 +803,41 @@ fn match_fused_aza_quinonoid_perimeter(
         return None;
     }
 
-    if !bond_matches(mol, ring[0], ring[1], &[BondType::Single, BondType::Aromatic])
-        || !bond_matches(mol, ring[1], ring[2], &[BondType::Single, BondType::Aromatic])
-        || !bond_matches(mol, ring[2], ring[3], &[BondType::Double, BondType::Aromatic])
-        || !bond_matches(mol, ring[3], ring[4], &[BondType::Single, BondType::Aromatic])
-        || !bond_matches(mol, ring[4], ring[5], &[BondType::Double, BondType::Aromatic])
-        || !bond_matches(mol, ring[5], ring[6], &[BondType::Aromatic])
+    if !bond_matches(
+        mol,
+        ring[0],
+        ring[1],
+        &[BondType::Single, BondType::Aromatic],
+    ) || !bond_matches(
+        mol,
+        ring[1],
+        ring[2],
+        &[BondType::Single, BondType::Aromatic],
+    ) || !bond_matches(
+        mol,
+        ring[2],
+        ring[3],
+        &[BondType::Double, BondType::Aromatic],
+    ) || !bond_matches(
+        mol,
+        ring[3],
+        ring[4],
+        &[BondType::Single, BondType::Aromatic],
+    ) || !bond_matches(
+        mol,
+        ring[4],
+        ring[5],
+        &[BondType::Double, BondType::Aromatic],
+    ) || !bond_matches(mol, ring[5], ring[6], &[BondType::Aromatic])
         || !bond_matches(mol, ring[6], ring[7], &[BondType::Aromatic])
         || !bond_matches(mol, ring[7], ring[8], &[BondType::Aromatic])
         || !bond_matches(mol, ring[8], ring[9], &[BondType::Aromatic])
-        || !bond_matches(mol, ring[9], ring[0], &[BondType::Double, BondType::Aromatic])
+        || !bond_matches(
+            mol,
+            ring[9],
+            ring[0],
+            &[BondType::Double, BondType::Aromatic],
+        )
     {
         return None;
     }
@@ -825,15 +889,47 @@ fn match_fused_aza_bridge_perimeter(
         return None;
     }
 
-    if !bond_matches(mol, ring[0], ring[1], &[BondType::Double, BondType::Aromatic])
-        || !bond_matches(mol, ring[1], ring[2], &[BondType::Single, BondType::Aromatic])
-        || !bond_matches(mol, ring[2], ring[3], &[BondType::Single, BondType::Aromatic])
-        || !bond_matches(mol, ring[3], ring[4], &[BondType::Single, BondType::Aromatic])
-        || !bond_matches(mol, ring[4], ring[5], &[BondType::Single, BondType::Aromatic])
-        || !bond_matches(mol, ring[5], ring[6], &[BondType::Single, BondType::Aromatic])
-        || !bond_matches(mol, ring[6], ring[7], &[BondType::Single, BondType::Aromatic])
-        || !bond_matches(mol, ring[7], ring[8], &[BondType::Double, BondType::Aromatic])
-        || !bond_matches(mol, ring[8], ring[0], &[BondType::Aromatic])
+    if !bond_matches(
+        mol,
+        ring[0],
+        ring[1],
+        &[BondType::Double, BondType::Aromatic],
+    ) || !bond_matches(
+        mol,
+        ring[1],
+        ring[2],
+        &[BondType::Single, BondType::Aromatic],
+    ) || !bond_matches(
+        mol,
+        ring[2],
+        ring[3],
+        &[BondType::Single, BondType::Aromatic],
+    ) || !bond_matches(
+        mol,
+        ring[3],
+        ring[4],
+        &[BondType::Single, BondType::Aromatic],
+    ) || !bond_matches(
+        mol,
+        ring[4],
+        ring[5],
+        &[BondType::Single, BondType::Aromatic],
+    ) || !bond_matches(
+        mol,
+        ring[5],
+        ring[6],
+        &[BondType::Single, BondType::Aromatic],
+    ) || !bond_matches(
+        mol,
+        ring[6],
+        ring[7],
+        &[BondType::Single, BondType::Aromatic],
+    ) || !bond_matches(
+        mol,
+        ring[7],
+        ring[8],
+        &[BondType::Double, BondType::Aromatic],
+    ) || !bond_matches(mol, ring[8], ring[0], &[BondType::Aromatic])
     {
         return None;
     }
@@ -854,7 +950,11 @@ fn is_neutral_ring_donor_hetero(mol: &Molecule, atom_idx: AtomIdx) -> bool {
     matches!(atom.atomic_number, 8 | 16) && atom.formal_charge <= 0 && mol.get_degree(atom_idx) == 2
 }
 
-fn is_neutral_degree3_ring_donor_nitrogen(mol: &Molecule, atom_idx: AtomIdx, ring: &[AtomIdx]) -> bool {
+fn is_neutral_degree3_ring_donor_nitrogen(
+    mol: &Molecule,
+    atom_idx: AtomIdx,
+    ring: &[AtomIdx],
+) -> bool {
     let atom = &mol.atoms[atom_idx as usize];
     atom.atomic_number == 7
         && atom.formal_charge == 0
@@ -972,21 +1072,27 @@ fn is_fused_exocyclic_imine_carbon(mol: &Molecule, atom_idx: AtomIdx, ring: &[At
     }
 
     ring_neighbors.iter().any(|&ring_neighbor| {
-        mol.adjacency[ring_neighbor as usize].iter().any(|&bond_idx| {
-            let bond = &mol.bonds[bond_idx as usize];
-            let other = if bond.source == ring_neighbor {
-                bond.target
-            } else {
-                bond.source
-            };
-            other != atom_idx
-                && !ring.contains(&other)
-                && ring_neighbor_is_sp2_capable(mol, other, ring)
-        })
+        mol.adjacency[ring_neighbor as usize]
+            .iter()
+            .any(|&bond_idx| {
+                let bond = &mol.bonds[bond_idx as usize];
+                let other = if bond.source == ring_neighbor {
+                    bond.target
+                } else {
+                    bond.source
+                };
+                other != atom_idx
+                    && !ring.contains(&other)
+                    && ring_neighbor_is_sp2_capable(mol, other, ring)
+            })
     })
 }
 
-fn has_fused_conjugated_ring_neighbors(mol: &Molecule, atom_idx: AtomIdx, ring: &[AtomIdx]) -> bool {
+fn has_fused_conjugated_ring_neighbors(
+    mol: &Molecule,
+    atom_idx: AtomIdx,
+    ring: &[AtomIdx],
+) -> bool {
     let ring_neighbors: Vec<AtomIdx> = mol.adjacency[atom_idx as usize]
         .iter()
         .filter_map(|&bond_idx| {
@@ -1138,15 +1244,19 @@ fn match_fused_aza_annulated_ring(mol: &Molecule, ordered: &[AtomIdx], ring: &[A
         return false;
     };
 
-    let Some(donor_fused_neighbor) =
-        unique_external_aromatic_neighbor(mol, donor, ring, |atom| {
-            atom.atomic_number == 6 && atom.formal_charge == 0 && atom.is_aromatic()
-        })
-    else {
+    let Some(donor_fused_neighbor) = unique_external_aromatic_neighbor(mol, donor, ring, |atom| {
+        atom.atomic_number == 6 && atom.formal_charge == 0 && atom.is_aromatic()
+    }) else {
         return false;
     };
 
-    has_short_aromatic_path_excluding_ring(mol, anchor_fused_neighbor, donor_fused_neighbor, ring, 3)
+    has_short_aromatic_path_excluding_ring(
+        mol,
+        anchor_fused_neighbor,
+        donor_fused_neighbor,
+        ring,
+        3,
+    )
 }
 
 fn match_fused_bis_quinonoid_ring(mol: &Molecule, ordered: &[AtomIdx], ring: &[AtomIdx]) -> bool {
@@ -1169,7 +1279,8 @@ fn match_fused_bis_quinonoid_ring(mol: &Molecule, ordered: &[AtomIdx], ring: &[A
         if !is_neutral_ring_carbon(mol, atom_idx)
             || has_exocyclic_hetero_double(mol, atom_idx, ring)
             || has_exocyclic_hetero_single(mol, atom_idx, ring)
-            || (!mol.atoms[atom_idx as usize].is_aromatic() && !has_ring_pi_bond(mol, atom_idx, ring))
+            || (!mol.atoms[atom_idx as usize].is_aromatic()
+                && !has_ring_pi_bond(mol, atom_idx, ring))
         {
             return false;
         }
@@ -1672,7 +1783,9 @@ fn fused_bridge_bond_to_kekulize(mol: &Molecule, ring: &[AtomIdx]) -> Option<usi
     let ring_nitrogens: Vec<usize> = ring
         .iter()
         .enumerate()
-        .filter_map(|(pos, &atom_idx)| is_neutral_ring_pi_nitrogen(mol, atom_idx, ring).then_some(pos))
+        .filter_map(|(pos, &atom_idx)| {
+            is_neutral_ring_pi_nitrogen(mol, atom_idx, ring).then_some(pos)
+        })
         .collect();
     if ring_nitrogens.len() != 2 {
         return None;
@@ -1712,9 +1825,7 @@ fn fused_bridge_bond_to_kekulize(mol: &Molecule, ring: &[AtomIdx]) -> Option<usi
     }
 
     let bond_idx = find_bond_between(mol, ring[exo_pos], ring[bridge_pos])?;
-    mol.bonds[bond_idx]
-        .is_aromatic()
-        .then_some(bond_idx)
+    mol.bonds[bond_idx].is_aromatic().then_some(bond_idx)
 }
 
 fn is_neutral_ring_pi_nitrogen(mol: &Molecule, atom_idx: AtomIdx, ring: &[AtomIdx]) -> bool {
@@ -2054,10 +2165,8 @@ mod tests {
 
     #[test]
     fn test_polycyclic_quinonoid_system_reaches_rdkit_aromatic_atom_count() {
-        let mol = parse_smiles(
-            "CC1=CC(O)=C2C(=O)C3=C(C(=O)C2=C1)C1=C(O3)C2=C(C=C1C)C(=O)C=CC2=O",
-        )
-        .unwrap();
+        let mol = parse_smiles("CC1=CC(O)=C2C(=O)C3=C(C(=O)C2=C1)C1=C(O3)C2=C(C=C1C)C(=O)C=CC2=O")
+            .unwrap();
         let aromatic_count = mol.atoms.iter().filter(|a| a.is_aromatic()).count();
         assert_eq!(
             aromatic_count, 21,
@@ -2067,10 +2176,8 @@ mod tests {
 
     #[test]
     fn test_chromone_gap_pattern_detected() {
-        let mol = parse_smiles(
-            "CC(C)(C)C1=CC=C(C2=CC(=O)C3=CC=C(NC(=O)C4=CC=CC=C4Cl)C=C3O2)C=C1",
-        )
-        .unwrap();
+        let mol = parse_smiles("CC(C)(C)C1=CC=C(C2=CC(=O)C3=CC=C(NC(=O)C4=CC=CC=C4Cl)C=C3O2)C=C1")
+            .unwrap();
         let ring = vec![12, 10, 9, 8, 28, 27];
         let gaps = quinonoid_gap_carbons(&mol, &ring).expect("expected chromone gap carbons");
         assert!(gaps.contains(&8) && gaps.contains(&9));
@@ -2157,20 +2264,16 @@ mod tests {
 
     #[test]
     fn test_cnp0331134_left_bis_quinonoid_ring_is_aromatic() {
-        let mol = parse_smiles(
-            "CC1=CC(O)=C2C(=O)C3=C(C(=O)C2=C1)C1=C(O3)C2=C(C=C1C)C(=O)C=CC2=O",
-        )
-        .unwrap();
+        let mol = parse_smiles("CC1=CC(O)=C2C(=O)C3=C(C(=O)C2=C1)C1=C(O3)C2=C(C=C1C)C(=O)C=CC2=O")
+            .unwrap();
         let ring = vec![6, 8, 9, 10, 12, 5];
         assert!(is_fused_bis_quinonoid_ring(&mol, &ring));
     }
 
     #[test]
     fn test_cnp0331134_right_bis_quinonoid_ring_is_aromatic() {
-        let mol = parse_smiles(
-            "CC1=CC(O)=C2C(=O)C3=C(C(=O)C2=C1)C1=C(O3)C2=C(C=C1C)C(=O)C=CC2=O",
-        )
-        .unwrap();
+        let mol = parse_smiles("CC1=CC(O)=C2C(=O)C3=C(C(=O)C2=C1)C1=C(O3)C2=C(C=C1C)C(=O)C=CC2=O")
+            .unwrap();
         let ring = vec![22, 24, 25, 26, 17, 18];
         assert!(is_fused_bis_quinonoid_ring(&mol, &ring));
     }
@@ -2190,10 +2293,9 @@ mod tests {
 
     #[test]
     fn test_cycle_search_finds_chromone_gap_ring() {
-        let mut mol = parse_smiles(
-            "CC(C)(C)C1=CC=C(C2=CC(=O)C3=CC=C(NC(=O)C4=CC=CC=C4Cl)C=C3O2)C=C1",
-        )
-        .unwrap();
+        let mut mol =
+            parse_smiles("CC(C)(C)C1=CC=C(C2=CC(=O)C3=CC=C(NC(=O)C4=CC=CC=C4Cl)C=C3O2)C=C1")
+                .unwrap();
         let target = ring_set_key(&[12, 10, 9, 8, 28, 27]);
         let sssr = find_sssr(&mut mol);
         let local = find_local_cycles(&mol, 5, 24);
@@ -2250,10 +2352,9 @@ mod tests {
 
     #[test]
     fn test_second_aromaticity_pass_recovers_chromone_gap_ring() {
-        let mut mol = parse_smiles(
-            "CC(C)(C)C1=CC=C(C2=CC(=O)C3=CC=C(NC(=O)C4=CC=CC=C4Cl)C=C3O2)C=C1",
-        )
-        .unwrap();
+        let mut mol =
+            parse_smiles("CC(C)(C)C1=CC=C(C2=CC(=O)C3=CC=C(NC(=O)C4=CC=CC=C4Cl)C=C3O2)C=C1")
+                .unwrap();
         let before = mol.atoms.iter().filter(|atom| atom.is_aromatic()).count();
         perceive_aromaticity(&mut mol);
         let after = mol.atoms.iter().filter(|atom| atom.is_aromatic()).count();
@@ -2280,10 +2381,9 @@ mod tests {
 
     #[test]
     fn test_current_aromaticity_scan_sees_chromone_gap_ring() {
-        let mut mol = parse_smiles(
-            "CC(C)(C)C1=CC=C(C2=CC(=O)C3=CC=C(NC(=O)C4=CC=CC=C4Cl)C=C3O2)C=C1",
-        )
-        .unwrap();
+        let mut mol =
+            parse_smiles("CC(C)(C)C1=CC=C(C2=CC(=O)C3=CC=C(NC(=O)C4=CC=CC=C4Cl)C=C3O2)C=C1")
+                .unwrap();
         let target = ring_set_key(&[12, 10, 9, 8, 28, 27]);
         let sssr = find_sssr(&mut mol);
         let local = find_local_cycles(&mol, 5, 24);
@@ -2330,7 +2430,11 @@ mod tests {
             .iter()
             .filter_map(|ring| fused_quinonoid_perimeter(&mol, ring))
             .collect();
-        assert_eq!(perimeters.len(), 2, "expected two fused quinonoid perimeters");
+        assert_eq!(
+            perimeters.len(),
+            2,
+            "expected two fused quinonoid perimeters"
+        );
     }
 
     #[test]
@@ -2394,11 +2498,15 @@ mod tests {
             3
         );
 
-        let bridge_bond = find_bond_between(&mol, 44u16, 51u16).expect("expected fused bridge bond");
+        let bridge_bond =
+            find_bond_between(&mol, 44u16, 51u16).expect("expected fused bridge bond");
         assert_eq!(mol.bonds[bridge_bond].bond_type, BondType::Single);
         assert!(!mol.bonds[bridge_bond].is_aromatic());
         for atom_idx in [44usize, 45, 46, 48, 49, 51] {
-            assert!(mol.atoms[atom_idx].is_aromatic(), "atom {atom_idx} should be aromatic");
+            assert!(
+                mol.atoms[atom_idx].is_aromatic(),
+                "atom {atom_idx} should be aromatic"
+            );
         }
     }
 
@@ -2478,7 +2586,9 @@ mod tests {
             .collect();
 
         assert!(
-            perimeters.iter().any(|perimeter| ring_set_key(&perimeter.ring) == target),
+            perimeters
+                .iter()
+                .any(|perimeter| ring_set_key(&perimeter.ring) == target),
             "expected fused aza bridge perimeter; matching={matching:?}"
         );
     }
@@ -2500,7 +2610,10 @@ mod tests {
         assert_eq!(mol.bonds[chord_bond].bond_type, BondType::Single);
         assert!(!mol.bonds[chord_bond].is_aromatic());
         for atom_idx in [4usize, 5, 6, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41] {
-            assert!(mol.atoms[atom_idx].is_aromatic(), "atom {atom_idx} should be aromatic");
+            assert!(
+                mol.atoms[atom_idx].is_aromatic(),
+                "atom {atom_idx} should be aromatic"
+            );
         }
     }
 
@@ -2514,7 +2627,10 @@ mod tests {
             2
         );
         for atom_idx in [1usize, 2, 3, 12] {
-            assert!(!mol.atoms[atom_idx].is_aromatic(), "atom {atom_idx} should stay kekulized");
+            assert!(
+                !mol.atoms[atom_idx].is_aromatic(),
+                "atom {atom_idx} should stay kekulized"
+            );
         }
     }
 
@@ -2531,8 +2647,10 @@ mod tests {
             3
         );
         for atom_idx in [17usize, 18, 39, 40] {
-            assert!(!mol.atoms[atom_idx].is_aromatic(), "atom {atom_idx} should stay kekulized");
+            assert!(
+                !mol.atoms[atom_idx].is_aromatic(),
+                "atom {atom_idx} should stay kekulized"
+            );
         }
     }
-
 }

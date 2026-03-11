@@ -2,17 +2,17 @@
 //!
 //! Provides QSAR model training, prediction, and evaluation.
 
-pub mod dataset;
-pub mod scaling;
-pub mod feature_selection;
-pub mod pca;
-pub mod splitting;
-pub mod metrics;
-pub mod knn;
-pub mod random_forest;
-pub mod pls;
-pub mod elastic_net;
-pub mod art2a;
-pub mod pipeline;
 pub mod ad;
+pub mod art2a;
 pub mod cv;
+pub mod dataset;
+pub mod elastic_net;
+pub mod feature_selection;
+pub mod knn;
+pub mod metrics;
+pub mod pca;
+pub mod pipeline;
+pub mod pls;
+pub mod random_forest;
+pub mod scaling;
+pub mod splitting;
