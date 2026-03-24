@@ -163,31 +163,123 @@ OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 VECLIB_MAXIMUM_THREAD
   python scripts/benchmark_rdkit_parity_bundle_csv.py
 ```
 
-### Phase 14 TUI
+### Phase 14 TUI — Interactive QSAR Workflow Shell
+
+The TUI provides a full interactive terminal interface for loading chemical datasets, training ML models, inspecting descriptors, and managing serialized pipelines — all without writing code.
+
+#### Quick Launch
 
 ```bash
+# Launch with default settings (looks for coconut_csv_lite-02-2026.csv in current dir)
+cargo run -p ferrum_cli --release --bin tui
+
+# Launch with a custom CSV file
+FERRUM_TUI_DATASET_CSV="/path/to/your/molecules.csv" \
+FERRUM_TUI_SMILES_COLUMN="smiles" \
+FERRUM_TUI_TARGET_COLUMN="activity" \
+FERRUM_TUI_ROW_LIMIT=500 \
 cargo run -p ferrum_cli --release --bin tui
 ```
 
-Current workflow shell includes:
-- Phase 14 module menu (training wizard, batch prediction, chemical space, descriptor profiling, pipeline management)
-- Keyboard navigation (`↑/↓`, `j/k`, `Enter`, `Esc`, `q`)
-- CSV-driven training wizard that reloads data, computes descriptor features, and trains `QsarPipeline` via `AutoQsar::regression`
-- Batch prediction preview with quick fit diagnostics (`R²`, `RMSE`)
-- Descriptor profiling and chemical-space summaries from live loaded feature matrices
-- Pipeline persistence controls in management view:
-  - `s`: save pipeline to file
-  - `l`: load pipeline from file
-  - `m`: load pipeline from in-memory mirror
+#### CSV File Requirements
 
-TUI runtime configuration (optional env vars):
+Your CSV file must have:
+- A **SMILES column** containing valid SMILES strings (one molecule per row)
+- A **target column** containing numeric values (the property you want to predict, e.g. logP, activity, pIC50)
+- A header row with column names
+
+Example CSV:
+```csv
+smiles,logp,molecular_weight
+c1ccccc1,1.56,78.11
+CC(=O)O,-0.17,60.05
+CCO,-0.31,46.07
+```
+
+#### Environment Variables
+
+All TUI settings are configured via environment variables (with sensible defaults):
+
+| Variable | Default | Description |
+|---|---|---|
+| `FERRUM_TUI_DATASET_CSV` | `coconut_csv_lite-02-2026.csv` | Path to input CSV file |
+| `FERRUM_TUI_SMILES_COLUMN` | `canonical_smiles` | CSV column containing SMILES strings |
+| `FERRUM_TUI_TARGET_COLUMN` | `alogp` | CSV column containing the numeric target property |
+| `FERRUM_TUI_ROW_LIMIT` | `300` | Maximum number of rows to load (caps memory usage) |
+| `FERRUM_TUI_PIPELINE_PATH` | `/tmp/ferrum_tui_pipeline.bin` | File path for saving/loading serialized pipelines |
+
+> **Tip:** If the CSV file is not found, the TUI launches with a fallback mock dataset and shows a warning. You can still explore all screens — the training wizard will work on the mock data.
+
+#### TUI Screens
+
+**1. Training Wizard** — Step-by-step model training workflow:
+1. **Dataset** → Press Enter to load (or reload) the CSV. Shows parse stats (rows loaded, failures, missing targets, target range)
+2. **Preprocess** → Confirms StandardScaler preprocessing (applied automatically by AutoQsar)
+3. **Train** → Runs `AutoQsar::regression` which compares k-NN (k=3,5,7), Random Forest (50,100 trees), PLS (2,3,5 components), and Elastic Net (α=0.01,0.1,1.0). Shows wall-clock training time and best model Q²
+4. **Evaluate** → Shows final pipeline summary with CV Q², train R², and prediction preview
+5. **Done** → Pipeline is ready for batch prediction and save/export
+
+**2. Batch Prediction** — Run the trained model against the loaded dataset. Shows R², RMSE, and sample-level prediction preview. Press Enter to recompute.
+
+**3. Chemical Space** — PCA-projected scatter plot of the loaded dataset. Uses StandardScaler + Jacobi PCA(2) to project all molecules into 2D. Shows:
+- Braille-dot scatter plot (PC1 vs PC2)
+- Variance explained per principal component
+- PC axis ranges and sample count
+
+**4. Descriptor Profiling** — Scrollable table of all computed molecular descriptors showing per-feature statistics:
+- Mean, standard deviation, min, max
+- Zero-variance features flagged with ⚠ (red) — important for ML: these features provide no discriminatory power
+- Scroll with ↑/↓ to navigate all features
+
+**5. Pipeline Management** — File-backed persistence for trained models:
+- `s` → Serialize current pipeline to file (bincode) at `FERRUM_TUI_PIPELINE_PATH`
+- `l` → Load a previously saved pipeline from file
+- `m` → Reload pipeline from in-memory mirror (useful after re-training)
+
+#### Keybindings
+
+| Key | Context | Action |
+|---|---|---|
+| `↑`/`↓` or `j`/`k` | Menu | Navigate menu items |
+| `↑`/`↓` or `j`/`k` | Descriptor Profiling | Scroll feature table |
+| `Enter` | Everywhere | Activate selection / advance wizard step |
+| `Esc` | Any view | Return to main menu |
+| `q` | Anywhere | Quit TUI |
+| `s` | Pipeline Management | Save pipeline to file |
+| `l` | Pipeline Management | Load pipeline from file |
+| `m` | Pipeline Management | Load pipeline from memory |
+| `?` | Anywhere | Show keybindings help in status bar |
+
+#### Computed Descriptors (24 features used in training)
+
+The TUI training workflow computes the following molecular descriptors for each molecule:
+
+`MolecularWeight`, `LogP`, `MolarRefractivity`, `TPSA`, `HBondDonor`, `HBondAcceptor`, `RotatableBondCount`, `HeavyAtomCount`, `AtomCount`, `AromaticAtomCount`, `HeteroatomCount`, `AromaticRingCount`, `FormalCharge`, `FractionCSP3`, `BertzCT`, `LabuteASA`, `QED`, `NumAmideBonds`, `HallKierAlpha`, `BalabanIndex`, `BondCount`, `SLogP_VSA` (8 bins), `SMR_VSA` (7 bins), `PEOE_VSA` (14 bins)
+
+This results in approximately 57 total numeric features per molecule.
+
+#### Example Workflow
 
 ```bash
-FERRUM_TUI_DATASET_CSV=coconut_csv_lite-02-2026.csv
-FERRUM_TUI_SMILES_COLUMN=canonical_smiles
-FERRUM_TUI_TARGET_COLUMN=alogp
-FERRUM_TUI_ROW_LIMIT=300
-FERRUM_TUI_PIPELINE_PATH=/tmp/ferrum_tui_pipeline.bin
+# 1. Prepare a CSV with SMILES and a target property
+head -3 my_dataset.csv
+# smiles,pIC50
+# c1ccc(cc1)O,5.2
+# CC(=O)Nc1ccc(O)cc1,6.8
+
+# 2. Launch TUI pointing at the CSV
+FERRUM_TUI_DATASET_CSV="my_dataset.csv" \
+FERRUM_TUI_SMILES_COLUMN="smiles" \
+FERRUM_TUI_TARGET_COLUMN="pIC50" \
+FERRUM_TUI_ROW_LIMIT=1000 \
+cargo run -p ferrum_cli --release --bin tui
+
+# 3. Inside TUI:
+#    → Select "Interactive model training wizard" → Enter through all steps
+#    → Select "Batch prediction interface" → Enter to see R²/RMSE
+#    → Select "Chemical space visualization" → See PCA scatter
+#    → Select "Descriptor profiling dashboard" → Scroll features with ↑/↓
+#    → Select "Pipeline management" → Press 's' to save trained model
 ```
 
 ### Run Tests
