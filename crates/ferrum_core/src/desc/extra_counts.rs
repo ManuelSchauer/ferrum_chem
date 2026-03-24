@@ -16,7 +16,51 @@
 
 use super::typed::{Descriptor, DescriptorValue};
 use crate::mol::molecule::Molecule;
-use crate::types::{AtomIdx, BondType};
+use crate::types::BondType;
+use smallvec::SmallVec;
+use std::hash::{BuildHasherDefault, Hasher};
+
+/// Minimal hasher for `u64` keys used in Bertz connection counting.
+///
+/// Rationale:
+/// - The connection map key is already a packed `u64` with good bit distribution.
+/// - Using identity hashing avoids SipHash overhead in a very hot loop.
+/// - This is safe in this context because keys are generated internally from molecular
+///   topology (not attacker-controlled external input).
+#[derive(Default)]
+struct U64IdentityHasher(u64);
+
+impl Hasher for U64IdentityHasher {
+    #[inline]
+    fn finish(&self) -> u64 {
+        self.0
+    }
+
+    #[inline]
+    fn write(&mut self, bytes: &[u8]) {
+        // Fallback path for non-u64 writes. Bertz connection map keys use `u64`,
+        // so this should not be on the hot path.
+        let mut state = 0u64;
+        let mut shift = 0u32;
+        for &byte in bytes {
+            state ^= (byte as u64) << shift;
+            shift = (shift + 8) & 63;
+        }
+        self.0 = state;
+    }
+
+    #[inline]
+    fn write_u64(&mut self, i: u64) {
+        self.0 = i;
+    }
+
+    #[inline]
+    fn write_usize(&mut self, i: usize) {
+        self.0 = i as u64;
+    }
+}
+
+type U64FastMap<V> = std::collections::HashMap<u64, V, BuildHasherDefault<U64IdentityHasher>>;
 
 // ---------------------------------------------------------------------------
 // FractionCSP3
@@ -62,7 +106,7 @@ impl Descriptor for FractionCSP3 {
         "FractionCSP3"
     }
 
-    fn calculate(&self, mol: &mut Molecule) -> DescriptorValue {
+    fn calculate(&self, mol: &mut Molecule, ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
         DescriptorValue::Float(compute_fraction_csp3(mol))
     }
 }
@@ -71,36 +115,30 @@ impl Descriptor for FractionCSP3 {
 // Ring Type Counts (helper function only; typed descriptor in ring_types.rs)
 // ---------------------------------------------------------------------------
 
-fn ring_all_single_bonds(mol: &Molecule, ring: &[AtomIdx]) -> bool {
-    for i in 0..ring.len() {
-        let a1 = ring[i];
-        let a2 = ring[(i + 1) % ring.len()];
-        let is_single = mol.adjacency[a1 as usize].iter().any(|&bi| {
-            let bond = &mol.bonds[bi as usize];
-            ((bond.source == a1 && bond.target == a2) || (bond.source == a2 && bond.target == a1))
-                && bond.bond_type == BondType::Single
-        });
-        if !is_single {
-            return false;
-        }
-    }
-    true
+fn ring_all_single_bonds(mol: &Molecule, ring: &[usize]) -> bool {
+    ring.iter()
+        .all(|&bond_idx| mol.bonds[bond_idx].bond_type == BondType::Single)
 }
 
 /// Compute ring type counts: [aromatic, aliphatic, saturated, heteroaromatic, heterocyclic].
 pub fn compute_ring_type_counts(mol: &Molecule) -> [u32; 5] {
-    use crate::algo::rings::find_sssr;
+    use crate::algo::rings::find_minimum_cycle_basis_bonds;
 
     let mut counts = [0u32; 5];
-    let mut mol_clone = mol.clone();
-    let rings = find_sssr(&mut mol_clone);
+    let rings = find_minimum_cycle_basis_bonds(mol);
 
     for ring in &rings {
-        let all_aromatic = ring.iter().all(|&ai| mol.atoms[ai as usize].is_aromatic());
-        let any_aromatic = ring.iter().any(|&ai| mol.atoms[ai as usize].is_aromatic());
-        let has_heteroatom = ring.iter().any(|&ai| {
-            let an = mol.atoms[ai as usize].atomic_number;
-            an != 6 && an != 1
+        let all_aromatic = ring
+            .iter()
+            .all(|&bond_idx| mol.bonds[bond_idx].is_aromatic());
+        let any_aromatic = ring
+            .iter()
+            .any(|&bond_idx| mol.bonds[bond_idx].is_aromatic());
+        let has_heteroatom = ring.iter().any(|&bond_idx| {
+            let bond = &mol.bonds[bond_idx];
+            let src_an = mol.atoms[bond.source as usize].atomic_number;
+            let dst_an = mol.atoms[bond.target as usize].atomic_number;
+            (src_an != 6 && src_an != 1) || (dst_an != 6 && dst_an != 1)
         });
         let all_single = ring_all_single_bonds(mol, ring);
 
@@ -182,7 +220,7 @@ impl Descriptor for NumAmideBonds {
         "NumAmideBonds"
     }
 
-    fn calculate(&self, mol: &mut Molecule) -> DescriptorValue {
+    fn calculate(&self, mol: &mut Molecule, ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
         DescriptorValue::Int(compute_num_amide_bonds(mol))
     }
 }
@@ -212,7 +250,7 @@ impl Descriptor for AromaticAtomFraction {
         "AromaticAtomFraction"
     }
 
-    fn calculate(&self, mol: &mut Molecule) -> DescriptorValue {
+    fn calculate(&self, mol: &mut Molecule, ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
         DescriptorValue::Float(compute_aromatic_atom_fraction(mol))
     }
 }
@@ -227,78 +265,33 @@ impl Descriptor for AromaticAtomFraction {
 /// For other elements: α = Rb0(element)/Rb0(C) - 1.
 pub struct HallKierAlpha;
 
-fn compute_hall_kier_alpha(mol: &Molecule) -> f32 {
-    use crate::algo::electronic::effective_hybridization_pub;
-    use crate::types::Hybridization;
-
-    let mut alpha_sum = 0.0f64;
-    let rb0_c = 0.77f64;
-
-    // Lookup table: [SP, SP2, SP3] alpha values per element.
-    // None means use the last non-None value.
-    for (i, atom) in mol.atoms.iter().enumerate() {
-        if atom.atomic_number == 0 {
-            continue;
-        }
-        if atom.atomic_number == 1 {
-            continue;
-        } // H contributes 0
-
-        let hyb = effective_hybridization_pub(mol, i);
-        // hyb index: SP=0, SP2=1, SP3=2
-        let hyb_idx = match hyb {
-            Hybridization::SP => 0usize,
-            Hybridization::SP2 => 1,
-            _ => 2, // SP3 and others
-        };
-
-        let alpha = match atom.atomic_number {
-            6 => {
-                // C: [-0.22, -0.13, 0.0]
-                [-0.22, -0.13, 0.0][hyb_idx]
-            }
-            7 => {
-                // N: [-0.29, -0.20, -0.04]
-                [-0.29, -0.20, -0.04][hyb_idx]
-            }
-            8 => {
-                // O: [None, -0.20, -0.04] → SP uses -0.04
-                match hyb_idx {
-                    1 => -0.20,
-                    _ => -0.04,
-                }
-            }
-            16 => {
-                // S: [None, 0.22, 0.35]
-                match hyb_idx {
-                    1 => 0.22,
-                    _ => 0.35,
-                }
-            }
-            15 => {
-                // P: [None, 0.30, 0.43]
-                match hyb_idx {
-                    1 => 0.30,
-                    _ => 0.43,
-                }
-            }
-            9 => -0.07, // F: always -0.07
-            17 => 0.29, // Cl: always 0.29
-            35 => 0.48, // Br: always 0.48
-            53 => 0.73, // I: always 0.73
-            _ => {
-                // Fallback: Rb0(element)/Rb0(C) - 1
-                let ra = crate::desc::vsa::rb0_radius(atom.atomic_number);
-                ra / rb0_c - 1.0
-            }
-        };
-        alpha_sum += alpha;
-    }
-    alpha_sum as f32
+const fn build_hall_kier_alpha_table() -> [[f64; 3]; 119] {
+    let mut table = [[f64::NAN; 3]; 119];
+    table[6] = [-0.22, -0.13, 0.0];
+    table[7] = [-0.29, -0.20, -0.04];
+    table[8] = [-0.04, -0.20, -0.04];
+    table[16] = [0.35, 0.22, 0.35];
+    table[15] = [0.43, 0.30, 0.43];
+    table[9] = [-0.07, -0.07, -0.07];
+    table[17] = [0.29, 0.29, 0.29];
+    table[35] = [0.48, 0.48, 0.48];
+    table[53] = [0.73, 0.73, 0.73];
+    table
 }
 
-/// Public f64 accessor for Kappa index computation.
-pub fn compute_hall_kier_alpha_f64(mol: &Molecule) -> f64 {
+const HALL_KIER_ALPHA_TABLE: [[f64; 3]; 119] = build_hall_kier_alpha_table();
+
+#[inline]
+fn hall_kier_alpha_lookup(atomic_number: u8, hyb_idx: usize) -> Option<f64> {
+    let value = HALL_KIER_ALPHA_TABLE[atomic_number as usize][hyb_idx];
+    if value.is_nan() {
+        None
+    } else {
+        Some(value)
+    }
+}
+
+fn compute_hall_kier_alpha_sum(mol: &Molecule) -> f64 {
     use crate::algo::electronic::effective_hybridization_pub;
     use crate::types::Hybridization;
 
@@ -317,33 +310,22 @@ pub fn compute_hall_kier_alpha_f64(mol: &Molecule) -> f64 {
             _ => 2,
         };
 
-        let alpha = match atom.atomic_number {
-            6 => [-0.22, -0.13, 0.0][hyb_idx],
-            7 => [-0.29, -0.20, -0.04][hyb_idx],
-            8 => match hyb_idx {
-                1 => -0.20,
-                _ => -0.04,
-            },
-            16 => match hyb_idx {
-                1 => 0.22,
-                _ => 0.35,
-            },
-            15 => match hyb_idx {
-                1 => 0.30,
-                _ => 0.43,
-            },
-            9 => -0.07,
-            17 => 0.29,
-            35 => 0.48,
-            53 => 0.73,
-            _ => {
-                let ra = crate::desc::vsa::rb0_radius(atom.atomic_number);
-                ra / rb0_c - 1.0
-            }
-        };
+        let alpha = hall_kier_alpha_lookup(atom.atomic_number, hyb_idx).unwrap_or_else(|| {
+            let ra = crate::desc::vsa::rb0_radius(atom.atomic_number);
+            ra / rb0_c - 1.0
+        });
         alpha_sum += alpha;
     }
     alpha_sum
+}
+
+fn compute_hall_kier_alpha(mol: &Molecule) -> f32 {
+    compute_hall_kier_alpha_sum(mol) as f32
+}
+
+/// Public f64 accessor for Kappa index computation.
+pub fn compute_hall_kier_alpha_f64(mol: &Molecule) -> f64 {
+    compute_hall_kier_alpha_sum(mol)
 }
 
 impl Descriptor for HallKierAlpha {
@@ -351,7 +333,7 @@ impl Descriptor for HallKierAlpha {
         "HallKierAlpha"
     }
 
-    fn calculate(&self, mol: &mut Molecule) -> DescriptorValue {
+    fn calculate(&self, mol: &mut Molecule, ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
         DescriptorValue::Float(compute_hall_kier_alpha(mol))
     }
 }
@@ -372,23 +354,60 @@ impl Descriptor for HallKierAlpha {
 /// Reference: S. H. Bertz, J. Am. Chem. Soc., 103, 3599-3601 (1981)
 pub struct BertzCT;
 
-fn compute_bertz_ct(mol: &Molecule) -> f32 {
+/// Encodes a 2-class Bertz connection key into a compact `u64`.
+///
+/// Layout:
+/// - bit 63 = 1 (pair discriminator)
+/// - bits 31..16 = lower class id
+/// - bits 15..0  = higher class id
+///
+/// Class ids originate from atom-index bounded symmetry classes (`<= u16::MAX`),
+/// so this packing is lossless for Ferrum's molecule-size constraints.
+#[inline]
+fn pack_bertz_pair_key(class_lo: usize, class_hi: usize) -> u64 {
+    debug_assert!(class_lo <= u16::MAX as usize);
+    debug_assert!(class_hi <= u16::MAX as usize);
+    (1u64 << 63) | ((class_lo as u64) << 16) | class_hi as u64
+}
+
+/// Encodes a 3-class Bertz connection key into a compact `u64`.
+///
+/// Layout:
+/// - bit 62 = 1 (triple discriminator)
+/// - bits 47..32 = first class id (min neighbor class)
+/// - bits 31..16 = hinge class id
+/// - bits 15..0  = third class id (max neighbor class)
+///
+/// Bit 63 remains 0, so pair and triple key-spaces are disjoint.
+#[inline]
+fn pack_bertz_triple_key(class_a: usize, class_b: usize, class_c: usize) -> u64 {
+    debug_assert!(class_a <= u16::MAX as usize);
+    debug_assert!(class_b <= u16::MAX as usize);
+    debug_assert!(class_c <= u16::MAX as usize);
+    (1u64 << 62) | ((class_a as u64) << 32) | ((class_b as u64) << 16) | class_c as u64
+}
+
+fn compute_bertz_ct(mol: &mut Molecule) -> f32 {
+    use std::collections::HashMap;
+
     let n = mol.num_atoms();
     if n < 2 {
         return 0.0;
     }
 
-    // Step 1: Build neighbor list and bond order lookup
-    let num_bonds = mol.num_bonds();
-    let mut degrees = vec![0usize; n];
-    let mut neighbors: Vec<Vec<usize>> = vec![vec![]; n];
-    // bond_orders[(min,max)] = order
-    let mut bond_orders = std::collections::HashMap::new();
+    // Step 1: Build an adjacency list that carries the effective bond-order weight used by
+    // Bertz connection counting.
+    //
+    // Why this shape:
+    // - SmallVec keeps common valence (<=4) neighbor lists on stack and avoids heap churn.
+    // - Storing BO next to the neighbor index avoids a second map lookup inside the hot loop.
+    // - Neighbor ordering is intentionally left as insertion order; all downstream accumulation
+    //   logic is commutative and does not require sorted neighbors.
+    let mut neighbors: Vec<SmallVec<[(usize, f64); 4]>> = vec![SmallVec::new(); n];
 
     for bond in &mol.bonds {
         let a1 = bond.source as usize;
         let a2 = bond.target as usize;
-        let (lo, hi) = if a1 < a2 { (a1, a2) } else { (a2, a1) };
         let bo: f64 = if bond.is_aromatic() || bond.bond_type == BondType::Aromatic {
             1.5
         } else {
@@ -399,99 +418,129 @@ fn compute_bertz_ct(mol: &Molecule) -> f32 {
                 _ => 1.0,
             }
         };
-        bond_orders.insert((lo, hi), bo);
-        if !neighbors[a1].contains(&a2) {
-            neighbors[a1].push(a2);
-        }
-        if !neighbors[a2].contains(&a1) {
-            neighbors[a2].push(a1);
-        }
-        degrees[a1] += 1;
-        degrees[a2] += 1;
-    }
-    for nbrs in &mut neighbors {
-        nbrs.sort();
+        neighbors[a1].push((a2, bo));
+        neighbors[a2].push((a1, bo));
     }
 
-    // Step 2: Symmetry classes from bond-order-weighted distance matrix
-    let bo_dist = super::balaban::compute_distance_matrix(mol, true);
+    // Step 2: Symmetry classes from bond-order-weighted distance matrix.
+    //
+    // We intentionally derive classes from sorted BO-distance signatures (RDKit-like behavior).
+    // The reusable buffers below avoid per-atom heap allocations while preserving exact logic.
+    super::balaban::ensure_bo_distance_matrix_cached(mol);
+    let bo_dist = super::balaban::cached_bo_distance_matrix_ref(mol)
+        .expect("Balaban BO distance cache initialized");
     let mut sym_classes = vec![0usize; n];
-    let mut keys_seen: Vec<Vec<String>> = vec![];
+    let cutoff = n.min(100);
+    let mut class_by_key: HashMap<SmallVec<[i32; 64]>, usize> = HashMap::with_capacity(n);
+    let mut next_class = 1usize;
+    let mut sorted_distances = Vec::with_capacity(n);
+    let mut key_buf = SmallVec::<[i32; 64]>::new();
     for i in 0..n {
-        let mut dv: Vec<f64> = (0..n).map(|j| bo_dist[i * n + j]).collect();
-        dv.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-        let key: Vec<String> = dv.iter().map(|x| format!("{:.4}", x)).collect();
-        if let Some(idx) = keys_seen.iter().position(|k| k == &key) {
-            sym_classes[i] = idx + 1;
+        sorted_distances.clear();
+        sorted_distances.extend_from_slice(&bo_dist[i * n..(i + 1) * n]);
+        sorted_distances.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+
+        key_buf.clear();
+        key_buf.extend(
+            sorted_distances
+                .iter()
+                .take(cutoff)
+                .map(|x| (x * 10_000.0).round() as i32),
+        );
+
+        let class = if let Some(&class) = class_by_key.get(&key_buf) {
+            class
         } else {
-            keys_seen.push(key);
-            sym_classes[i] = keys_seen.len();
-        }
+            let class = next_class;
+            next_class += 1;
+            class_by_key.insert(key_buf.clone(), class);
+            class
+        };
+        sym_classes[i] = class;
     }
 
-    // Step 3: Connection counting
-    let mut connection_dict: std::collections::HashMap<Vec<usize>, f64> =
-        std::collections::HashMap::new();
-    let mut atom_type_counts: std::collections::HashMap<u8, u32> = std::collections::HashMap::new();
+    // Step 3: Connection counting.
+    //
+    // Pair/triple keys are packed into a single integer-key map to keep per-update
+    // hashing and key materialization costs low in this central nested loop.
+    // We also maintain `tot_conn` incrementally, avoiding an extra full-map pass.
+    let mut connection_counts: U64FastMap<f64> = U64FastMap::default();
+    connection_counts.reserve(mol.num_bonds().saturating_mul(4).max(16));
+    let mut atom_type_counts = [0u32; 256];
+    let mut tot_conn = 0.0f64;
 
     for atom_idx in 0..n {
         let z = mol.atoms[atom_idx].atomic_number;
-        *atom_type_counts.entry(z).or_insert(0) += 1;
+        atom_type_counts[z as usize] += 1;
 
         let hinge_class = sym_classes[atom_idx];
         let nbrs = &neighbors[atom_idx];
         let num_nbrs = nbrs.len();
 
         for i in 0..num_nbrs {
-            let ni = nbrs[i];
+            let (ni, bo_i) = nbrs[i];
             let ni_class = sym_classes[ni];
-            let (lo_i, hi_i) = if atom_idx < ni {
-                (atom_idx, ni)
-            } else {
-                (ni, atom_idx)
-            };
-            let bo_i = *bond_orders.get(&(lo_i, hi_i)).unwrap_or(&1.0);
 
             // Extra connections from multi-order bonds
             if bo_i > 1.0 && ni > atom_idx {
                 let num_conn = bo_i * (bo_i - 1.0) / 2.0;
-                let key = vec![ni_class.min(hinge_class), ni_class.max(hinge_class)];
-                *connection_dict.entry(key).or_insert(0.0) += num_conn;
+                let key = pack_bertz_pair_key(ni_class.min(hinge_class), ni_class.max(hinge_class));
+                *connection_counts.entry(key).or_insert(0.0) += num_conn;
+                tot_conn += num_conn;
             }
 
             // Pairs of neighbors through hinge
             for j in (i + 1)..num_nbrs {
-                let nj = nbrs[j];
+                let (nj, bo_j) = nbrs[j];
                 let nj_class = sym_classes[nj];
-                let (lo_j, hi_j) = if atom_idx < nj {
-                    (atom_idx, nj)
-                } else {
-                    (nj, atom_idx)
-                };
-                let bo_j = *bond_orders.get(&(lo_j, hi_j)).unwrap_or(&1.0);
                 let num_conn = bo_i * bo_j;
-                let key = vec![ni_class.min(nj_class), hinge_class, ni_class.max(nj_class)];
-                *connection_dict.entry(key).or_insert(0.0) += num_conn;
+                let key = pack_bertz_triple_key(
+                    ni_class.min(nj_class),
+                    hinge_class,
+                    ni_class.max(nj_class),
+                );
+                *connection_counts.entry(key).or_insert(0.0) += num_conn;
+                tot_conn += num_conn;
             }
         }
     }
 
-    if connection_dict.is_empty() {
-        connection_dict.insert(vec![0], 1.0);
+    // Step 4: Calculate entropies.
+    //
+    // Connection entropy is computed in closed form to reduce hot-loop arithmetic:
+    //
+    // H = -sum_i p_i log2(p_i), p_i = c_i / T
+    // T * H           == T*log2(T) - sum_i c_i*log2(c_i)
+    // T * (H + log2(T)) == 2*T*log2(T) - sum_i c_i*log2(c_i)
+    //
+    // So we avoid per-entry probability divisions and compute:
+    // conn_ie = 2*T*log2(T) - sum_i c_i*log2(c_i)
+    //
+    // This is algebraically equivalent to the previous implementation.
+    if tot_conn <= 0.0 {
+        // Preserve previous behavior for empty connection dictionaries:
+        // using a synthetic [1.0] count yields zero entropy contribution.
+        tot_conn = 1.0;
     }
 
-    // Step 4: Calculate entropies
-    let conn_values: Vec<f64> = connection_dict.values().copied().collect();
-    let tot_conn: f64 = conn_values.iter().sum();
-    let conn_ie = if tot_conn > 0.0 {
-        let ie = info_entropy(&conn_values);
-        tot_conn * (ie + tot_conn.log2())
-    } else {
-        0.0
-    };
+    let mut sum_c_log_c = 0.0f64;
+    for &v in connection_counts.values() {
+        if v > 0.0 {
+            sum_c_log_c += v * v.log2();
+        }
+    }
+    let conn_ie = 2.0 * tot_conn * tot_conn.log2() - sum_c_log_c;
 
-    let atom_values: Vec<f64> = atom_type_counts.values().map(|&v| v as f64).collect();
-    let atom_ie = n as f64 * info_entropy(&atom_values);
+    // Atom entropy uses the same closed-form reduction:
+    // n * H(atom_counts) == sum_i c_i * log2(n / c_i)
+    let n_f64 = n as f64;
+    let mut atom_ie = 0.0f64;
+    for &count in &atom_type_counts {
+        if count > 0 {
+            let c = count as f64;
+            atom_ie += c * (n_f64 / c).log2();
+        }
+    }
 
     (conn_ie + atom_ie) as f32
 }
@@ -517,7 +566,7 @@ impl Descriptor for BertzCT {
         "BertzCT"
     }
 
-    fn calculate(&self, mol: &mut Molecule) -> DescriptorValue {
+    fn calculate(&self, mol: &mut Molecule, ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
         DescriptorValue::Float(compute_bertz_ct(mol))
     }
 }
@@ -589,15 +638,23 @@ fn compute_ipc(mol: &Molecule) -> f64 {
         }
 
         // an = A * bn (matrix multiplication)
+        //
+        // Loop order is intentionally i-l-j (instead of i-j-l) so we walk bn
+        // rows and next rows contiguously in memory, which improves cache
+        // locality in this O(n^3) kernel.
         if k < n {
             let mut next = vec![0.0f64; n * n];
             for i in 0..n {
-                for j in 0..n {
-                    let mut s = 0.0f64;
-                    for l in 0..n {
-                        s += adj[i * n + l] * bn[l * n + j];
+                let row = i * n;
+                for l in 0..n {
+                    let a_il = adj[row + l];
+                    if a_il == 0.0 {
+                        continue;
                     }
-                    next[i * n + j] = s;
+                    let bn_row = l * n;
+                    for j in 0..n {
+                        next[row + j] += a_il * bn[bn_row + j];
+                    }
                 }
             }
             an = next;
@@ -623,7 +680,7 @@ impl Descriptor for Ipc {
         "Ipc"
     }
 
-    fn calculate(&self, mol: &mut Molecule) -> DescriptorValue {
+    fn calculate(&self, mol: &mut Molecule, ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
         DescriptorValue::Float64(compute_ipc(mol))
     }
 }
@@ -653,7 +710,7 @@ impl Descriptor for FragmentComplexity {
         "FragmentComplexity"
     }
 
-    fn calculate(&self, mol: &mut Molecule) -> DescriptorValue {
+    fn calculate(&self, mol: &mut Molecule, ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
         DescriptorValue::Float(compute_fragment_complexity(mol))
     }
 }
@@ -682,12 +739,12 @@ mod tests {
 
     fn calc_float(desc: &dyn Descriptor, smiles: &str) -> f32 {
         let mut mol = parse_smiles(smiles).expect("valid SMILES");
-        desc.calculate(&mut mol).as_float()
+        desc.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()).as_float()
     }
 
     fn calc_int(desc: &dyn Descriptor, smiles: &str) -> u32 {
         let mut mol = parse_smiles(smiles).expect("valid SMILES");
-        desc.calculate(&mut mol).as_int()
+        desc.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()).as_int()
     }
 
     // -- FractionCSP3 --

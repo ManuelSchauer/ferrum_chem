@@ -62,7 +62,7 @@ impl Descriptor for APol {
         "APol"
     }
 
-    fn calculate(&self, mol: &mut Molecule) -> DescriptorValue {
+    fn calculate(&self, mol: &mut Molecule, ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
         let h_pol = POLARIZABILITY[1];
         let mut sum = 0.0f32;
         for atom in &mol.atoms {
@@ -81,7 +81,7 @@ impl Descriptor for BPol {
         "BPol"
     }
 
-    fn calculate(&self, mol: &mut Molecule) -> DescriptorValue {
+    fn calculate(&self, mol: &mut Molecule, ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
         let mut sum = 0.0f32;
         for bond in &mol.bonds {
             let p_src = atom_pol(mol.atoms[bond.source as usize].atomic_number);
@@ -103,7 +103,7 @@ mod tests {
 
     fn calc(desc: &dyn Descriptor, smiles: &str) -> f32 {
         let mut mol = parse(smiles);
-        match desc.calculate(&mut mol) {
+        match desc.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()) {
             DescriptorValue::Float(v) => v,
             other => panic!("expected Float, got {:?}", other),
         }
@@ -166,7 +166,7 @@ mod tests {
     #[test]
     fn test_empty_molecule() {
         let mut mol = Molecule::default();
-        assert!(matches!(APol.calculate(&mut mol), DescriptorValue::Float(v) if v == 0.0));
-        assert!(matches!(BPol.calculate(&mut mol), DescriptorValue::Float(v) if v == 0.0));
+        assert!(matches!(APol.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()), DescriptorValue::Float(v) if v == 0.0));
+        assert!(matches!(BPol.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()), DescriptorValue::Float(v) if v == 0.0));
     }
 }

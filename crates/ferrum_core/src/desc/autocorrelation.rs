@@ -12,6 +12,9 @@
 //!
 //! Reference: Moreau, G. & Broto, P. (1980) Nouv. J. Chim. 4, 359-360.
 
+use super::atomic_props::{
+    atomic_mass, burden_polarizability, burden_vdw_volume, pauling_electronegativity,
+};
 use super::typed::{Descriptor, DescriptorValue};
 use crate::mol::molecule::Molecule;
 use crate::types::AtomIdx;
@@ -21,74 +24,12 @@ use std::collections::VecDeque;
 // Atomic properties
 // ---------------------------------------------------------------------------
 
-/// Pauling electronegativity for common elements.
-fn electronegativity(atomic_number: u8) -> f64 {
-    match atomic_number {
-        1 => 2.20,  // H
-        5 => 2.04,  // B
-        6 => 2.55,  // C
-        7 => 3.04,  // N
-        8 => 3.44,  // O
-        9 => 3.98,  // F
-        14 => 1.90, // Si
-        15 => 2.19, // P
-        16 => 2.58, // S
-        17 => 3.16, // Cl
-        35 => 2.96, // Br
-        53 => 2.66, // I
-        _ => 2.00,  // default
-    }
-}
-
-/// Van der Waals volume (Å³), approximated as (4/3)π r³.
-fn vdw_volume(atomic_number: u8) -> f64 {
-    let r: f64 = match atomic_number {
-        1 => 1.20,
-        5 => 1.92,
-        6 => 1.70,
-        7 => 1.55,
-        8 => 1.52,
-        9 => 1.47,
-        14 => 2.10,
-        15 => 1.80,
-        16 => 1.80,
-        17 => 1.75,
-        35 => 1.85,
-        53 => 1.98,
-        _ => 1.70,
-    };
-    (4.0 / 3.0) * std::f64::consts::PI * r.powi(3)
-}
-
-/// Atomic polarizability (Å³, approximate).
-fn polarizability(atomic_number: u8) -> f64 {
-    match atomic_number {
-        1 => 0.67,
-        5 => 3.03,
-        6 => 1.76,
-        7 => 1.10,
-        8 => 0.80,
-        9 => 0.56,
-        14 => 5.38,
-        15 => 3.63,
-        16 => 2.90,
-        17 => 2.18,
-        35 => 3.05,
-        53 => 5.35,
-        _ => 1.50,
-    }
-}
-
-/// Standard atomic mass.
-fn atomic_mass(atomic_number: u8) -> f64 {
-    crate::mol::elements::ATOMIC_MASSES[atomic_number as usize] as f64
-}
-
 // ---------------------------------------------------------------------------
 // Distance matrix
 // ---------------------------------------------------------------------------
 
-fn compute_distance_matrix(mol: &Molecule) -> Vec<u32> {
+#[allow(dead_code)]
+fn _compute_distance_matrix_unused(mol: &Molecule) -> Vec<u32> {
     let n = mol.num_atoms();
     let mut distances = vec![u32::MAX; n * n];
 
@@ -171,7 +112,7 @@ impl Descriptor for Autocorrelation {
         "Autocorrelation"
     }
 
-    fn calculate(&self, mol: &mut Molecule) -> DescriptorValue {
+    fn calculate(&self, mol: &mut Molecule, ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
         let mut values = vec![0.0f32; MAX_LAG * 4];
 
         let n = mol.num_atoms();
@@ -179,20 +120,20 @@ impl Descriptor for Autocorrelation {
             return DescriptorValue::FloatVec(values);
         }
 
-        let dist = compute_distance_matrix(mol);
+        let dist = crate::algo::paths::compute_unweighted_distance_matrix_cached(mol, ctx);
 
         // Compute weight vectors
         let w_mass: Vec<f64> = (0..n)
             .map(|i| atomic_mass(mol.atoms[i].atomic_number))
             .collect();
         let w_pol: Vec<f64> = (0..n)
-            .map(|i| polarizability(mol.atoms[i].atomic_number))
+            .map(|i| burden_polarizability(mol.atoms[i].atomic_number))
             .collect();
         let w_en: Vec<f64> = (0..n)
-            .map(|i| electronegativity(mol.atoms[i].atomic_number))
+            .map(|i| pauling_electronegativity(mol.atoms[i].atomic_number))
             .collect();
         let w_vdw: Vec<f64> = (0..n)
-            .map(|i| vdw_volume(mol.atoms[i].atomic_number))
+            .map(|i| burden_vdw_volume(mol.atoms[i].atomic_number))
             .collect();
 
         let ats_mass = compute_ats(mol, &dist, &w_mass);
@@ -223,7 +164,7 @@ mod tests {
 
     fn calc_ats(smiles: &str) -> Vec<f32> {
         let mut mol = parse_smiles(smiles).expect("valid SMILES");
-        match Autocorrelation.calculate(&mut mol) {
+        match Autocorrelation.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()) {
             DescriptorValue::FloatVec(v) => v,
             other => panic!("expected FloatVec, got {:?}", other),
         }

@@ -1,12 +1,12 @@
 use ferrum_core::algo::aromaticity::perceive_aromaticity;
 use ferrum_core::algo::valency::assign_implicit_hydrogens;
-use ferrum_core::desc::Descriptor;
 use ferrum_core::desc::aromatic_ring_count::AromaticRingCount;
 use ferrum_core::desc::atom_count::{AromaticAtomCount, AtomCount, HeavyAtomCount};
-use ferrum_core::desc::batch::{calculate_batch, write_csv, write_json};
+use ferrum_core::desc::batch::{calculate_batch_flat, write_csv_flat, write_json_flat};
 use ferrum_core::desc::bond_count::BondCount;
 use ferrum_core::desc::formal_charge::FormalCharge;
 use ferrum_core::desc::molecular_weight::MolecularWeight;
+use ferrum_core::desc::Descriptor;
 use ferrum_core::io::csv_reader::CsvReader;
 use std::fs::File;
 use std::io::Write;
@@ -88,21 +88,20 @@ CC(C)CC
     println!();
 
     // Calculate descriptors in parallel
-    let matrix = calculate_batch(&mut molecules, &descriptors);
+    let matrix = calculate_batch_flat(&mut molecules, &descriptors);
 
     println!(
         "✅ Calculated {} x {} descriptor matrix\n",
-        matrix.len(),
-        matrix[0].len()
+        matrix.rows, matrix.cols
     );
 
     // Display sample results
     println!("📈 Step 3: Sample Results (first 3 molecules):");
     println!("───────────────────────────────────────────────────────────────");
 
-    for i in 0..3.min(matrix.len()) {
+    for i in 0..3.min(matrix.rows) {
         println!("\n{} (row {}):", smiles_list[i], i + 1);
-        for (desc, &value) in descriptors.iter().zip(&matrix[i]) {
+        for (desc, &value) in descriptors.iter().zip(matrix.row(i)) {
             println!("  {:25} {:.2}", desc.name(), value);
         }
     }
@@ -110,16 +109,22 @@ CC(C)CC
 
     // Write CSV output
     println!("💾 Step 4: Writing output files...");
+    let feature_names: Vec<String> = descriptors
+        .iter()
+        .map(|desc| desc.name().to_string())
+        .collect();
 
     let csv_output = "/tmp/ferrum_descriptors.csv";
     let mut csv_file = File::create(csv_output).expect("Failed to create CSV output");
-    write_csv(&mut csv_file, &smiles_list, &descriptors, &matrix).expect("Failed to write CSV");
+    write_csv_flat(&mut csv_file, &smiles_list, &feature_names, &matrix)
+        .expect("Failed to write CSV");
     println!("   ✓ CSV: {}", csv_output);
 
     // Write JSON output
     let json_output = "/tmp/ferrum_descriptors.json";
     let mut json_file = File::create(json_output).expect("Failed to create JSON output");
-    write_json(&mut json_file, &smiles_list, &descriptors, &matrix).expect("Failed to write JSON");
+    write_json_flat(&mut json_file, &smiles_list, &feature_names, &matrix)
+        .expect("Failed to write JSON");
     println!("   ✓ JSON: {}", json_output);
 
     println!("\n═══════════════════════════════════════════════════════════════");

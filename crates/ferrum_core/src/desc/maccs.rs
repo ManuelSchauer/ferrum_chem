@@ -48,7 +48,7 @@ impl Descriptor for MaccsKeys {
         "MaccsKeys"
     }
 
-    fn calculate(&self, mol: &mut Molecule) -> DescriptorValue {
+    fn calculate(&self, mol: &mut Molecule, ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
         let mut bits = bitvec![u8, Lsb0; 0; 166];
 
         let count_keys = [
@@ -1005,7 +1005,7 @@ mod tests {
 
     fn calc_maccs(smiles: &str) -> BitVec<u8, Lsb0> {
         let mut mol = parse_and_prepare(smiles);
-        MaccsKeys.calculate(&mut mol).as_binary().clone()
+        MaccsKeys.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()).as_binary().clone()
     }
 
     #[test]

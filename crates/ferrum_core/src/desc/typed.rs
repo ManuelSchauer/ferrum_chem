@@ -15,7 +15,7 @@
 //!
 //! let mol = parse_smiles("c1ccccc1").unwrap();
 //! // let mw_desc = MolecularWeight;
-//! // let value = mw_desc.calculate(&mol);
+//! // let value = mw_desc.calculate(&mol, &mut ferrum_core::desc::context::CalculationContext::new());
 //!
 //! // match value {
 //! //     DescriptorValue::Float(f) => println!("MW: {:.2}", f),
@@ -35,7 +35,7 @@
 //!
 //! let mut ml_vector = Vec::new();
 //! for desc in &descriptors {
-//!     let value = desc.calculate(&mut mol);
+//!     let value = desc.calculate(&mut mol, &mut ferrum_core::desc::context::CalculationContext::new());
 //!     value.to_floats(&mut ml_vector);
 //! }
 //! ```
@@ -250,7 +250,7 @@ impl DescriptorValue {
 ///         "MyDescriptor"
 ///     }
 ///
-///     fn calculate(&self, mol: &mut Molecule) -> DescriptorValue {
+///     fn calculate(&self, mol: &mut Molecule, ctx: &mut ferrum_core::desc::context::CalculationContext) -> DescriptorValue {
 ///         DescriptorValue::Int(mol.num_atoms() as u32)
 ///     }
 /// }
@@ -266,14 +266,18 @@ pub trait Descriptor: Send + Sync {
     ///
     /// Note: Takes `&mut Molecule` for algorithms that need to cache
     /// computed properties (e.g., ring perception sets ring flags).
-    fn calculate(&self, mol: &mut Molecule) -> DescriptorValue;
+    fn calculate(
+        &self,
+        mol: &mut Molecule,
+        ctx: &mut crate::desc::context::CalculationContext,
+    ) -> DescriptorValue;
 
     /// Number of float values when converted to ML vector.
     ///
     /// Default implementation calculates a value and returns its length.
     /// Override if this can be determined without calculation (e.g., constant size).
-    fn size(&self, mol: &mut Molecule) -> usize {
-        self.calculate(mol).len()
+    fn size(&self, mol: &mut Molecule, ctx: &mut crate::desc::context::CalculationContext) -> usize {
+        self.calculate(mol, ctx).len()
     }
 }
 
@@ -296,9 +300,10 @@ pub trait Descriptor: Send + Sync {
 /// // Use with linfa, ndarray, etc.
 /// ```
 pub fn build_ml_vector(mol: &mut Molecule, descriptors: &[Box<dyn Descriptor>]) -> Vec<f32> {
+    let mut ctx = crate::desc::context::CalculationContext::new();
     let mut output = Vec::new();
     for desc in descriptors {
-        let value = desc.calculate(mol);
+        let value = desc.calculate(mol, &mut ctx);
         value.to_floats(&mut output);
     }
     output
@@ -331,7 +336,15 @@ pub fn build_ml_vectors_parallel(
     use rayon::prelude::*;
     molecules
         .par_iter_mut()
-        .map(|mol| build_ml_vector(mol, descriptors))
+        .map_init(crate::desc::context::CalculationContext::new, |ctx, mol| {
+            ctx.reset_for_new_molecule();
+            let mut output = Vec::new();
+            for desc in descriptors {
+                let value = desc.calculate(mol, ctx);
+                value.to_floats(&mut output);
+            }
+            output
+        })
         .collect()
 }
 
@@ -478,7 +491,7 @@ mod tests {
             "Example"
         }
 
-        fn calculate(&self, mol: &mut Molecule) -> DescriptorValue {
+        fn calculate(&self, mol: &mut Molecule, ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
             DescriptorValue::Int(mol.num_atoms() as u32)
         }
     }
@@ -489,7 +502,7 @@ mod tests {
 
         let mut mol = parse_smiles("CCO").unwrap();
         let desc = ExampleDescriptor;
-        let value = desc.calculate(&mut mol);
+        let value = desc.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new());
 
         assert_eq!(desc.name(), "Example");
         assert_eq!(value.as_int(), 3); // 3 heavy atoms

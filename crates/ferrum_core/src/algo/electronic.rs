@@ -23,6 +23,11 @@
 use crate::mol::bond::Bond;
 use crate::mol::molecule::Molecule;
 use crate::types::Hybridization;
+use once_cell::sync::Lazy;
+use smallvec::SmallVec;
+
+static GASTEIGER_CACHE_ENABLED: Lazy<bool> =
+    Lazy::new(|| std::env::var_os("FERRUM_DISABLE_GASTEIGER_CACHE").is_none());
 
 /// Electronegativity parameters (a, b, c) for χ = a + b·q + c·q².
 /// `d` = a + b + c (ionization potential at q = +1), used as charge transfer denominator.
@@ -745,33 +750,28 @@ fn split_charge_conjugated(mol: &Molecule, charges: &mut [f64]) {
     }
 }
 
-/// Compute Gasteiger-Marsili partial charges for all atoms in a molecule.
-///
-/// Returns a `Vec<f64>` of partial charges (one per heavy atom, indexed by atom).
-/// Uses 12 iterations (RDKit default) with geometric damping (0.5^(k+1)).
-/// Implicit hydrogens are modeled as virtual neighbors using IONXH = 20.02.
-/// Atoms with unknown parameters are assigned zero charge and excluded from
-/// charge transfer.
-pub fn compute_gasteiger_charges(mol: &Molecule) -> Vec<f64> {
+fn compute_gasteiger_charges_uncached(mol: &Molecule) -> Vec<f64> {
     let n = mol.num_atoms();
     if n == 0 {
         return Vec::new();
     }
 
     // Resolve parameters for each atom; None means skip.
-    let params: Vec<Option<ENParams>> = (0..n).map(|i| get_params(mol, i)).collect();
+    let params: SmallVec<[Option<ENParams>; 64]> = (0..n).map(|i| get_params(mol, i)).collect();
 
     // RDKit behavior: if an atom with no Gasteiger parameters has bonds,
     // NaN propagates to all atoms in the same connected fragment.
     // Isolated atoms without params keep their formal charge.
-    let mut nan_atoms = vec![false; n];
+    let mut nan_atoms: SmallVec<[bool; 64]> = SmallVec::with_capacity(n);
+    nan_atoms.resize(n, false);
     for i in 0..n {
         if params[i].is_none() {
             // Check if this atom has any bonds
             let has_bonds = !mol.adjacency[i].is_empty();
             if has_bonds {
                 // Flood-fill NaN to all atoms in this connected component
-                let mut stack = vec![i];
+                let mut stack: SmallVec<[usize; 64]> = SmallVec::new();
+                stack.push(i);
                 while let Some(idx) = stack.pop() {
                     if nan_atoms[idx] {
                         continue;
@@ -795,17 +795,20 @@ pub fn compute_gasteiger_charges(mol: &Molecule) -> Vec<f64> {
 
     // RDKit uses total hydrogens here (implicit + bracket-specified), not
     // just graph-explicit hydrogen atoms.
-    let n_h: Vec<usize> = mol.atoms.iter().map(|a| a.total_h() as usize).collect();
+    let n_h: SmallVec<[usize; 64]> = mol.atoms.iter().map(|a| a.total_h() as usize).collect();
 
     // Initialize charges to 0, then distribute formal charges via conjugation splitting.
     let mut q: Vec<f64> = vec![0.0; n];
     split_charge_conjugated(mol, &mut q);
 
     // Per-heavy-atom implicit H charge accumulator.
-    let mut q_h: Vec<f64> = vec![0.0; n];
+    let mut q_h: SmallVec<[f64; 64]> = SmallVec::with_capacity(n);
+    q_h.resize(n, 0.0);
 
-    let mut chi = vec![0.0_f64; n];
-    let mut ion_x = vec![0.0_f64; n];
+    let mut chi: SmallVec<[f64; 64]> = SmallVec::with_capacity(n);
+    chi.resize(n, 0.0);
+    let mut ion_x: SmallVec<[f64; 64]> = SmallVec::with_capacity(n);
+    ion_x.resize(n, 0.0);
     for i in 0..n {
         if let Some(p) = &params[i] {
             ion_x[i] = p.d;
@@ -882,6 +885,37 @@ pub fn compute_gasteiger_charges(mol: &Molecule) -> Vec<f64> {
     }
 
     q
+}
+
+/// Compute Gasteiger-Marsili partial charges for all atoms in a molecule.
+///
+/// Returns a `Vec<f64>` of partial charges (one per heavy atom, indexed by atom).
+/// Uses 12 iterations (RDKit default) with geometric damping (0.5^(k+1)).
+/// Implicit hydrogens are modeled as virtual neighbors using IONXH = 20.02.
+/// Atoms with unknown parameters are assigned zero charge and excluded from
+/// charge transfer.
+pub fn compute_gasteiger_charges(mol: &Molecule) -> Vec<f64> {
+    compute_gasteiger_charges_uncached(mol)
+}
+
+pub(crate) fn ensure_gasteiger_charges_cached(mol: &mut Molecule) {
+    if !*GASTEIGER_CACHE_ENABLED || mol.cached_gasteiger_charges().is_some() {
+        return;
+    }
+    let charges = compute_gasteiger_charges_uncached(mol);
+    mol.store_gasteiger_charges(charges);
+}
+
+pub(crate) fn cached_gasteiger_charges_ref(mol: &Molecule) -> Option<&[f64]> {
+    mol.cached_gasteiger_charges()
+}
+
+pub(crate) fn compute_gasteiger_charges_cached(mol: &mut Molecule) -> Vec<f64> {
+    ensure_gasteiger_charges_cached(mol);
+    if let Some(cached) = cached_gasteiger_charges_ref(mol) {
+        return cached.to_vec();
+    }
+    compute_gasteiger_charges_uncached(mol)
 }
 
 #[cfg(test)]

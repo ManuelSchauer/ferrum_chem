@@ -19,6 +19,7 @@ pub trait MoleculeBuilder {
 impl MoleculeBuilder for Molecule {
     #[inline]
     fn add_atom(&mut self, element: u8) -> AtomIdx {
+        self.invalidate_cached_properties();
         let idx = self.atoms.len() as AtomIdx;
         self.atoms.push(Atom::new(element));
         self.adjacency.push(SmallVec::new());
@@ -27,6 +28,7 @@ impl MoleculeBuilder for Molecule {
 
     #[inline]
     fn add_bond(&mut self, u: AtomIdx, v: AtomIdx, order: BondType) {
+        self.invalidate_cached_properties();
         let bond_idx = self.bonds.len() as u16;
         self.bonds.push(Bond::new(u, v, order));
 
@@ -37,21 +39,25 @@ impl MoleculeBuilder for Molecule {
 
     #[inline]
     fn set_charge(&mut self, atom: AtomIdx, charge: i8) {
+        self.invalidate_cached_properties();
         self.atoms[atom as usize].formal_charge = charge;
     }
 
     #[inline]
     fn set_isotope(&mut self, atom: AtomIdx, iso: u16) {
+        self.invalidate_cached_properties();
         self.atoms[atom as usize].isotope = iso;
     }
 
     #[inline]
     fn set_explicit_h(&mut self, atom: AtomIdx, count: u8) {
+        self.invalidate_cached_properties();
         self.atoms[atom as usize].num_explicit_h = count;
     }
 
     #[inline]
     fn set_aromatic(&mut self, atom: AtomIdx, aromatic: bool) {
+        self.invalidate_cached_properties();
         self.atoms[atom as usize].set_aromatic(aromatic);
     }
 

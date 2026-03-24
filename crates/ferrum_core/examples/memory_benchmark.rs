@@ -21,7 +21,7 @@ fn main() {
     // -----------------------------------------------------------------------
 
     let maccs = MaccsKeys;
-    let value = maccs.calculate(&mut mol);
+    let value = maccs.calculate(&mut mol, &mut ferrum_core::desc::context::CalculationContext::new());
 
     let bitvec = value.as_binary();
     let typed_size = std::mem::size_of_val(bitvec.as_raw_slice());

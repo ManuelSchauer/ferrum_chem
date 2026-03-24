@@ -35,6 +35,24 @@ pub fn compute_hbond_acceptors(mol: &Molecule) -> u32 {
     count_matches(mol, &HBA_SMARTS) as u32
 }
 
+pub(crate) fn compute_hbond_donors_cached(mol: &mut Molecule) -> u32 {
+    if let Some(cached) = mol.cached_hbond_donor_count() {
+        return cached;
+    }
+    let count = compute_hbond_donors(mol);
+    mol.store_hbond_donor_count(count);
+    count
+}
+
+pub(crate) fn compute_hbond_acceptors_cached(mol: &mut Molecule) -> u32 {
+    if let Some(cached) = mol.cached_hbond_acceptor_count() {
+        return cached;
+    }
+    let count = compute_hbond_acceptors(mol);
+    mol.store_hbond_acceptor_count(count);
+    count
+}
+
 /// Hydrogen bond donor count descriptor.
 ///
 /// Returns `Int(u32)` with number of N-H and O-H groups.
@@ -45,8 +63,8 @@ impl Descriptor for HBondDonor {
         "HBondDonor"
     }
 
-    fn calculate(&self, mol: &mut Molecule) -> DescriptorValue {
-        DescriptorValue::Int(compute_hbond_donors(mol))
+    fn calculate(&self, mol: &mut Molecule, ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
+        DescriptorValue::Int(compute_hbond_donors_cached(mol))
     }
 }
 
@@ -60,8 +78,8 @@ impl Descriptor for HBondAcceptor {
         "HBondAcceptor"
     }
 
-    fn calculate(&self, mol: &mut Molecule) -> DescriptorValue {
-        DescriptorValue::Int(compute_hbond_acceptors(mol))
+    fn calculate(&self, mol: &mut Molecule, ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
+        DescriptorValue::Int(compute_hbond_acceptors_cached(mol))
     }
 }
 
@@ -210,7 +228,7 @@ mod tests {
         let mut mol = parse_smiles("CCO").unwrap();
         let desc = HBondDonor;
         assert_eq!(desc.name(), "HBondDonor");
-        assert_eq!(desc.calculate(&mut mol), DescriptorValue::Int(1));
+        assert_eq!(desc.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()), DescriptorValue::Int(1));
     }
 
     #[test]
@@ -218,6 +236,6 @@ mod tests {
         let mut mol = parse_smiles("CCO").unwrap();
         let desc = HBondAcceptor;
         assert_eq!(desc.name(), "HBondAcceptor");
-        assert_eq!(desc.calculate(&mut mol), DescriptorValue::Int(1));
+        assert_eq!(desc.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()), DescriptorValue::Int(1));
     }
 }

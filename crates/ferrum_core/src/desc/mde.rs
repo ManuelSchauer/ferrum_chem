@@ -15,7 +15,8 @@ use crate::mol::molecule::Molecule;
 use crate::types::AtomIdx;
 use std::collections::VecDeque;
 
-fn compute_distance_matrix(mol: &Molecule) -> Vec<u32> {
+#[allow(dead_code)]
+fn _compute_distance_matrix_unused(mol: &Molecule) -> Vec<u32> {
     let n = mol.num_atoms();
     let mut distances = vec![u32::MAX; n * n];
     for start in 0..n {
@@ -84,7 +85,7 @@ impl Descriptor for MDE {
         "MDE"
     }
 
-    fn calculate(&self, mol: &mut Molecule) -> DescriptorValue {
+    fn calculate(&self, mol: &mut Molecule, ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
         let mut values = vec![0.0f32; NUM_PAIR_TYPES];
 
         let n = mol.num_atoms();
@@ -92,7 +93,7 @@ impl Descriptor for MDE {
             return DescriptorValue::FloatVec(values);
         }
 
-        let dist = compute_distance_matrix(mol);
+        let dist = crate::algo::paths::compute_unweighted_distance_matrix_cached(mol, ctx);
         let classes: Vec<usize> = mol
             .atoms
             .iter()
@@ -127,7 +128,7 @@ mod tests {
 
     fn calc_mde(smiles: &str) -> Vec<f32> {
         let mut mol = parse_smiles(smiles).expect("valid SMILES");
-        match MDE.calculate(&mut mol) {
+        match MDE.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()) {
             DescriptorValue::FloatVec(v) => v,
             other => panic!("expected FloatVec, got {:?}", other),
         }

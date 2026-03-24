@@ -61,7 +61,7 @@ fn debug_molecules() {
             );
         }
         let mut mw_mol = parse_smiles(smiles).unwrap();
-        let mw_val = MolecularWeight.calculate(&mut mw_mol);
+        let mw_val = MolecularWeight.calculate(&mut mw_mol, &mut ferrum_core::desc::context::CalculationContext::new());
         eprintln!("MW: {:?}", mw_val);
         eprintln!("Candidate C(=O)-N single bonds:");
         for (bi, b) in mol.bonds.iter().enumerate() {
@@ -234,6 +234,12 @@ fn debug_rotatable_failures() {
             "CC(C)[C@@H]1NC(=O)[C@@H]2[C@H](C)CCN2C(=O)CN/C(=N\\[C@H](C(=O)N[C@H](C(=O)N[C@H](CC(=O)O)C2=NC=CS2)[C@@H](C)C2=CC=CC=C2)C(C)(C)C)[C@H](C(C)(C)C)NC1=O",
             13,
             11,
+        ),
+        (
+            "CNP0329403.3 [ferrum HIGH: 6 vs rdkit 5]",
+            "O=C(N[C@@H](OC[C@@H]1CCCN2CCCC[C@H]12)C(Cl)(Cl)Cl)C1=CC=CC2=CC=CC=C12",
+            6,
+            5,
         ),
     ];
 
@@ -439,7 +445,7 @@ fn debug_rotatable_failures() {
 
         // Also confirm via descriptor
         let mut mol2 = parse_smiles(smiles).expect("parse2");
-        let desc_val = RotatableBondCount.calculate(&mut mol2);
+        let desc_val = RotatableBondCount.calculate(&mut mol2, &mut ferrum_core::desc::context::CalculationContext::new());
         eprintln!("  descriptor output: {:?}", desc_val);
     }
 }
@@ -636,7 +642,7 @@ fn debug_hka_failures() {
 
         // Also invoke the descriptor directly
         let mut mol2 = parse_smiles(smiles).expect("parse2");
-        let ferrum_hka = match HallKierAlpha.calculate(&mut mol2) {
+        let ferrum_hka = match HallKierAlpha.calculate(&mut mol2, &mut ferrum_core::desc::context::CalculationContext::new()) {
             ferrum_core::desc::typed::DescriptorValue::Float(v) => v as f64,
             _ => f64::NAN,
         };

@@ -6,14 +6,16 @@
 //! Nature Chemistry 4, 90-98.
 
 use super::typed::{Descriptor, DescriptorValue};
-use crate::algo::iso::count_matches;
-use crate::algo::rings::find_sssr;
-use crate::desc::bond_count::compute_rotatable_bond_count;
-use crate::desc::hbond::compute_hbond_donors;
-use crate::desc::logp::compute_logp;
+use crate::algo::iso::{count_matches, has_substruct_match};
+use crate::algo::rings::{
+    ensure_minimum_cycle_basis_bonds_cached, find_minimum_cycle_basis_bonds, find_sssr,
+};
+use crate::desc::bond_count::{compute_rotatable_bond_count, compute_rotatable_bond_count_cached};
+use crate::desc::hbond::{compute_hbond_donors, compute_hbond_donors_cached};
+use crate::desc::logp::{compute_logp, compute_logp_cached};
 use crate::desc::molecular_weight::compute_molecular_weight;
-use crate::desc::tpsa::compute_tpsa;
-use crate::io::smarts::{QueryGraph, parse_smarts};
+use crate::desc::tpsa::{compute_tpsa, compute_tpsa_cached};
+use crate::io::smarts::{parse_smarts, AtomPrimitive, QueryAtom, QueryGraph};
 use crate::mol::molecule::Molecule;
 use once_cell::sync::Lazy;
 use smallvec::SmallVec;
@@ -164,74 +166,436 @@ static QED_ACCEPTOR_SMARTS: &[&str] = &[
     "[$([N;+0;X3;v3]);!$(N[C,S]=O)]",
 ];
 
-static QED_ACCEPTOR_PATTERNS: Lazy<Vec<QueryGraph>> = Lazy::new(|| {
+#[derive(Clone)]
+struct QueryScreen {
+    min_atoms: usize,
+    min_bonds: usize,
+    required_elements: SmallVec<[(u8, u16); 8]>,
+    required_element_sets: SmallVec<[RequiredElementSet; 8]>,
+    requires_ring_atom: bool,
+    requires_aromatic_atom: bool,
+}
+
+#[derive(Clone)]
+struct RequiredElementSet {
+    elements: SmallVec<[u8; 8]>,
+    count: u16,
+}
+
+#[derive(Clone)]
+struct ScreenedQuery {
+    query: QueryGraph,
+    screen: QueryScreen,
+}
+
+#[derive(Clone, Copy)]
+struct MoleculeScreenStats {
+    num_atoms: usize,
+    num_bonds: usize,
+    element_counts: [u16; 119],
+    has_ring_atom: bool,
+    aromatic_atom_count: u16,
+}
+
+impl MoleculeScreenStats {
+    fn from_molecule(mol: &Molecule) -> Self {
+        let mut element_counts = [0u16; 119];
+        let mut has_ring_atom = false;
+        let mut aromatic_atom_count = 0u16;
+
+        for atom in &mol.atoms {
+            let idx = atom.atomic_number as usize;
+            if idx < element_counts.len() {
+                element_counts[idx] = element_counts[idx].saturating_add(1);
+            }
+            has_ring_atom |= atom.is_in_ring();
+            if atom.is_aromatic() {
+                aromatic_atom_count = aromatic_atom_count.saturating_add(1);
+            }
+        }
+
+        Self {
+            num_atoms: mol.num_atoms(),
+            num_bonds: mol.num_bonds(),
+            element_counts,
+            has_ring_atom,
+            aromatic_atom_count,
+        }
+    }
+
+    fn passes(&self, screen: &QueryScreen) -> bool {
+        if screen.min_atoms > self.num_atoms || screen.min_bonds > self.num_bonds {
+            return false;
+        }
+        if screen.requires_ring_atom && !self.has_ring_atom {
+            return false;
+        }
+        if screen.requires_aromatic_atom && self.aromatic_atom_count == 0 {
+            return false;
+        }
+        screen
+            .required_elements
+            .iter()
+            .all(|&(element, count)| self.element_counts[element as usize] >= count)
+            && screen.required_element_sets.iter().all(|required| {
+                let total = required.elements.iter().fold(0u16, |acc, &element| {
+                    acc.saturating_add(self.element_counts[element as usize])
+                });
+                total >= required.count
+            })
+    }
+}
+
+fn build_query_screen(query: &QueryGraph) -> QueryScreen {
+    let mut required = [0u16; 119];
+    let mut required_element_sets: SmallVec<[RequiredElementSet; 8]> = SmallVec::new();
+    let mut requires_ring_atom = false;
+    let mut requires_aromatic_atom = false;
+
+    for atom in &query.atoms {
+        if let Some(element) = fixed_atomic_number(atom) {
+            let idx = element as usize;
+            if idx < required.len() {
+                required[idx] = required[idx].saturating_add(1);
+            }
+        } else if let Some(mut allowed) = query_atom_allowed_elements(atom) {
+            allowed.sort_unstable();
+            allowed.dedup();
+            if let Some(existing) = required_element_sets
+                .iter_mut()
+                .find(|entry| entry.elements == allowed)
+            {
+                existing.count = existing.count.saturating_add(1);
+            } else {
+                required_element_sets.push(RequiredElementSet {
+                    elements: allowed,
+                    count: 1,
+                });
+            }
+        }
+        requires_ring_atom |= query_atom_requires_ring(atom);
+        requires_aromatic_atom |= query_atom_requires_aromatic(atom);
+    }
+
+    let required_elements = required
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, &count)| (count > 0).then_some((idx as u8, count)))
+        .collect();
+
+    QueryScreen {
+        min_atoms: query.atoms.len(),
+        min_bonds: query.bonds.len(),
+        required_elements,
+        required_element_sets,
+        requires_ring_atom,
+        requires_aromatic_atom,
+    }
+}
+
+fn fixed_atomic_number(query_atom: &QueryAtom) -> Option<u8> {
+    let mut fixed = None;
+
+    for primitive in &query_atom.primitives {
+        let Some(element) = fixed_atomic_number_primitive(primitive) else {
+            continue;
+        };
+
+        if let Some(prev) = fixed {
+            if prev != element {
+                return None;
+            }
+        } else {
+            fixed = Some(element);
+        }
+    }
+
+    fixed
+}
+
+fn fixed_atomic_number_primitive(primitive: &AtomPrimitive) -> Option<u8> {
+    match primitive {
+        AtomPrimitive::Element(z) | AtomPrimitive::Aromatic(z) | AtomPrimitive::Aliphatic(z) => {
+            Some(*z)
+        }
+        AtomPrimitive::And(items) => {
+            let mut fixed = None;
+            for item in items {
+                let Some(element) = fixed_atomic_number_primitive(item) else {
+                    continue;
+                };
+                if let Some(prev) = fixed {
+                    if prev != element {
+                        return None;
+                    }
+                } else {
+                    fixed = Some(element);
+                }
+            }
+            fixed
+        }
+        AtomPrimitive::Or(options) => {
+            let mut elements = options.iter().filter_map(fixed_atomic_number_primitive);
+            let first = elements.next()?;
+            if elements.all(|element| element == first) {
+                Some(first)
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
+}
+
+fn query_atom_allowed_elements(query_atom: &QueryAtom) -> Option<SmallVec<[u8; 8]>> {
+    let mut allowed: Option<SmallVec<[u8; 8]>> = None;
+
+    for primitive in &query_atom.primitives {
+        let Some(set) = allowed_elements_for_primitive(primitive) else {
+            continue;
+        };
+
+        allowed = Some(match allowed {
+            Some(mut prev) => {
+                prev.retain(|z| set.contains(z));
+                prev
+            }
+            None => set,
+        });
+    }
+
+    allowed
+}
+
+fn allowed_elements_for_primitive(primitive: &AtomPrimitive) -> Option<SmallVec<[u8; 8]>> {
+    match primitive {
+        AtomPrimitive::Element(z) | AtomPrimitive::Aromatic(z) | AtomPrimitive::Aliphatic(z) => {
+            Some(smallvec::smallvec![*z])
+        }
+        AtomPrimitive::And(items) => {
+            let mut acc: Option<SmallVec<[u8; 8]>> = None;
+            for item in items {
+                let Some(set) = allowed_elements_for_primitive(item) else {
+                    continue;
+                };
+                acc = Some(match acc {
+                    Some(mut prev) => {
+                        prev.retain(|z| set.contains(z));
+                        prev
+                    }
+                    None => set,
+                });
+            }
+            acc
+        }
+        AtomPrimitive::Or(options) => {
+            let mut union: SmallVec<[u8; 8]> = SmallVec::new();
+            let mut has_any = false;
+            for option in options {
+                let Some(set) = allowed_elements_for_primitive(option) else {
+                    return None;
+                };
+                has_any = true;
+                for element in set {
+                    if !union.contains(&element) {
+                        union.push(element);
+                    }
+                }
+            }
+            has_any.then_some(union)
+        }
+        _ => None,
+    }
+}
+
+fn query_atom_requires_ring(query_atom: &QueryAtom) -> bool {
+    query_atom
+        .primitives
+        .iter()
+        .any(primitive_requires_ring_atom)
+}
+
+fn primitive_requires_ring_atom(primitive: &AtomPrimitive) -> bool {
+    match primitive {
+        AtomPrimitive::InRing
+        | AtomPrimitive::RingSize(_)
+        | AtomPrimitive::RingMembership(_)
+        | AtomPrimitive::RingBonds(_) => true,
+        AtomPrimitive::Not(inner) => primitive_requires_ring_atom(inner),
+        AtomPrimitive::Or(options) | AtomPrimitive::And(options) => {
+            options.iter().any(primitive_requires_ring_atom)
+        }
+        AtomPrimitive::Recursive(sub_pattern) => {
+            sub_pattern.atoms.iter().any(query_atom_requires_ring)
+        }
+        _ => false,
+    }
+}
+
+fn query_atom_requires_aromatic(query_atom: &QueryAtom) -> bool {
+    query_atom
+        .primitives
+        .iter()
+        .any(primitive_requires_aromatic_atom)
+}
+
+fn primitive_requires_aromatic_atom(primitive: &AtomPrimitive) -> bool {
+    match primitive {
+        AtomPrimitive::AnyAromatic | AtomPrimitive::Aromatic(_) => true,
+        AtomPrimitive::Not(inner) => primitive_requires_aromatic_atom(inner),
+        AtomPrimitive::Or(options) | AtomPrimitive::And(options) => {
+            options.iter().any(primitive_requires_aromatic_atom)
+        }
+        AtomPrimitive::Recursive(sub_pattern) => {
+            sub_pattern.atoms.iter().any(query_atom_requires_aromatic)
+        }
+        _ => false,
+    }
+}
+
+static QED_ACCEPTOR_PATTERNS: Lazy<Vec<ScreenedQuery>> = Lazy::new(|| {
     QED_ACCEPTOR_SMARTS
         .iter()
         .filter_map(|smarts| parse_smarts(smarts).ok())
+        .map(|query| {
+            let screen = build_query_screen(&query);
+            ScreenedQuery { query, screen }
+        })
         .collect()
 });
 
 fn compute_qed_hbond_acceptors(mol: &Molecule) -> u32 {
+    let stats = MoleculeScreenStats::from_molecule(mol);
+    compute_qed_hbond_acceptors_with_stats(mol, &stats)
+}
+
+fn compute_qed_hbond_acceptors_with_stats(mol: &Molecule, stats: &MoleculeScreenStats) -> u32 {
     QED_ACCEPTOR_PATTERNS
         .iter()
-        .map(|query| count_matches(mol, query) as u32)
+        .map(|entry| {
+            if !stats.passes(&entry.screen) {
+                return 0;
+            }
+            if has_substruct_match(mol, &entry.query) {
+                count_matches(mol, &entry.query) as u32
+            } else {
+                0
+            }
+        })
         .sum()
 }
 
-fn compute_qed_aromatic_ring_count(mol: &Molecule) -> u32 {
-    let mut ring_annotated = mol.clone();
-    find_sssr(&mut ring_annotated);
-
-    let keep_atom: Vec<bool> = ring_annotated
-        .atoms
-        .iter()
-        .map(|atom| !(atom.is_in_ring() && !atom.is_aromatic()))
-        .collect();
-    if !keep_atom.iter().any(|&keep| keep) {
-        return 0;
+fn ring_membership_from_bond_cycles(mol: &Molecule, cycles: &[Vec<usize>]) -> Vec<bool> {
+    let mut in_ring = vec![false; mol.num_atoms()];
+    for cycle in cycles {
+        for &bond_idx in cycle {
+            let bond = &mol.bonds[bond_idx];
+            in_ring[bond.source as usize] = true;
+            in_ring[bond.target as usize] = true;
+        }
     }
+    in_ring
+}
 
-    let mut subgraph = Molecule::new();
+fn build_qed_aromatic_subgraph(mol: &Molecule, in_ring: &[bool]) -> Option<Molecule> {
     let mut atom_map = vec![u16::MAX; mol.num_atoms()];
+    let mut atoms = Vec::with_capacity(mol.num_atoms());
+    let mut adjacency = Vec::with_capacity(mol.num_atoms());
 
-    for (atom_idx, atom) in ring_annotated.atoms.iter().enumerate() {
-        if !keep_atom[atom_idx] {
+    for (atom_idx, atom) in mol.atoms.iter().enumerate() {
+        let keep = !(in_ring[atom_idx] && !atom.is_aromatic());
+        if !keep {
             continue;
         }
-        atom_map[atom_idx] = subgraph.atoms.len() as u16;
-        subgraph.atoms.push(*atom);
-        subgraph.adjacency.push(SmallVec::new());
+        atom_map[atom_idx] = atoms.len() as u16;
+        atoms.push(*atom);
+        adjacency.push(SmallVec::new());
     }
 
-    for bond in &ring_annotated.bonds {
-        let src = bond.source as usize;
-        let dst = bond.target as usize;
-        if !keep_atom[src] || !keep_atom[dst] {
+    if atoms.is_empty() {
+        return None;
+    }
+
+    let mut bonds = Vec::with_capacity(mol.num_bonds());
+    for bond in &mol.bonds {
+        let src = atom_map[bond.source as usize];
+        let dst = atom_map[bond.target as usize];
+        if src == u16::MAX || dst == u16::MAX {
             continue;
         }
-
         let mut new_bond = *bond;
-        new_bond.source = atom_map[src];
-        new_bond.target = atom_map[dst];
-        let bond_idx = subgraph.bonds.len() as u16;
-        subgraph.bonds.push(new_bond);
-        subgraph.adjacency[new_bond.source as usize].push(bond_idx);
-        subgraph.adjacency[new_bond.target as usize].push(bond_idx);
+        new_bond.source = src;
+        new_bond.target = dst;
+        let bond_idx = bonds.len() as u16;
+        bonds.push(new_bond);
+        adjacency[src as usize].push(bond_idx);
+        adjacency[dst as usize].push(bond_idx);
     }
 
+    Some(Molecule::from_parts(atoms, bonds, adjacency))
+}
+
+fn compute_qed_aromatic_ring_count_with_cycles(mol: &Molecule, cycles: &[Vec<usize>]) -> u32 {
+    let in_ring = ring_membership_from_bond_cycles(mol, cycles);
+    let Some(mut subgraph) = build_qed_aromatic_subgraph(mol, &in_ring) else {
+        return 0;
+    };
     find_sssr(&mut subgraph).len() as u32
+}
+
+fn compute_qed_aromatic_ring_count(mol: &Molecule) -> u32 {
+    let cycles = find_minimum_cycle_basis_bonds(mol);
+    compute_qed_aromatic_ring_count_with_cycles(mol, &cycles)
+}
+
+fn compute_qed_aromatic_ring_count_cached(mol: &mut Molecule) -> u32 {
+    ensure_minimum_cycle_basis_bonds_cached(mol);
+    let cycles = mol
+        .cached_min_cycle_basis_bonds()
+        .expect("minimum cycle basis cache initialized");
+    compute_qed_aromatic_ring_count_with_cycles(mol, cycles)
 }
 
 /// Compute raw QED score from a molecule.
 fn compute_qed(mol: &Molecule) -> f64 {
+    let stats = MoleculeScreenStats::from_molecule(mol);
     let mw = compute_molecular_weight(mol) as f64;
     let logp = compute_logp(mol).0 as f64;
-    let hba = compute_qed_hbond_acceptors(mol) as f64;
+    let hba = compute_qed_hbond_acceptors_with_stats(mol, &stats) as f64;
     let hbd = compute_hbond_donors(mol) as f64;
     let psa = compute_tpsa(mol, false) as f64;
     let rotb = compute_rotatable_bond_count(mol) as f64;
     let arom = compute_qed_aromatic_ring_count(mol) as f64;
-    let alerts = compute_structural_alerts(mol) as f64;
+    let alerts = compute_structural_alerts_with_stats(mol, &stats) as f64;
+
+    let values = [mw, logp, hba, hbd, psa, rotb, arom, alerts];
+
+    let mut sum_weights = 0.0;
+    let mut sum_log = 0.0;
+
+    for (i, param) in QED_PARAMS.iter().enumerate() {
+        let d = ads(values[i], &param.ads).max(1e-10);
+        sum_log += param.weight * d.ln();
+        sum_weights += param.weight;
+    }
+
+    if sum_weights > 0.0 {
+        (sum_log / sum_weights).exp().clamp(0.0, 1.0)
+    } else {
+        0.0
+    }
+}
+
+fn compute_qed_cached(mol: &mut Molecule) -> f64 {
+    let stats = MoleculeScreenStats::from_molecule(mol);
+    let mw = compute_molecular_weight(mol) as f64;
+    let logp = compute_logp_cached(mol).0 as f64;
+    let hba = compute_qed_hbond_acceptors_with_stats(mol, &stats) as f64;
+    let hbd = compute_hbond_donors_cached(mol) as f64;
+    let psa = compute_tpsa_cached(mol, false) as f64;
+    let rotb = compute_rotatable_bond_count_cached(mol) as f64;
+    let arom = compute_qed_aromatic_ring_count_cached(mol) as f64;
+    let alerts = compute_structural_alerts_with_stats(mol, &stats) as f64;
 
     let values = [mw, logp, hba, hbd, psa, rotb, arom, alerts];
 
@@ -432,19 +796,28 @@ static STRUCTURAL_ALERT_SMARTS: &[&[&str]] = &[
 ];
 
 /// Pre-parsed structural alert SMARTS.
-static STRUCTURAL_ALERT_PATTERNS: Lazy<Vec<QueryGraph>> = Lazy::new(|| {
+static STRUCTURAL_ALERT_PATTERNS: Lazy<Vec<ScreenedQuery>> = Lazy::new(|| {
     STRUCTURAL_ALERT_SMARTS
         .iter()
         .flat_map(|group| group.iter())
         .filter_map(|smarts| parse_smarts(smarts).ok())
+        .map(|query| {
+            let screen = build_query_screen(&query);
+            ScreenedQuery { query, screen }
+        })
         .collect()
 });
 
 /// Count the number of structural alert patterns that match.
 fn compute_structural_alerts(mol: &Molecule) -> u32 {
+    let stats = MoleculeScreenStats::from_molecule(mol);
+    compute_structural_alerts_with_stats(mol, &stats)
+}
+
+fn compute_structural_alerts_with_stats(mol: &Molecule, stats: &MoleculeScreenStats) -> u32 {
     STRUCTURAL_ALERT_PATTERNS
         .iter()
-        .filter(|query| count_matches(mol, query) > 0)
+        .filter(|entry| stats.passes(&entry.screen) && has_substruct_match(mol, &entry.query))
         .count() as u32
 }
 
@@ -467,8 +840,8 @@ impl Descriptor for Qed {
         "QED"
     }
 
-    fn calculate(&self, mol: &mut Molecule) -> DescriptorValue {
-        DescriptorValue::Float(compute_qed(mol) as f32)
+    fn calculate(&self, mol: &mut Molecule, ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
+        DescriptorValue::Float(compute_qed_cached(mol) as f32)
     }
 }
 
@@ -480,12 +853,11 @@ const _: () = {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::desc::aromatic_ring_count::compute_aromatic_ring_count;
     use crate::io::smiles::parse_smiles;
 
     fn calc_qed(smiles: &str) -> f32 {
         let mut mol = parse_smiles(smiles).expect("valid SMILES");
-        Qed.calculate(&mut mol).as_float()
+        Qed.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()).as_float()
     }
 
     #[test]

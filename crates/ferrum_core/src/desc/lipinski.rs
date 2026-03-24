@@ -10,8 +10,8 @@
 //! to estimate solubility and permeability in drug discovery and development settings.
 //! Advanced Drug Delivery Reviews, 23(1-3), 3-25.
 
-use super::hbond::{compute_hbond_acceptors, compute_hbond_donors};
-use super::logp::compute_logp;
+use super::hbond::{compute_hbond_acceptors_cached, compute_hbond_donors_cached};
+use super::logp::compute_logp_cached;
 use super::typed::{Descriptor, DescriptorValue};
 use crate::desc::molecular_weight::compute_molecular_weight;
 use crate::mol::molecule::Molecule;
@@ -35,11 +35,11 @@ impl Descriptor for LipinskiViolations {
         "LipinskiViolations"
     }
 
-    fn calculate(&self, mol: &mut Molecule) -> DescriptorValue {
+    fn calculate(&self, mol: &mut Molecule, ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
         let mw = compute_molecular_weight(mol);
-        let logp = compute_logp(mol).0;
-        let hbd = compute_hbond_donors(mol);
-        let hba = compute_hbond_acceptors(mol);
+        let logp = compute_logp_cached(mol).0;
+        let hbd = compute_hbond_donors_cached(mol);
+        let hba = compute_hbond_acceptors_cached(mol);
 
         let mut violations = 0u32;
 
@@ -81,7 +81,7 @@ mod tests {
     fn test_lipinski_aspirin() {
         let mut mol = parse_and_prepare("CC(=O)Oc1ccccc1C(=O)O");
         let desc = LipinskiViolations;
-        let value = desc.calculate(&mut mol);
+        let value = desc.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new());
         assert_eq!(
             value,
             DescriptorValue::Int(0),
@@ -93,7 +93,7 @@ mod tests {
     fn test_lipinski_caffeine() {
         let mut mol = parse_and_prepare("CN1C=NC2=C1C(=O)N(C(=O)N2C)C");
         let desc = LipinskiViolations;
-        let value = desc.calculate(&mut mol);
+        let value = desc.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new());
         assert_eq!(
             value,
             DescriptorValue::Int(0),
@@ -105,7 +105,7 @@ mod tests {
     fn test_lipinski_ibuprofen() {
         let mut mol = parse_and_prepare("CC(C)Cc1ccc(cc1)C(C)C(=O)O");
         let desc = LipinskiViolations;
-        let value = desc.calculate(&mut mol);
+        let value = desc.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new());
         assert_eq!(
             value,
             DescriptorValue::Int(0),
@@ -117,7 +117,7 @@ mod tests {
     fn test_lipinski_ethanol() {
         let mut mol = parse_and_prepare("CCO");
         let desc = LipinskiViolations;
-        let value = desc.calculate(&mut mol);
+        let value = desc.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new());
         assert_eq!(
             value,
             DescriptorValue::Int(0),

@@ -14,7 +14,8 @@ use crate::mol::molecule::Molecule;
 use std::collections::VecDeque;
 
 /// Compute the distance matrix using BFS from each atom
-fn compute_distance_matrix(mol: &Molecule) -> Vec<u32> {
+#[allow(dead_code)]
+fn _compute_distance_matrix_unused(mol: &Molecule) -> Vec<u32> {
     let n = mol.num_atoms();
     let mut dist = vec![u32::MAX; n * n];
 
@@ -55,7 +56,7 @@ fn compute_distance_matrix(mol: &Molecule) -> Vec<u32> {
 /// - Path graphs: increasing with length
 /// - Cyclic: lower than linear of same size
 /// - Branched: varies with structure
-pub fn calculate(mol: &Molecule) -> u32 {
+pub fn calculate(mol: &mut Molecule, ctx: &mut crate::desc::context::CalculationContext) -> u32 {
     let n = mol.num_atoms();
 
     if n == 0 {
@@ -67,7 +68,7 @@ pub fn calculate(mol: &Molecule) -> u32 {
     }
 
     // Compute distance matrix
-    let dist = compute_distance_matrix(mol);
+    let dist = crate::algo::paths::compute_unweighted_distance_matrix_cached(mol, ctx);
 
     // Calculate eccentricity for each atom
     let mut eccentricities = vec![0u32; n];
@@ -103,15 +104,17 @@ mod tests {
 
     #[test]
     fn test_eccentric_methane() {
-        let mol = parse("C");
-        let eci = calculate(&mol);
+        let mut mol = parse("C");
+        let mut ctx = crate::desc::context::CalculationContext::new();
+        let eci = calculate(&mut mol, &mut ctx);
         assert_eq!(eci, 0); // Single atom
     }
 
     #[test]
     fn test_eccentric_ethane() {
-        let mol = parse("CC");
-        let eci = calculate(&mol);
+        let mut mol = parse("CC");
+        let mut ctx = crate::desc::context::CalculationContext::new();
+        let eci = calculate(&mut mol, &mut ctx);
         // n=2, both atoms have degree=1, eccentricity=1
         // ECI = 1*1 + 1*1 = 2
         assert_eq!(eci, 2);
@@ -119,8 +122,9 @@ mod tests {
 
     #[test]
     fn test_eccentric_propane() {
-        let mol = parse("CCC");
-        let eci = calculate(&mol);
+        let mut mol = parse("CCC");
+        let mut ctx = crate::desc::context::CalculationContext::new();
+        let eci = calculate(&mut mol, &mut ctx);
         // C1: degree=1, ecc=2; C2: degree=2, ecc=1; C3: degree=1, ecc=2
         // ECI = 1*2 + 2*1 + 1*2 = 6
         assert_eq!(eci, 6);
@@ -128,8 +132,9 @@ mod tests {
 
     #[test]
     fn test_eccentric_butane() {
-        let mol = parse("CCCC");
-        let eci = calculate(&mol);
+        let mut mol = parse("CCCC");
+        let mut ctx = crate::desc::context::CalculationContext::new();
+        let eci = calculate(&mut mol, &mut ctx);
         // Linear C4: end atoms ecc=3, middle atoms ecc=2
         // ECI = 1*3 + 2*2 + 2*2 + 1*3 = 14
         assert_eq!(eci, 14);
@@ -137,8 +142,9 @@ mod tests {
 
     #[test]
     fn test_eccentric_isobutane() {
-        let mol = parse("CC(C)C");
-        let eci = calculate(&mol);
+        let mut mol = parse("CC(C)C");
+        let mut ctx = crate::desc::context::CalculationContext::new();
+        let eci = calculate(&mut mol, &mut ctx);
         // Central C: degree=3, ecc=1; others: degree=1, ecc=2
         // ECI = 1*2 + 3*1 + 1*2 + 1*2 = 9
         assert_eq!(eci, 9);
@@ -146,8 +152,9 @@ mod tests {
 
     #[test]
     fn test_eccentric_benzene() {
-        let mol = parse("c1ccccc1");
-        let eci = calculate(&mol);
+        let mut mol = parse("c1ccccc1");
+        let mut ctx = crate::desc::context::CalculationContext::new();
+        let eci = calculate(&mut mol, &mut ctx);
         // All atoms: degree=2, eccentricity=3 (opposite side of ring)
         // ECI = 6 * (2*3) = 36
         assert_eq!(eci, 36);
@@ -155,26 +162,28 @@ mod tests {
 
     #[test]
     fn test_eccentric_cyclohexane() {
-        let mol = parse("C1CCCCC1");
-        let eci = calculate(&mol);
+        let mut mol = parse("C1CCCCC1");
+        let mut ctx = crate::desc::context::CalculationContext::new();
+        let eci = calculate(&mut mol, &mut ctx);
         // Same as benzene structure-wise
         assert_eq!(eci, 36);
     }
 
     #[test]
     fn test_eccentric_naphthalene() {
-        let mol = parse("c1ccc2ccccc2c1");
-        let eci = calculate(&mol);
+        let mut mol = parse("c1ccc2ccccc2c1");
+        let mut ctx = crate::desc::context::CalculationContext::new();
+        let eci = calculate(&mut mol, &mut ctx);
         // 10 atoms, varies by position
         assert!(eci > 40); // More extended than benzene
     }
 
     #[test]
     fn test_eccentric_path_vs_branched() {
-        let linear = parse("CCCCC"); // Pentane
-        let branched = parse("CC(C)CC"); // Isopentane
-        let lin_eci = calculate(&linear);
-        let bra_eci = calculate(&branched);
+        let mut linear = parse("CCCCC"); // Pentane
+        let mut branched = parse("CC(C)CC"); // Isopentane
+        let lin_eci = calculate(&mut linear, &mut crate::desc::context::CalculationContext::new());
+        let bra_eci = calculate(&mut branched, &mut crate::desc::context::CalculationContext::new());
         // Linear should have higher ECI (more extended)
         assert!(lin_eci > bra_eci);
     }

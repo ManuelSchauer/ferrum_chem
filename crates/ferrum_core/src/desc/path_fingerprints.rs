@@ -13,8 +13,8 @@ use super::typed::{Descriptor, DescriptorValue};
 use crate::mol::molecule::Molecule;
 use crate::types::{AtomIdx, BondType};
 use bitvec::prelude::*;
-use std::collections::VecDeque;
 use std::collections::hash_map::DefaultHasher;
+use std::collections::VecDeque;
 use std::hash::{Hash, Hasher};
 
 /// Maximum topological distance for atom pair encoding.
@@ -124,7 +124,7 @@ impl Descriptor for AtomPairFingerprint {
         "AtomPair"
     }
 
-    fn calculate(&self, mol: &mut Molecule) -> DescriptorValue {
+    fn calculate(&self, mol: &mut Molecule, ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
         let hashes = atom_pair_features(mol);
         let bits = fold_bitvec(&hashes, self.num_bits);
         DescriptorValue::Binary(bits)
@@ -191,7 +191,7 @@ impl Descriptor for TopologicalTorsionFingerprint {
         "TopologicalTorsion"
     }
 
-    fn calculate(&self, mol: &mut Molecule) -> DescriptorValue {
+    fn calculate(&self, mol: &mut Molecule, ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
         let hashes = torsion_features(mol);
         let bits = fold_bitvec(&hashes, self.num_bits);
         DescriptorValue::Binary(bits)
@@ -326,7 +326,7 @@ mod tests {
     fn calc_ap(smiles: &str, bits: usize) -> BitVec<u8, Lsb0> {
         let mut mol = parse_smiles(smiles).expect("valid SMILES");
         let ap = AtomPairFingerprint::new(bits);
-        ap.calculate(&mut mol).as_binary().clone()
+        ap.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()).as_binary().clone()
     }
 
     #[test]
@@ -396,7 +396,7 @@ mod tests {
     fn calc_tt(smiles: &str, bits: usize) -> BitVec<u8, Lsb0> {
         let mut mol = parse_smiles(smiles).expect("valid SMILES");
         let tt = TopologicalTorsionFingerprint::new(bits);
-        tt.calculate(&mut mol).as_binary().clone()
+        tt.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()).as_binary().clone()
     }
 
     #[test]

@@ -94,6 +94,15 @@ pub fn compute_rotatable_bond_count(mol: &Molecule) -> u32 {
     count
 }
 
+pub(crate) fn compute_rotatable_bond_count_cached(mol: &mut Molecule) -> u32 {
+    if let Some(cached) = mol.cached_rotatable_bond_count() {
+        return cached;
+    }
+    let count = compute_rotatable_bond_count(mol);
+    mol.store_rotatable_bond_count(count);
+    count
+}
+
 fn is_tert_butyl_like_rotor_blocked(
     mol: &Molecule,
     bond_idx: usize,
@@ -413,7 +422,7 @@ impl Descriptor for BondCount {
         "BondCount"
     }
 
-    fn calculate(&self, mol: &mut Molecule) -> DescriptorValue {
+    fn calculate(&self, mol: &mut Molecule, ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
         DescriptorValue::Int(compute_bond_count(mol))
     }
 }
@@ -428,7 +437,7 @@ impl Descriptor for BondCountDetailed {
         "BondCountDetailed"
     }
 
-    fn calculate(&self, mol: &mut Molecule) -> DescriptorValue {
+    fn calculate(&self, mol: &mut Molecule, ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
         let mut counts = vec![0u32; 5]; // total, single, double, triple, aromatic
 
         counts[0] = mol.num_bonds() as u32;
@@ -458,8 +467,8 @@ impl Descriptor for RotatableBondCount {
         "RotatableBondCount"
     }
 
-    fn calculate(&self, mol: &mut Molecule) -> DescriptorValue {
-        DescriptorValue::Int(compute_rotatable_bond_count(mol))
+    fn calculate(&self, mol: &mut Molecule, ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
+        DescriptorValue::Int(compute_rotatable_bond_count_cached(mol))
     }
 }
 
@@ -479,13 +488,13 @@ mod tests {
     #[test]
     fn test_bond_count_simple() {
         let mut mol = parse_smiles("CCO").unwrap();
-        assert_eq!(BondCount.calculate(&mut mol).as_int(), 2);
+        assert_eq!(BondCount.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()).as_int(), 2);
     }
 
     #[test]
     fn test_bond_count_detailed_single() {
         let mut mol = parse_smiles("CCCC").unwrap();
-        let v = BondCountDetailed.calculate(&mut mol).as_int_vec().to_vec();
+        let v = BondCountDetailed.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()).as_int_vec().to_vec();
         assert_eq!(v[0], 3); // Total
         assert_eq!(v[1], 3); // Single
         assert_eq!(v[2], 0); // Double
@@ -495,7 +504,7 @@ mod tests {
     #[test]
     fn test_bond_count_detailed_double() {
         let mut mol = parse_smiles("C=C").unwrap();
-        let v = BondCountDetailed.calculate(&mut mol).as_int_vec().to_vec();
+        let v = BondCountDetailed.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()).as_int_vec().to_vec();
         assert_eq!(v[0], 1);
         assert_eq!(v[1], 0);
         assert_eq!(v[2], 1);
@@ -505,7 +514,7 @@ mod tests {
     #[test]
     fn test_bond_count_detailed_triple() {
         let mut mol = parse_smiles("C#N").unwrap();
-        let v = BondCountDetailed.calculate(&mut mol).as_int_vec().to_vec();
+        let v = BondCountDetailed.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()).as_int_vec().to_vec();
         assert_eq!(v[0], 1);
         assert_eq!(v[1], 0);
         assert_eq!(v[2], 0);
@@ -515,7 +524,7 @@ mod tests {
     #[test]
     fn test_bond_count_detailed_mixed() {
         let mut mol = parse_smiles("CC=C").unwrap();
-        let v = BondCountDetailed.calculate(&mut mol).as_int_vec().to_vec();
+        let v = BondCountDetailed.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()).as_int_vec().to_vec();
         assert_eq!(v[0], 2);
         assert_eq!(v[1], 1);
         assert_eq!(v[2], 1);
@@ -525,57 +534,57 @@ mod tests {
     #[test]
     fn test_rotatable_bond_count_ethane() {
         let mut mol = parse_smiles("CC").unwrap();
-        assert_eq!(RotatableBondCount.calculate(&mut mol).as_int(), 0);
+        assert_eq!(RotatableBondCount.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()).as_int(), 0);
     }
 
     #[test]
     fn test_rotatable_bond_count_propane() {
         let mut mol = parse_smiles("CCC").unwrap();
-        assert_eq!(RotatableBondCount.calculate(&mut mol).as_int(), 0);
+        assert_eq!(RotatableBondCount.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()).as_int(), 0);
     }
 
     #[test]
     fn test_rotatable_bond_count_butane() {
         let mut mol = parse_smiles("CCCC").unwrap();
-        assert_eq!(RotatableBondCount.calculate(&mut mol).as_int(), 1);
+        assert_eq!(RotatableBondCount.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()).as_int(), 1);
     }
 
     #[test]
     fn test_rotatable_bond_count_ethene() {
         let mut mol = parse_smiles("C=C").unwrap();
-        assert_eq!(RotatableBondCount.calculate(&mut mol).as_int(), 0);
+        assert_eq!(RotatableBondCount.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()).as_int(), 0);
     }
 
     #[test]
     fn test_rotatable_bond_count_benzene() {
         let mut mol = parse_smiles("c1ccccc1").unwrap();
         find_sssr(&mut mol);
-        assert_eq!(RotatableBondCount.calculate(&mut mol).as_int(), 0);
+        assert_eq!(RotatableBondCount.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()).as_int(), 0);
     }
 
     #[test]
     fn test_rotatable_bond_count_toluene() {
         let mut mol = parse_smiles("Cc1ccccc1").unwrap();
         find_sssr(&mut mol);
-        assert_eq!(RotatableBondCount.calculate(&mut mol).as_int(), 0);
+        assert_eq!(RotatableBondCount.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()).as_int(), 0);
     }
 
     #[test]
     fn test_rotatable_bond_count_pentane() {
         let mut mol = parse_smiles("CCCCC").unwrap();
-        assert_eq!(RotatableBondCount.calculate(&mut mol).as_int(), 2);
+        assert_eq!(RotatableBondCount.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()).as_int(), 2);
     }
 
     #[test]
     fn test_rotatable_bond_count_ethanol() {
         let mut mol = parse_smiles("CCO").unwrap();
-        assert_eq!(RotatableBondCount.calculate(&mut mol).as_int(), 0);
+        assert_eq!(RotatableBondCount.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()).as_int(), 0);
     }
 
     #[test]
     fn test_rotatable_bond_count_propanol() {
         let mut mol = parse_smiles("CCCO").unwrap();
-        assert_eq!(RotatableBondCount.calculate(&mut mol).as_int(), 1);
+        assert_eq!(RotatableBondCount.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()).as_int(), 1);
     }
 
     #[test]
@@ -583,93 +592,93 @@ mod tests {
         // RDKit excludes the acyl C(=O)-N bond itself but still counts the
         // exocyclic N-alkyl bond in a secondary amide.
         let mut mol = parse_smiles("CC(=O)NCC").unwrap();
-        assert_eq!(RotatableBondCount.calculate(&mut mol).as_int(), 1);
+        assert_eq!(RotatableBondCount.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()).as_int(), 1);
     }
 
     #[test]
     fn test_rotatable_bond_count_ester_carbonyl_o_excluded() {
         // Ethyl acetate: C(=O)-O is excluded by carbonyl-O rule, O-CH2 counted.
         let mut mol = parse_smiles("CC(=O)OCC").unwrap();
-        assert_eq!(RotatableBondCount.calculate(&mut mol).as_int(), 1);
+        assert_eq!(RotatableBondCount.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()).as_int(), 1);
     }
 
     #[test]
     fn test_rotatable_bond_count_methyl_acetate_zero() {
         // Methyl acetate: C(=O)-O excluded (carbonyl-O), O-CH3 terminal -> 0.
         let mut mol = parse_smiles("CC(=O)OC").unwrap();
-        assert_eq!(RotatableBondCount.calculate(&mut mol).as_int(), 0);
+        assert_eq!(RotatableBondCount.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()).as_int(), 0);
     }
 
     #[test]
     fn test_rotatable_bond_count_formyl_c_n_bond_is_counted() {
         // Formyl C(=O)H-N bonds remain rotatable under RDKit strict semantics.
         let mut mol = parse_smiles("CNC=O").unwrap();
-        assert_eq!(RotatableBondCount.calculate(&mut mol).as_int(), 1);
+        assert_eq!(RotatableBondCount.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()).as_int(), 1);
 
         // Aromatic formyl imidazole-like nitrogens are also counted.
         let mut mol2 = parse_smiles("O=CN1C=CC=N1").unwrap();
-        assert_eq!(RotatableBondCount.calculate(&mut mol2).as_int(), 1);
+        assert_eq!(RotatableBondCount.calculate(&mut mol2, &mut crate::desc::context::CalculationContext::new()).as_int(), 1);
 
         // Tertiary formamide remains rotatable as well.
         let mut mol2 = parse_smiles("CN(C)C=O").unwrap();
-        assert_eq!(RotatableBondCount.calculate(&mut mol2).as_int(), 1);
+        assert_eq!(RotatableBondCount.calculate(&mut mol2, &mut crate::desc::context::CalculationContext::new()).as_int(), 1);
     }
 
     #[test]
     fn test_rotatable_bond_count_hydrazide_nn_excluded_only_when_both_n_are_conjugated() {
         let mut mol2 = parse_smiles("CC(=O)NNC(=O)C").unwrap();
-        assert_eq!(RotatableBondCount.calculate(&mut mol2).as_int(), 0);
+        assert_eq!(RotatableBondCount.calculate(&mut mol2, &mut crate::desc::context::CalculationContext::new()).as_int(), 0);
 
         let mut mol3 = parse_smiles("CC(=O)NNC").unwrap();
-        assert_eq!(RotatableBondCount.calculate(&mut mol3).as_int(), 1);
+        assert_eq!(RotatableBondCount.calculate(&mut mol3, &mut crate::desc::context::CalculationContext::new()).as_int(), 1);
     }
 
     #[test]
     fn test_rotatable_bond_count_acetanilide_counts_n_aryl_bond() {
         let mut mol = parse_smiles("CC(=O)Nc1ccccc1").unwrap();
-        assert_eq!(RotatableBondCount.calculate(&mut mol).as_int(), 1);
+        assert_eq!(RotatableBondCount.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()).as_int(), 1);
     }
 
     #[test]
     fn test_rotatable_bond_count_amidine_c_n_bond_excluded() {
         let mut mol = parse_smiles("CCNC(=N)N").unwrap();
-        assert_eq!(RotatableBondCount.calculate(&mut mol).as_int(), 1);
+        assert_eq!(RotatableBondCount.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()).as_int(), 1);
     }
 
     #[test]
     fn test_rotatable_bond_count_formate_c_o_bond_is_counted() {
         let mut mol = parse_smiles("COC=O").unwrap();
-        assert_eq!(RotatableBondCount.calculate(&mut mol).as_int(), 1);
+        assert_eq!(RotatableBondCount.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()).as_int(), 1);
 
         let mut mol2 = parse_smiles("CCOC=O").unwrap();
-        assert_eq!(RotatableBondCount.calculate(&mut mol2).as_int(), 2);
+        assert_eq!(RotatableBondCount.calculate(&mut mol2, &mut crate::desc::context::CalculationContext::new()).as_int(), 2);
     }
 
     #[test]
     fn test_rotatable_bond_count_aromatic_acyl_n_excluded_but_formyl_kept() {
         let mut mol = parse_smiles("CC(=O)N1C=CC=N1").unwrap();
-        assert_eq!(RotatableBondCount.calculate(&mut mol).as_int(), 0);
+        assert_eq!(RotatableBondCount.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()).as_int(), 0);
 
         let mut mol2 = parse_smiles("O=CN1C=CC=N1").unwrap();
-        assert_eq!(RotatableBondCount.calculate(&mut mol2).as_int(), 1);
+        assert_eq!(RotatableBondCount.calculate(&mut mol2, &mut crate::desc::context::CalculationContext::new()).as_int(), 1);
     }
 
     #[test]
     fn test_rotatable_bond_count_tert_butyl_like_linkage_excluded() {
         let mut mol = parse_smiles("CC(C)(C)CC").unwrap();
-        assert_eq!(RotatableBondCount.calculate(&mut mol).as_int(), 0);
+        assert_eq!(RotatableBondCount.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()).as_int(), 0);
 
         let mut mol2 = parse_smiles("CC(C)(C)OC").unwrap();
-        assert_eq!(RotatableBondCount.calculate(&mut mol2).as_int(), 0);
+        assert_eq!(RotatableBondCount.calculate(&mut mol2, &mut crate::desc::context::CalculationContext::new()).as_int(), 0);
     }
 
     #[test]
     fn test_rotatable_bond_count_non_tbutyl_quaternary_linkage_kept() {
         let mut mol = parse_smiles("CCC(C)(C)CC").unwrap();
-        assert_eq!(RotatableBondCount.calculate(&mut mol).as_int(), 2);
+        assert_eq!(RotatableBondCount.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()).as_int(), 2);
 
         let mut mol2 = parse_smiles("CC(C)(O)CC").unwrap();
-        assert_eq!(RotatableBondCount.calculate(&mut mol2).as_int(), 1);
+        assert_eq!(RotatableBondCount.calculate(&mut mol2, &mut crate::desc::context::CalculationContext::new()).as_int(), 1);
     }
 
     #[test]

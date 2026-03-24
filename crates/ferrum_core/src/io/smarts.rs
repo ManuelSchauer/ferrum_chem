@@ -2,6 +2,8 @@ use crate::error::{FerrumError, Result};
 use crate::mol::molecule::Molecule;
 use crate::types::BondType;
 use smallvec::SmallVec;
+use std::cell::RefCell;
+use std::collections::HashMap;
 
 /// Query graph for SMARTS pattern matching.
 /// Represents a molecular pattern with flexible matching criteria.
@@ -161,17 +163,138 @@ impl QueryAtom {
 
     /// Checks if this query atom matches a molecule atom.
     pub fn matches(&self, mol: &Molecule, atom_idx: u16) -> bool {
-        let atom = &mol.atoms[atom_idx as usize];
+        // Standalone QueryAtom matching is used in tests and utility callsites
+        // outside VF2. If this atom uses ring-size/membership SMARTS primitives,
+        // build ring context once here so ring checks stay context-driven and
+        // never trigger clone+SSSR fallback work.
+        let ring_ctx = query_atom_needs_ring_context(self).then(|| SmartsRingContext::for_molecule(mol));
+        query_atom_matches_with_context(self, mol, atom_idx, ring_ctx.as_ref())
+    }
+}
 
-        // All primitives must match
-        for primitive in &self.primitives {
-            if !match_primitive(primitive, mol, atom_idx, atom) {
-                return false;
+#[derive(Debug, Clone)]
+pub(crate) struct SmartsRingContext {
+    atom_ring_membership: Vec<u8>,
+    atom_ring_sizes: Vec<SmallVec<[u8; 4]>>,
+}
+
+impl SmartsRingContext {
+    pub(crate) fn for_molecule(mol: &Molecule) -> Self {
+        let mut atom_ring_membership = vec![0u8; mol.num_atoms()];
+        let mut atom_ring_sizes = vec![SmallVec::new(); mol.num_atoms()];
+
+        // Build ring context from SSSR on a temporary molecule to keep the
+        // source graph immutable while preserving existing ring-size semantics.
+        let mut mol_copy =
+            Molecule::from_parts(mol.atoms.clone(), mol.bonds.clone(), mol.adjacency.clone());
+        let rings = crate::algo::rings::find_sssr(&mut mol_copy);
+
+        for ring in rings {
+            let ring_size = ring.len().min(u8::MAX as usize) as u8;
+            for &atom_idx in &ring {
+                let idx = atom_idx as usize;
+                atom_ring_membership[idx] = atom_ring_membership[idx].saturating_add(1);
+                if !atom_ring_sizes[idx].contains(&ring_size) {
+                    atom_ring_sizes[idx].push(ring_size);
+                }
             }
         }
 
-        true
+        Self {
+            atom_ring_membership,
+            atom_ring_sizes,
+        }
     }
+
+    fn ring_membership(&self, atom_idx: u16) -> u8 {
+        self.atom_ring_membership[atom_idx as usize]
+    }
+
+    fn has_ring_size(&self, atom_idx: u16, ring_size: u8) -> bool {
+        self.atom_ring_sizes[atom_idx as usize].contains(&ring_size)
+    }
+}
+
+#[derive(Debug, Default)]
+pub(crate) struct SmartsRecursiveCache {
+    starts_by_pattern: RefCell<HashMap<usize, Vec<bool>>>,
+}
+
+impl SmartsRecursiveCache {
+    fn matches_start_atom(&self, mol: &Molecule, sub_pattern: &QueryGraph, atom_idx: u16) -> bool {
+        let key = sub_pattern as *const QueryGraph as usize;
+
+        {
+            let starts_by_pattern = self.starts_by_pattern.borrow();
+            if let Some(starts) = starts_by_pattern.get(&key) {
+                return starts.get(atom_idx as usize).copied().unwrap_or(false);
+            }
+        }
+
+        let mut starts = vec![false; mol.num_atoms()];
+        crate::algo::iso::visit_matches(mol, sub_pattern, |mapping| {
+            if let Some(&first) = mapping.first() {
+                starts[first as usize] = true;
+            }
+            true
+        });
+
+        self.starts_by_pattern.borrow_mut().insert(key, starts);
+
+        self.starts_by_pattern
+            .borrow()
+            .get(&key)
+            .and_then(|v| v.get(atom_idx as usize))
+            .copied()
+            .unwrap_or(false)
+    }
+}
+
+pub(crate) fn query_graph_needs_ring_context(query: &QueryGraph) -> bool {
+    query
+        .atoms
+        .iter()
+        .flat_map(|atom| atom.primitives.iter())
+        .any(primitive_needs_ring_context)
+}
+
+fn primitive_needs_ring_context(primitive: &AtomPrimitive) -> bool {
+    match primitive {
+        AtomPrimitive::RingSize(_) | AtomPrimitive::RingMembership(_) => true,
+        AtomPrimitive::Not(inner) => primitive_needs_ring_context(inner),
+        AtomPrimitive::Or(options) | AtomPrimitive::And(options) => {
+            options.iter().any(primitive_needs_ring_context)
+        }
+        AtomPrimitive::Recursive(sub_pattern) => query_graph_needs_ring_context(sub_pattern),
+        _ => false,
+    }
+}
+
+fn query_atom_needs_ring_context(query_atom: &QueryAtom) -> bool {
+    query_atom.primitives.iter().any(primitive_needs_ring_context)
+}
+
+pub(crate) fn query_atom_matches_with_context(
+    query_atom: &QueryAtom,
+    mol: &Molecule,
+    atom_idx: u16,
+    ring_ctx: Option<&SmartsRingContext>,
+) -> bool {
+    query_atom_matches_with_cache(query_atom, mol, atom_idx, ring_ctx, None)
+}
+
+pub(crate) fn query_atom_matches_with_cache(
+    query_atom: &QueryAtom,
+    mol: &Molecule,
+    atom_idx: u16,
+    ring_ctx: Option<&SmartsRingContext>,
+    recursive_cache: Option<&SmartsRecursiveCache>,
+) -> bool {
+    let atom = &mol.atoms[atom_idx as usize];
+    query_atom
+        .primitives
+        .iter()
+        .all(|primitive| match_primitive(primitive, mol, atom_idx, atom, ring_ctx, recursive_cache))
 }
 
 /// Matches a single atom primitive against a molecule atom.
@@ -180,6 +303,8 @@ fn match_primitive(
     mol: &Molecule,
     atom_idx: u16,
     atom: &crate::mol::atom::Atom,
+    ring_ctx: Option<&SmartsRingContext>,
+    recursive_cache: Option<&SmartsRecursiveCache>,
 ) -> bool {
     match primitive {
         AtomPrimitive::Element(z) => atom.atomic_number == *z,
@@ -194,15 +319,17 @@ fn match_primitive(
 
         AtomPrimitive::Aliphatic(z) => atom.atomic_number == *z && !atom.is_aromatic(),
 
-        AtomPrimitive::Not(inner) => !match_primitive(inner, mol, atom_idx, atom),
+        AtomPrimitive::Not(inner) => {
+            !match_primitive(inner, mol, atom_idx, atom, ring_ctx, recursive_cache)
+        }
 
         AtomPrimitive::Or(options) => options
             .iter()
-            .any(|p| match_primitive(p, mol, atom_idx, atom)),
+            .any(|p| match_primitive(p, mol, atom_idx, atom, ring_ctx, recursive_cache)),
 
         AtomPrimitive::And(requirements) => requirements
             .iter()
-            .all(|p| match_primitive(p, mol, atom_idx, atom)),
+            .all(|p| match_primitive(p, mol, atom_idx, atom, ring_ctx, recursive_cache)),
 
         AtomPrimitive::HCount(n) => {
             // In SMARTS, H without explicit/implicit distinction means total H count
@@ -232,26 +359,11 @@ fn match_primitive(
             if !atom.is_in_ring() {
                 return false;
             }
-            let mut mol_copy = Molecule {
-                atoms: mol.atoms.clone(),
-                bonds: mol.bonds.clone(),
-                adjacency: mol.adjacency.clone(),
-            };
-            let rings = crate::algo::rings::find_sssr(&mut mol_copy);
-            rings
-                .iter()
-                .any(|ring| ring.len() == *size as usize && ring.contains(&atom_idx))
+            ring_ctx.is_some_and(|ctx| ctx.has_ring_size(atom_idx, *size))
         }
 
         AtomPrimitive::RingMembership(count) => {
-            let mut mol_copy = Molecule {
-                atoms: mol.atoms.clone(),
-                bonds: mol.bonds.clone(),
-                adjacency: mol.adjacency.clone(),
-            };
-            let rings = crate::algo::rings::find_sssr(&mut mol_copy);
-            let membership = rings.iter().filter(|ring| ring.contains(&atom_idx)).count();
-            membership == *count as usize
+            ring_ctx.is_some_and(|ctx| ctx.ring_membership(atom_idx) == *count)
         }
 
         AtomPrimitive::Valence(v) => {
@@ -295,17 +407,26 @@ fn match_primitive(
         AtomPrimitive::Recursive(sub_pattern) => {
             // Recursive SMARTS: atom matches if it can be the first atom
             // of a match of the sub-pattern
-            use crate::algo::iso::find_all_matches;
+            use crate::algo::iso::visit_matches;
 
             if sub_pattern.atoms.is_empty() {
                 return true; // Empty pattern always matches
             }
 
-            // Find all matches of the sub-pattern in the molecule
-            let matches = find_all_matches(mol, sub_pattern);
+            if let Some(cache) = recursive_cache {
+                return cache.matches_start_atom(mol, sub_pattern, atom_idx);
+            }
 
-            // Check if any match starts at this atom
-            matches.iter().any(|m| !m.is_empty() && m[0] == atom_idx)
+            let mut found = false;
+            visit_matches(mol, sub_pattern, |m| {
+                if !m.is_empty() && m[0] == atom_idx {
+                    found = true;
+                    false
+                } else {
+                    true
+                }
+            });
+            found
         }
     }
 }

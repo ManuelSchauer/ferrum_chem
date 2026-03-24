@@ -77,7 +77,11 @@ fn chi1(mol: &Molecule, deltas: &[f64]) -> f64 {
             let di = deltas[bond.source as usize];
             let dj = deltas[bond.target as usize];
             let prod = di * dj;
-            if prod > 0.0 { 1.0 / prod.sqrt() } else { 0.0 }
+            if prod > 0.0 {
+                1.0 / prod.sqrt()
+            } else {
+                0.0
+            }
         })
         .sum()
 }
@@ -122,7 +126,11 @@ fn chi_path_rdkit_like(mol: &Molecule, deltas: &[f64], length: usize) -> f64 {
             };
 
             let prod: f64 = atoms.iter().map(|&idx| deltas[idx as usize]).product();
-            if prod > 0.0 { 1.0 / prod.sqrt() } else { 0.0 }
+            if prod > 0.0 {
+                1.0 / prod.sqrt()
+            } else {
+                0.0
+            }
         })
         .sum()
 }
@@ -456,7 +464,7 @@ mod tests {
 
     fn calc_chi(smiles: &str) -> Vec<f32> {
         let mut mol = parse_smiles(smiles).expect("valid SMILES");
-        match ChiIndices.calculate(&mut mol) {
+        match ChiIndices.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()) {
             DescriptorValue::FloatVec(v) => v,
             other => panic!("expected FloatVec, got {:?}", other),
         }
@@ -607,7 +615,7 @@ impl Descriptor for ChiIndices {
         "ChiIndices"
     }
 
-    fn calculate(&self, mol: &mut Molecule) -> DescriptorValue {
+    fn calculate(&self, mol: &mut Molecule, ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
         let mut values = Vec::with_capacity(26);
 
         // ChiPath (8 values)

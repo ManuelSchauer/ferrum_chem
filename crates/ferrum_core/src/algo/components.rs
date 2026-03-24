@@ -43,6 +43,7 @@ pub fn num_fragments(mol: &Molecule) -> usize {
 
 /// Removes salts/solvents by keeping only the largest connected fragment.
 pub fn keep_largest_fragment(mol: &mut Molecule) {
+    mol.invalidate_cached_properties();
     if mol.atoms.len() <= 1 {
         return;
     }

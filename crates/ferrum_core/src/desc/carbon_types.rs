@@ -228,7 +228,7 @@ impl Descriptor for CarbonTypes {
         "CarbonTypes"
     }
 
-    fn calculate(&self, mol: &mut Molecule) -> DescriptorValue {
+    fn calculate(&self, mol: &mut Molecule, ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
         use crate::types::BondType;
 
         let mut counts = vec![0u16; 9];

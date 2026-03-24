@@ -8,8 +8,10 @@
 //! sciences, 39(5), 868-873.
 
 use super::typed::Descriptor;
+#[cfg(test)]
 use crate::algo::iso::find_all_matches;
-use crate::io::smarts::{QueryGraph, parse_smarts};
+use crate::algo::iso::visit_matches;
+use crate::io::smarts::{parse_smarts, QueryGraph};
 use crate::mol::molecule::Molecule;
 use crate::types::BondType;
 use once_cell::sync::Lazy;
@@ -29,6 +31,9 @@ static PARSED_PATTERNS: Lazy<Vec<ParsedPattern>> = Lazy::new(|| {
         })
         .collect()
 });
+
+static CRIPPEN_CACHE_ENABLED: Lazy<bool> =
+    Lazy::new(|| std::env::var_os("FERRUM_DISABLE_CRIPPEN_CACHE").is_none());
 
 fn is_hydrogen_label(label: &str) -> bool {
     matches!(label, "H1" | "H2" | "H3" | "H4" | "HS")
@@ -66,25 +71,47 @@ pub fn crippen_atom_contributions(mol: &Molecule) -> (Vec<f64>, Vec<f64>) {
     let mut assigned = vec![false; n];
     let mut remaining_heavy = mol.atoms.iter().filter(|a| a.atomic_number > 1).count();
 
-    'patterns: for pattern in PARSED_HEAVY_PATTERNS.iter() {
-        let matches = find_all_matches(mol, &pattern.query);
-        for m in matches {
-            if !m.is_empty() {
-                let idx = m[0] as usize;
-                if mol.atoms[idx].atomic_number > 1 && !assigned[idx] {
-                    assigned[idx] = true;
-                    logp[idx] = pattern.logp;
-                    mr[idx] = pattern.mr;
-                    remaining_heavy = remaining_heavy.saturating_sub(1);
-                    if remaining_heavy == 0 {
-                        break 'patterns;
-                    }
-                }
+    for pattern in PARSED_HEAVY_PATTERNS.iter() {
+        visit_matches(mol, &pattern.query, |m: &[u16]| {
+            if m.is_empty() {
+                return true;
             }
+            let idx = m[0] as usize;
+            if mol.atoms[idx].atomic_number > 1 && !assigned[idx] {
+                assigned[idx] = true;
+                logp[idx] = pattern.logp;
+                mr[idx] = pattern.mr;
+                remaining_heavy = remaining_heavy.saturating_sub(1);
+            }
+            remaining_heavy > 0
+        });
+        if remaining_heavy == 0 {
+            break;
         }
     }
 
     (logp, mr)
+}
+
+pub(crate) fn ensure_crippen_atom_contributions_cached(mol: &mut Molecule) {
+    if !*CRIPPEN_CACHE_ENABLED || mol.cached_crippen_contribs().is_some() {
+        return;
+    }
+    let (logp, mr) = crippen_atom_contributions(mol);
+    mol.store_crippen_contribs(logp, mr);
+}
+
+pub(crate) fn cached_crippen_atom_contributions_ref(mol: &Molecule) -> Option<(&[f64], &[f64])> {
+    let (logp, mr) = mol.cached_crippen_contribs()?;
+    Some((logp, mr))
+}
+
+pub(crate) fn cached_crippen_atom_contributions(mol: &mut Molecule) -> (Vec<f64>, Vec<f64>) {
+    ensure_crippen_atom_contributions_cached(mol);
+    if let Some((logp, mr)) = cached_crippen_atom_contributions_ref(mol) {
+        return (logp.to_vec(), mr.to_vec());
+    }
+    crippen_atom_contributions(mol)
 }
 
 /// Classify implicit H type based on parent atom context (matching RDKit C++ Crippen).
@@ -237,6 +264,41 @@ pub fn compute_logp(mol: &Molecule) -> (f64, f64) {
     (total_logp, total_mr)
 }
 
+pub(crate) fn compute_logp_cached(mol: &mut Molecule) -> (f64, f64) {
+    if !*CRIPPEN_CACHE_ENABLED {
+        return compute_logp(mol);
+    }
+    if let Some(totals) = mol.cached_crippen_totals() {
+        return totals;
+    }
+    ensure_crippen_atom_contributions_cached(mol);
+    let (mut total_logp, mut total_mr) =
+        if let Some((logp_contribs, mr_contribs)) = cached_crippen_atom_contributions_ref(mol) {
+            (
+                logp_contribs.iter().sum::<f64>(),
+                mr_contribs.iter().sum::<f64>(),
+            )
+        } else {
+            let (logp_contribs, mr_contribs) = crippen_atom_contributions(mol);
+            (
+                logp_contribs.iter().sum::<f64>(),
+                mr_contribs.iter().sum::<f64>(),
+            )
+        };
+
+    for i in 0..mol.atoms.len() {
+        let ih = mol.atoms[i].total_h();
+        if ih > 0 {
+            let (h_logp, h_mr) = classify_implicit_h(mol, i);
+            total_logp += h_logp * ih as f64;
+            total_mr += h_mr * ih as f64;
+        }
+    }
+
+    mol.store_crippen_totals(total_logp, total_mr);
+    (total_logp, total_mr)
+}
+
 /// Wildman-Crippen LogP descriptor.
 ///
 /// Returns `DescriptorValue::Float(f32)`: the predicted octanol-water
@@ -255,8 +317,8 @@ impl Descriptor for LogP {
         "LogP"
     }
 
-    fn calculate(&self, mol: &mut Molecule) -> super::typed::DescriptorValue {
-        let (logp, _) = compute_logp(mol);
+    fn calculate(&self, mol: &mut Molecule, ctx: &mut crate::desc::context::CalculationContext) -> super::typed::DescriptorValue {
+        let (logp, _) = compute_logp_cached(mol);
         super::typed::DescriptorValue::Float(logp as f32)
     }
 }
@@ -274,8 +336,8 @@ impl Descriptor for MolarRefractivity {
         "MolarRefractivity"
     }
 
-    fn calculate(&self, mol: &mut Molecule) -> super::typed::DescriptorValue {
-        let (_, mr) = compute_logp(mol);
+    fn calculate(&self, mol: &mut Molecule, ctx: &mut crate::desc::context::CalculationContext) -> super::typed::DescriptorValue {
+        let (_, mr) = compute_logp_cached(mol);
         super::typed::DescriptorValue::Float(mr as f32)
     }
 }
@@ -971,6 +1033,7 @@ static CRIPPEN_PATTERNS: &[CrippenPattern] = &[
 mod tests {
     use super::*;
     use crate::algo::aromaticity::perceive_aromaticity;
+    use crate::algo::kekulize::kekulize;
     use crate::algo::valency::assign_implicit_hydrogens;
     use crate::io::smiles::parse_smiles;
 
@@ -980,6 +1043,39 @@ mod tests {
         perceive_aromaticity(&mut mol);
         let (logp, _) = compute_logp(&mol);
         logp
+    }
+
+    #[test]
+    fn test_cached_logp_invalidated_by_assign_implicit_hydrogens() {
+        let mut mol = parse_smiles("C").unwrap();
+        mol.atoms[0].num_implicit_h = 0;
+
+        let before = compute_logp_cached(&mut mol).0;
+        assign_implicit_hydrogens(&mut mol).unwrap();
+        let after = compute_logp_cached(&mut mol).0;
+
+        assert_eq!(mol.atoms[0].num_implicit_h, 4);
+        assert!((after - compute_logp(&mol).0).abs() < 1e-9);
+        assert!((before - after).abs() > 1e-6);
+    }
+
+    #[test]
+    fn test_cached_logp_invalidated_by_aromaticity_perception() {
+        let mut mol = parse_smiles("c1ccccc1").unwrap();
+        kekulize(&mut mol);
+        for atom in &mut mol.atoms {
+            atom.set_aromatic(false);
+        }
+        for bond in &mut mol.bonds {
+            bond.set_aromatic(false);
+        }
+
+        let before = compute_logp_cached(&mut mol).0;
+        perceive_aromaticity(&mut mol);
+        let after = compute_logp_cached(&mut mol).0;
+
+        assert!((after - compute_logp(&mol).0).abs() < 1e-9);
+        assert!((before - after).abs() > 1e-6);
     }
 
     #[test]

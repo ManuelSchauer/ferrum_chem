@@ -22,6 +22,7 @@ use crate::types::BondType;
 /// 3. Find the smallest aromatic valence >= degree
 /// 4. Implicit H = aromatic_valence - degree
 pub fn assign_implicit_hydrogens(mol: &mut Molecule) -> Result<()> {
+    mol.invalidate_cached_properties();
     for atom_idx in 0..mol.atoms.len() {
         let atom = &mol.atoms[atom_idx];
 
@@ -107,6 +108,7 @@ pub fn assign_implicit_hydrogens(mol: &mut Molecule) -> Result<()> {
 pub fn assign_dative_bonds(mol: &mut Molecule) {
     use crate::mol::elements::is_transition_metal;
 
+    mol.invalidate_cached_properties();
     for bond_idx in 0..mol.bonds.len() {
         let bond = &mol.bonds[bond_idx];
         if bond.bond_type != BondType::Single {

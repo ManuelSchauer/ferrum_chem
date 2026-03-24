@@ -10,71 +10,11 @@
 //! Reference: Pearlman, R.S. & Smith, K.M. (1999) "Metric Validation and
 //!            the Receptor-Relevant Subspace Concept", JCICS 39, 28-35.
 
+use super::atomic_props::{
+    atomic_mass, burden_polarizability, burden_vdw_volume, pauling_electronegativity,
+};
 use super::typed::{Descriptor, DescriptorValue};
 use crate::mol::molecule::Molecule;
-
-// ---------------------------------------------------------------------------
-// Atomic property functions (shared with autocorrelation)
-// ---------------------------------------------------------------------------
-
-fn atomic_mass(atomic_number: u8) -> f64 {
-    crate::mol::elements::ATOMIC_MASSES[atomic_number as usize] as f64
-}
-
-fn electronegativity(atomic_number: u8) -> f64 {
-    match atomic_number {
-        1 => 2.20,
-        5 => 2.04,
-        6 => 2.55,
-        7 => 3.04,
-        8 => 3.44,
-        9 => 3.98,
-        14 => 1.90,
-        15 => 2.19,
-        16 => 2.58,
-        17 => 3.16,
-        35 => 2.96,
-        53 => 2.66,
-        _ => 2.00,
-    }
-}
-
-fn polarizability(atomic_number: u8) -> f64 {
-    match atomic_number {
-        1 => 0.67,
-        5 => 3.03,
-        6 => 1.76,
-        7 => 1.10,
-        8 => 0.80,
-        9 => 0.56,
-        14 => 5.38,
-        15 => 3.63,
-        16 => 2.90,
-        17 => 2.18,
-        35 => 3.05,
-        53 => 5.35,
-        _ => 1.50,
-    }
-}
-
-fn vdw_volume(atomic_number: u8) -> f64 {
-    let r: f64 = match atomic_number {
-        1 => 1.20,
-        5 => 1.92,
-        6 => 1.70,
-        7 => 1.55,
-        8 => 1.52,
-        9 => 1.47,
-        14 => 2.10,
-        15 => 1.80,
-        16 => 1.80,
-        17 => 1.75,
-        35 => 1.85,
-        53 => 1.98,
-        _ => 1.70,
-    };
-    (4.0 / 3.0) * std::f64::consts::PI * r.powi(3)
-}
 
 // ---------------------------------------------------------------------------
 // Burden matrix + eigenvalues
@@ -84,13 +24,16 @@ fn vdw_volume(atomic_number: u8) -> f64 {
 /// - Diagonal: atomic property weight
 /// - Off-diagonal connected: bond order / √(bond_order)
 /// - Off-diagonal disconnected: 0.001 (small perturbation)
-fn build_burden_matrix(mol: &Molecule, weights: &[f64]) -> Vec<f64> {
+fn fill_burden_matrix(mol: &Molecule, weight_fn: fn(u8) -> f64, mat: &mut [f64]) {
     let n = mol.num_atoms();
-    let mut mat = vec![0.001; n * n]; // small off-diagonal default
+    debug_assert_eq!(mat.len(), n * n);
+    mat.fill(0.001);
 
     // Diagonal: property weights
-    for i in 0..n {
-        mat[i * n + i] = weights[i];
+    let mut diag_idx = 0usize;
+    for atom in &mol.atoms {
+        mat[diag_idx] = weight_fn(atom.atomic_number);
+        diag_idx += n + 1;
     }
 
     // Connected atoms: bond contribution
@@ -108,21 +51,9 @@ fn build_burden_matrix(mol: &Molecule, weights: &[f64]) -> Vec<f64> {
         mat[i * n + j] = val;
         mat[j * n + i] = val;
     }
-
-    mat
 }
 
-/// Compute eigenvalues of a symmetric matrix using Jacobi iteration.
-/// Returns sorted eigenvalues (ascending).
-fn eigenvalues_symmetric(matrix: &[f64], n: usize) -> Vec<f64> {
-    if n == 0 {
-        return vec![];
-    }
-    if n == 1 {
-        return vec![matrix[0]];
-    }
-
-    let mut a = matrix.to_vec();
+fn jacobi_diagonalize_in_place(a: &mut [f64], n: usize) {
     let max_iter = 100 * n * n;
 
     for _ in 0..max_iter {
@@ -159,25 +90,61 @@ fn eigenvalues_symmetric(matrix: &[f64], n: usize) -> Vec<f64> {
         let c = theta.cos();
         let s = theta.sin();
 
-        // Apply Jacobi rotation
-        let mut new_a = a.clone();
+        // Apply Jacobi rotation in-place.
         for i in 0..n {
             if i != p && i != q {
                 let aip = a[i * n + p];
                 let aiq = a[i * n + q];
-                new_a[i * n + p] = c * aip + s * aiq;
-                new_a[p * n + i] = new_a[i * n + p];
-                new_a[i * n + q] = -s * aip + c * aiq;
-                new_a[q * n + i] = new_a[i * n + q];
+                let new_ip = c * aip + s * aiq;
+                let new_iq = -s * aip + c * aiq;
+                a[i * n + p] = new_ip;
+                a[p * n + i] = new_ip;
+                a[i * n + q] = new_iq;
+                a[q * n + i] = new_iq;
             }
         }
-        new_a[p * n + p] = c * c * app + 2.0 * c * s * apq + s * s * aqq;
-        new_a[q * n + q] = s * s * app - 2.0 * c * s * apq + c * c * aqq;
-        new_a[p * n + q] = 0.0;
-        new_a[q * n + p] = 0.0;
-
-        a = new_a;
+        a[p * n + p] = c * c * app + 2.0 * c * s * apq + s * s * aqq;
+        a[q * n + q] = s * s * app - 2.0 * c * s * apq + c * c * aqq;
+        a[p * n + q] = 0.0;
+        a[q * n + p] = 0.0;
     }
+}
+
+fn eigenvalue_bounds_symmetric_inplace(matrix: &mut [f64], n: usize) -> (f64, f64) {
+    debug_assert!(n > 0);
+    if n == 1 {
+        let v = matrix[0];
+        return (v, v);
+    }
+    jacobi_diagonalize_in_place(matrix, n);
+
+    let mut min_eig = matrix[0];
+    let mut max_eig = matrix[0];
+    for i in 1..n {
+        let v = matrix[i * n + i];
+        if v < min_eig {
+            min_eig = v;
+        }
+        if v > max_eig {
+            max_eig = v;
+        }
+    }
+    (min_eig, max_eig)
+}
+
+/// Compute eigenvalues of a symmetric matrix using Jacobi iteration.
+/// Returns sorted eigenvalues (ascending).
+#[cfg(test)]
+fn eigenvalues_symmetric(matrix: &[f64], n: usize) -> Vec<f64> {
+    if n == 0 {
+        return vec![];
+    }
+    if n == 1 {
+        return vec![matrix[0]];
+    }
+
+    let mut a = matrix.to_vec();
+    jacobi_diagonalize_in_place(&mut a, n);
 
     // Extract diagonal (eigenvalues)
     let mut eigs: Vec<f64> = (0..n).map(|i| a[i * n + i]).collect();
@@ -204,7 +171,7 @@ impl Descriptor for BCUT {
         "BCUT"
     }
 
-    fn calculate(&self, mol: &mut Molecule) -> DescriptorValue {
+    fn calculate(&self, mol: &mut Molecule, ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
         let mut values = vec![0.0f32; 8];
 
         let n = mol.num_atoms();
@@ -212,18 +179,19 @@ impl Descriptor for BCUT {
             return DescriptorValue::FloatVec(values);
         }
 
-        let weight_fns: [fn(u8) -> f64; 4] =
-            [atomic_mass, electronegativity, polarizability, vdw_volume];
+        let weight_fns: [fn(u8) -> f64; 4] = [
+            atomic_mass,
+            pauling_electronegativity,
+            burden_polarizability,
+            burden_vdw_volume,
+        ];
+        let mut matrix = vec![0.0; n * n];
 
         for (wi, wfn) in weight_fns.iter().enumerate() {
-            let weights: Vec<f64> = (0..n).map(|i| wfn(mol.atoms[i].atomic_number)).collect();
-            let mat = build_burden_matrix(mol, &weights);
-            let eigs = eigenvalues_symmetric(&mat, n);
-
-            if !eigs.is_empty() {
-                values[wi * 2] = eigs[0] as f32;
-                values[wi * 2 + 1] = *eigs.last().unwrap() as f32;
-            }
+            fill_burden_matrix(mol, *wfn, &mut matrix);
+            let (low, high) = eigenvalue_bounds_symmetric_inplace(&mut matrix, n);
+            values[wi * 2] = low as f32;
+            values[wi * 2 + 1] = high as f32;
         }
 
         DescriptorValue::FloatVec(values)
@@ -243,7 +211,7 @@ mod tests {
 
     fn calc_bcut(smiles: &str) -> Vec<f32> {
         let mut mol = parse_smiles(smiles).expect("valid SMILES");
-        match BCUT.calculate(&mut mol) {
+        match BCUT.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()) {
             DescriptorValue::FloatVec(v) => v,
             other => panic!("expected FloatVec, got {:?}", other),
         }

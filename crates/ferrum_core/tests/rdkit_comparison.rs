@@ -396,12 +396,12 @@ fn rdkit_scalar_descriptors() {
             };
 
             let ferrum_val = match check.extract {
-                ExtractKind::Float => match check.descriptor.calculate(&mut mol) {
+                ExtractKind::Float => match check.descriptor.calculate(&mut mol, &mut ferrum_core::desc::context::CalculationContext::new()) {
                     DescriptorValue::Float(v) => v as f64,
                     DescriptorValue::Float64(v) => v,
                     _ => continue,
                 },
-                ExtractKind::Int => match check.descriptor.calculate(&mut mol) {
+                ExtractKind::Int => match check.descriptor.calculate(&mut mol, &mut ferrum_core::desc::context::CalculationContext::new()) {
                     DescriptorValue::Int(v) => v as f64,
                     _ => continue,
                 },
@@ -452,7 +452,7 @@ fn compare_vec(
         Err(_) => return out,
     };
 
-    let value = desc.calculate(&mut mol);
+    let value = desc.calculate(&mut mol, &mut ferrum_core::desc::context::CalculationContext::new());
     let ferrum_vec: Vec<f64> = match &value {
         DescriptorValue::FloatVec(v) => v.iter().map(|&x| x as f64).collect(),
         DescriptorValue::IntU16Vec(v) => v.iter().map(|&x| x as f64).collect(),
@@ -540,7 +540,7 @@ fn rdkit_chi_kappa_indices() {
             Err(_) => continue,
         };
 
-        if let DescriptorValue::FloatVec(ref chi_vec) = ChiIndices.calculate(&mut mol) {
+        if let DescriptorValue::FloatVec(ref chi_vec) = ChiIndices.calculate(&mut mol, &mut ferrum_core::desc::context::CalculationContext::new()) {
             for (col, idx) in &chi_map {
                 if let Some(rdkit_val) = values.get(*col).and_then(|v| parse_csv_f64(v)) {
                     let fv = chi_vec[*idx] as f64;
@@ -558,7 +558,7 @@ fn rdkit_chi_kappa_indices() {
             }
         }
 
-        if let DescriptorValue::FloatVec(ref kv) = KappaIndices.calculate(&mut mol) {
+        if let DescriptorValue::FloatVec(ref kv) = KappaIndices.calculate(&mut mol, &mut ferrum_core::desc::context::CalculationContext::new()) {
             for (col, idx) in &kappa_map {
                 if let Some(rdkit_val) = values.get(*col).and_then(|v| parse_csv_f64(v)) {
                     let fv = kv[*idx] as f64;
@@ -594,7 +594,7 @@ fn rdkit_ring_descriptors() {
         };
 
         // RingTypeCounts: [saturated, aliphatic, aromatic]
-        if let DescriptorValue::IntU16Vec(ref v) = RingTypeCounts.calculate(&mut mol) {
+        if let DescriptorValue::IntU16Vec(ref v) = RingTypeCounts.calculate(&mut mol, &mut ferrum_core::desc::context::CalculationContext::new()) {
             if let Some(rv) = values
                 .get("NumSaturatedRings")
                 .and_then(|s| parse_csv_f64(s))
@@ -643,7 +643,7 @@ fn rdkit_ring_descriptors() {
         }
 
         // SmallRingDescriptor: [0]=total rings
-        if let DescriptorValue::IntU16Vec(ref v) = SmallRingDescriptor.calculate(&mut mol) {
+        if let DescriptorValue::IntU16Vec(ref v) = SmallRingDescriptor.calculate(&mut mol, &mut ferrum_core::desc::context::CalculationContext::new()) {
             if let Some(rv) = values.get("RingCount").and_then(|s| parse_csv_f64(s)) {
                 let fv = v[0] as f64;
                 results.push(CompResult {

@@ -1,7 +1,13 @@
 use crate::algo::rings::find_sssr;
 use crate::mol::molecule::Molecule;
 use crate::types::{AtomIdx, BondType};
-use std::collections::{HashSet, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
+
+#[derive(Clone, PartialEq, Eq, Hash)]
+enum RingDedupKey {
+    Small(u128),
+    Large(Vec<AtomIdx>),
+}
 
 /// Perceive aromaticity using the Hückel 4n+2 rule.
 ///
@@ -30,6 +36,11 @@ use std::collections::{HashSet, VecDeque};
 /// assert!(mol.atoms[0].is_aromatic());  // Benzene carbon
 /// ```
 pub fn perceive_aromaticity(mol: &mut Molecule) {
+    mol.invalidate_cached_properties();
+    // Ring topology does not change during aromaticity perception (only bond
+    // aromatic flags / bond orders are updated), so compute candidate cycles
+    // exactly once and reuse them through the fixed-point iterations.
+    let rings = collect_aromaticity_ring_candidates(mol);
     // Some fused systems only become recognizable as aromatic after an adjacent
     // ring has already been aromaticized (e.g. flavylium/quinonoid systems).
     // Iterate to a fixed point so those newly aromatic bonds can unlock the
@@ -42,41 +53,21 @@ pub fn perceive_aromaticity(mol: &mut Molecule) {
             .map(|bond| (bond.bond_type, bond.is_aromatic()))
             .collect();
 
-        // First, detect rings.
-        let sssr_rings = find_sssr(mol);
-        // Include larger conjugated perimeters (e.g. porphyrin-like macrocycles)
-        // that are often omitted from an SSSR basis but still drive aromaticity.
-        let local_cycles = find_local_cycles(mol, 5, 24);
-        let dfs_cycles = find_dfs_cycles(mol, 5, 8, 2000);
-
-        // Merge SSSR + local small cycles by atom-set identity.
-        let mut rings: Vec<Vec<AtomIdx>> = Vec::new();
-        let mut seen: HashSet<Vec<AtomIdx>> = HashSet::new();
-        for ring in sssr_rings
-            .iter()
-            .chain(local_cycles.iter())
-            .chain(dfs_cycles.iter())
-        {
-            let key = ring_set_key(ring);
-            if seen.insert(key) {
-                rings.push(ring.clone());
-            }
-        }
-
         let mut aromatic_rings = Vec::new();
         for ring in &rings {
-            if is_ring_aromatic(mol, ring)
-                || is_fused_aza_annulated_ring(mol, ring)
-                || is_fused_bis_quinonoid_ring(mol, ring)
-            {
+            let ring_aromatic = is_ring_aromatic(mol, ring);
+            let fused_aza = is_fused_aza_annulated_ring(mol, ring);
+            let fused_bis = is_fused_bis_quinonoid_ring(mol, ring);
+            let is_candidate = ring_aromatic || fused_aza || fused_bis;
+            if is_candidate {
                 aromatic_rings.push(ring.clone());
             }
         }
         let mut aromatic_perimeters = Vec::new();
-        let mut seen_perimeters: HashSet<Vec<AtomIdx>> = HashSet::new();
+        let mut seen_perimeters: HashSet<RingDedupKey> = HashSet::new();
         for ring in &rings {
             if let Some(perimeter) = fused_quinonoid_perimeter(mol, ring) {
-                let key = ring_set_key(&perimeter.ring);
+                let key = ring_dedup_key(&perimeter.ring);
                 if seen_perimeters.insert(key) {
                     aromatic_perimeters.push(perimeter);
                 }
@@ -172,6 +163,11 @@ pub fn perceive_aromaticity(mol: &mut Molecule) {
             break;
         }
     }
+
+    // Apply diaza-dicarbonyl bridge bond suppression after fixed-point convergence.
+    // Keeping this outside the loop prevents oscillation where suppression removes
+    // annulation support needed to keep adjacent fused ring atoms aromatic.
+    suppress_fused_bridge_ring_bond_aromaticity(mol, &rings);
 }
 
 #[derive(Clone)]
@@ -187,11 +183,45 @@ fn ring_set_key(ring: &[AtomIdx]) -> Vec<AtomIdx> {
     key
 }
 
+fn ring_dedup_key(ring: &[AtomIdx]) -> RingDedupKey {
+    let mut mask = 0u128;
+    for &idx in ring {
+        if idx >= 128 {
+            return RingDedupKey::Large(ring_set_key(ring));
+        }
+        mask |= 1u128 << (idx as u32);
+    }
+    RingDedupKey::Small(mask)
+}
+
+fn collect_aromaticity_ring_candidates(mol: &mut Molecule) -> Vec<Vec<AtomIdx>> {
+    // Seed from legacy SSSR to preserve current behavior and ring flags.
+    let sssr_rings = find_sssr(mol);
+    // Include larger conjugated perimeters (e.g. porphyrin-like macrocycles)
+    // that are often omitted from an SSSR basis but still drive aromaticity.
+    let local_cycles = find_local_cycles(mol, 5, 24);
+    let dfs_cycles = find_dfs_cycles(mol, 5, 8, 2000);
+
+    let mut rings = Vec::new();
+    let mut seen: HashSet<RingDedupKey> = HashSet::new();
+    for ring in sssr_rings
+        .iter()
+        .chain(local_cycles.iter())
+        .chain(dfs_cycles.iter())
+    {
+        let key = ring_dedup_key(ring);
+        if seen.insert(key) {
+            rings.push(ring.clone());
+        }
+    }
+    rings
+}
+
 /// Find additional small cycles by using the shortest path between
 /// each bond's endpoints after removing that bond.
 fn find_local_cycles(mol: &Molecule, min_len: usize, max_len: usize) -> Vec<Vec<AtomIdx>> {
     let mut out = Vec::new();
-    let mut seen: HashSet<Vec<AtomIdx>> = HashSet::new();
+    let mut seen: HashSet<RingDedupKey> = HashSet::new();
 
     for (bond_idx, bond) in mol.bonds.iter().enumerate() {
         let u = bond.source as usize;
@@ -209,7 +239,7 @@ fn find_local_cycles(mol: &Molecule, min_len: usize, max_len: usize) -> Vec<Vec<
         }
 
         let ring: Vec<AtomIdx> = path.into_iter().map(|idx| idx as AtomIdx).collect();
-        let key = ring_set_key(&ring);
+        let key = ring_dedup_key(&ring);
         if seen.insert(key) {
             out.push(ring);
         }
@@ -297,7 +327,7 @@ fn find_dfs_cycles(
     }
 
     let mut out = Vec::new();
-    let mut seen: HashSet<Vec<AtomIdx>> = HashSet::new();
+    let mut seen: HashSet<RingDedupKey> = HashSet::new();
     let mut path: Vec<AtomIdx> = Vec::with_capacity(max_len);
     let mut in_path = vec![false; n];
 
@@ -340,7 +370,7 @@ fn dfs_cycle_from(
     max_cycles: usize,
     path: &mut Vec<AtomIdx>,
     in_path: &mut [bool],
-    seen: &mut HashSet<Vec<AtomIdx>>,
+    seen: &mut HashSet<RingDedupKey>,
     out: &mut Vec<Vec<AtomIdx>>,
 ) {
     if out.len() >= max_cycles {
@@ -368,7 +398,7 @@ fn dfs_cycle_from(
         if nbr == start {
             if path.len() >= min_len && path.len() <= max_len {
                 let ring = path.clone();
-                let key = ring_set_key(&ring);
+                let key = ring_dedup_key(&ring);
                 if seen.insert(key) {
                     out.push(ring);
                     if out.len() >= max_cycles {
@@ -596,9 +626,10 @@ fn fused_quinonoid_perimeter(mol: &Molecule, ring: &[AtomIdx]) -> Option<Kekuliz
     }
 
     let chord = unique_cycle_chord(mol, ring)?;
+    let perimeter = canonical_cycle_order_excluding_chord(mol, ring, chord)?;
 
-    for start in 0..ring.len() {
-        let ordered = rotate_ring(ring, start);
+    for start in 0..perimeter.len() {
+        let ordered = rotate_ring(&perimeter, start);
         if let Some(perimeter) = match_fused_quinonoid_perimeter(mol, &ordered, chord)
             .or_else(|| match_fused_aza_quinonoid_perimeter(mol, &ordered, chord))
             .or_else(|| match_fused_aza_bridge_perimeter(mol, &ordered, chord))
@@ -618,16 +649,108 @@ fn fused_quinonoid_perimeter(mol: &Molecule, ring: &[AtomIdx]) -> Option<Kekuliz
     None
 }
 
-fn unique_cycle_chord(mol: &Molecule, ring: &[AtomIdx]) -> Option<(AtomIdx, AtomIdx, usize)> {
-    let mut consecutive = HashSet::with_capacity(ring.len() * 2);
-    for i in 0..ring.len() {
-        let a = ring[i];
-        let b = ring[(i + 1) % ring.len()];
-        consecutive.insert((a.min(b), a.max(b)));
+/// Build a canonical perimeter atom order for a chorded cycle candidate.
+///
+/// The candidate ring list can arrive in any valid cycle ordering. For fused
+/// systems, multiple cycles can share the same atom set and only one ordering
+/// corresponds to the true outer perimeter (with the fused bridge/chord removed).
+/// This helper reconstructs that perimeter directly from graph connectivity by:
+/// 1) removing the detected chord edge, and
+/// 2) traversing the remaining degree-2 cycle.
+fn canonical_cycle_order_excluding_chord(
+    mol: &Molecule,
+    ring: &[AtomIdx],
+    chord: (AtomIdx, AtomIdx, usize),
+) -> Option<Vec<AtomIdx>> {
+    let ring_atoms: HashSet<AtomIdx> = ring.iter().copied().collect();
+    if ring_atoms.len() != ring.len() {
+        return None;
     }
 
+    let mut neighbors: HashMap<AtomIdx, Vec<AtomIdx>> = ring_atoms
+        .iter()
+        .copied()
+        .map(|atom_idx| (atom_idx, Vec::with_capacity(2)))
+        .collect();
+
+    for &atom_idx in ring {
+        for &bond_idx in &mol.adjacency[atom_idx as usize] {
+            let bidx = bond_idx as usize;
+            let bond = &mol.bonds[bidx];
+            let other = if bond.source == atom_idx {
+                bond.target
+            } else {
+                bond.source
+            };
+            if !ring_atoms.contains(&other) || atom_idx > other {
+                continue;
+            }
+
+            if atom_idx.min(other) == chord.0 && atom_idx.max(other) == chord.1 && bidx == chord.2 {
+                continue;
+            }
+
+            neighbors.get_mut(&atom_idx)?.push(other);
+            neighbors.get_mut(&other)?.push(atom_idx);
+        }
+    }
+
+    for &atom_idx in &ring_atoms {
+        if neighbors
+            .get(&atom_idx)
+            .map_or(true, |nbrs| nbrs.len() != 2)
+        {
+            return None;
+        }
+    }
+
+    let start = *ring.iter().min()?;
+    let mut order = Vec::with_capacity(ring.len());
+    order.push(start);
+    let mut prev: Option<AtomIdx> = None;
+    let mut current = start;
+
+    loop {
+        let nbrs = neighbors.get(&current)?;
+        let next = match prev {
+            Some(prev_atom) if nbrs[0] == prev_atom => nbrs[1],
+            Some(prev_atom) if nbrs[1] == prev_atom => nbrs[0],
+            Some(_) => return None,
+            None => nbrs[0].min(nbrs[1]),
+        };
+
+        if next == start {
+            break;
+        }
+        if order.len() >= ring.len() {
+            return None;
+        }
+
+        order.push(next);
+        prev = Some(current);
+        current = next;
+    }
+
+    if order.len() != ring.len() {
+        return None;
+    }
+
+    Some(order)
+}
+
+fn unique_cycle_chord(mol: &Molecule, ring: &[AtomIdx]) -> Option<(AtomIdx, AtomIdx, usize)> {
     let ring_atoms: HashSet<AtomIdx> = ring.iter().copied().collect();
-    let mut chord = None;
+    if ring_atoms.len() != ring.len() {
+        return None;
+    }
+
+    // Collect induced edges among ring atoms and per-atom degree in that
+    // induced subgraph. A single-chord perimeter has exactly n+1 edges, with
+    // exactly two degree-3 endpoints joined by the unique chord.
+    let mut induced_edges: Vec<(AtomIdx, AtomIdx, usize)> = Vec::new();
+    let mut degree: HashMap<AtomIdx, usize> =
+        ring_atoms.iter().copied().map(|atom_idx| (atom_idx, 0usize)).collect();
+
     for &atom_idx in ring {
         for &bond_idx in &mol.adjacency[atom_idx as usize] {
             let bond = &mol.bonds[bond_idx as usize];
@@ -636,23 +759,40 @@ fn unique_cycle_chord(mol: &Molecule, ring: &[AtomIdx]) -> Option<(AtomIdx, Atom
             } else {
                 bond.source
             };
-            if !ring_atoms.contains(&other) {
+            if !ring_atoms.contains(&other) || atom_idx > other {
                 continue;
             }
 
-            let key = (atom_idx.min(other), atom_idx.max(other));
-            if consecutive.contains(&key) {
-                continue;
-            }
-
-            if chord.is_some() && chord != Some((key.0, key.1, bond_idx as usize)) {
-                return None;
-            }
-            chord = Some((key.0, key.1, bond_idx as usize));
+            induced_edges.push((atom_idx, other, bond_idx as usize));
+            *degree.get_mut(&atom_idx)? += 1;
+            *degree.get_mut(&other)? += 1;
         }
     }
 
-    chord
+    if induced_edges.len() != ring_atoms.len() + 1 {
+        return None;
+    }
+
+    if degree.values().any(|&d| d != 2 && d != 3) {
+        return None;
+    }
+
+    let mut degree3_atoms = degree
+        .iter()
+        .filter_map(|(&atom_idx, &deg)| (deg == 3).then_some(atom_idx))
+        .collect::<Vec<_>>();
+    if degree3_atoms.len() != 2 {
+        return None;
+    }
+    degree3_atoms.sort_unstable();
+
+    let chord_a = degree3_atoms[0];
+    let chord_b = degree3_atoms[1];
+    induced_edges
+        .into_iter()
+        .find_map(|(a, b, bond_idx)| {
+            (a.min(b) == chord_a && a.max(b) == chord_b).then_some((chord_a, chord_b, bond_idx))
+        })
 }
 
 fn rotate_ring(ring: &[AtomIdx], start: usize) -> Vec<AtomIdx> {
@@ -1760,6 +1900,222 @@ fn suppress_fused_bridge_bonds(mol: &mut Molecule, aromatic_rings: &[Vec<AtomIdx
         mol.bonds[bond_idx].bond_type = BondType::Single;
         mol.bonds[bond_idx].set_aromatic(false);
     }
+}
+
+fn suppress_fused_bridge_ring_bond_aromaticity(mol: &mut Molecule, aromatic_rings: &[Vec<AtomIdx>]) {
+    let mut atoms_to_mark = Vec::new();
+    let mut bonds_to_aromaticize = Vec::new();
+    let mut bonds_to_kekulize = Vec::new();
+    for ring in aromatic_rings {
+        if let Some(bridge_bond_idx) = fused_diaza_dicarbonyl_bridge_bond(mol, ring) {
+            atoms_to_mark.extend(ring.iter().copied());
+            bonds_to_kekulize.push(bridge_bond_idx);
+            for i in 0..ring.len() {
+                let from = ring[i];
+                let to = ring[(i + 1) % ring.len()];
+                if let Some(bond_idx) = find_bond_between(mol, from, to) {
+                    if bond_idx != bridge_bond_idx {
+                        bonds_to_aromaticize.push(bond_idx);
+                    }
+                }
+            }
+        }
+    }
+
+    atoms_to_mark.sort_unstable();
+    atoms_to_mark.dedup();
+    for atom_idx in atoms_to_mark {
+        mol.atoms[atom_idx as usize].set_aromatic(true);
+    }
+
+    bonds_to_aromaticize.sort_unstable();
+    bonds_to_aromaticize.dedup();
+    for bond_idx in bonds_to_aromaticize {
+        mol.bonds[bond_idx].bond_type = BondType::Aromatic;
+        mol.bonds[bond_idx].set_aromatic(true);
+    }
+
+    bonds_to_kekulize.sort_unstable();
+    bonds_to_kekulize.dedup();
+    for bond_idx in bonds_to_kekulize {
+        mol.bonds[bond_idx].bond_type = BondType::Single;
+        mol.bonds[bond_idx].set_aromatic(false);
+    }
+}
+
+fn fused_diaza_dicarbonyl_bridge_bond(mol: &Molecule, ring: &[AtomIdx]) -> Option<usize> {
+    if ring.len() != 6 {
+        return None;
+    }
+
+    let ring_set: HashSet<AtomIdx> = ring.iter().copied().collect();
+    if ring_set.len() != ring.len() {
+        return None;
+    }
+
+    let ring_atoms: Vec<AtomIdx> = ring_set.iter().copied().collect();
+    let nitrogens: Vec<AtomIdx> = ring_atoms
+        .iter()
+        .copied()
+        .filter(|&atom_idx| {
+            let atom = &mol.atoms[atom_idx as usize];
+            atom.atomic_number == 7
+                && atom.formal_charge == 0
+                && atom.total_h() == 0
+                && mol.get_degree(atom_idx) == 2
+        })
+        .collect();
+    if nitrogens.len() != 2 {
+        return None;
+    }
+
+    let carbonyls: Vec<AtomIdx> = ring_atoms
+        .iter()
+        .copied()
+        .filter(|&atom_idx| {
+            let atom = &mol.atoms[atom_idx as usize];
+            atom.atomic_number == 6 && has_exocyclic_hetero_double(mol, atom_idx, ring)
+        })
+        .collect();
+    if carbonyls.len() != 1 {
+        return None;
+    }
+
+    let exocyclic_single_carbons: Vec<AtomIdx> = ring_atoms
+        .iter()
+        .copied()
+        .filter(|&atom_idx| {
+            let atom = &mol.atoms[atom_idx as usize];
+            atom.atomic_number == 6 && has_exocyclic_hetero_single(mol, atom_idx, ring)
+        })
+        .collect();
+    if exocyclic_single_carbons.len() != 1 {
+        return None;
+    }
+
+    let anchors: Vec<AtomIdx> = ring_atoms
+        .iter()
+        .copied()
+        .filter(|&atom_idx| {
+            let atom = &mol.atoms[atom_idx as usize];
+            atom.atomic_number == 6
+                && atom.formal_charge == 0
+                && !carbonyls.contains(&atom_idx)
+                && !exocyclic_single_carbons.contains(&atom_idx)
+                && atom.is_aromatic()
+        })
+        .collect();
+    if anchors.len() != 2 {
+        return None;
+    }
+
+    // Require annulation support: each anchor must connect to at least one
+    // aromatic atom outside the current ring.
+    let annulated = anchors.iter().all(|&anchor| {
+        mol.adjacency[anchor as usize].iter().any(|&bond_idx| {
+            let bond = &mol.bonds[bond_idx as usize];
+            let other = if bond.source == anchor {
+                bond.target
+            } else {
+                bond.source
+            };
+            !ring_set.contains(&other) && mol.atoms[other as usize].is_aromatic()
+        })
+    });
+    if !annulated {
+        return None;
+    }
+
+    let bridge_bond_idx = find_bond_between(mol, anchors[0], anchors[1])?;
+
+    // Remove the bridge edge and verify the remaining ring perimeter follows an
+    // alternating N-C(=X)-N-C(X) interior chain between the two anchors.
+    let path = ring_path_excluding_edge(mol, &ring_set, anchors[0], anchors[1], bridge_bond_idx)?;
+    if path.len() != ring.len() {
+        return None;
+    }
+    let interior = &path[1..path.len() - 1];
+    if interior.len() != 4 {
+        return None;
+    }
+    let labels: Option<Vec<u8>> = interior
+        .iter()
+        .map(|atom_idx| {
+            if nitrogens.contains(atom_idx) {
+                Some(b'N')
+            } else if carbonyls.contains(atom_idx) {
+                Some(b'D') // exocyclic double (carbonyl-like)
+            } else if exocyclic_single_carbons.contains(atom_idx) {
+                Some(b'S') // exocyclic single hetero substituent
+            } else {
+                None
+            }
+        })
+        .collect();
+    let labels = labels?;
+    let valid_forward = labels[0] == b'N'
+        && labels[2] == b'N'
+        && ((labels[1] == b'D' && labels[3] == b'S')
+            || (labels[1] == b'S' && labels[3] == b'D'));
+    let valid_reverse = labels[1] == b'N'
+        && labels[3] == b'N'
+        && ((labels[0] == b'D' && labels[2] == b'S')
+            || (labels[0] == b'S' && labels[2] == b'D'));
+    if !valid_forward && !valid_reverse {
+        return None;
+    }
+
+    Some(bridge_bond_idx)
+}
+
+fn ring_path_excluding_edge(
+    mol: &Molecule,
+    ring_set: &HashSet<AtomIdx>,
+    start: AtomIdx,
+    end: AtomIdx,
+    excluded_bond_idx: usize,
+) -> Option<Vec<AtomIdx>> {
+    let mut queue = VecDeque::new();
+    let mut prev: HashMap<AtomIdx, AtomIdx> = HashMap::new();
+    let mut seen: HashSet<AtomIdx> = HashSet::new();
+    queue.push_back(start);
+    seen.insert(start);
+
+    while let Some(atom_idx) = queue.pop_front() {
+        if atom_idx == end {
+            break;
+        }
+        for &bond_idx in &mol.adjacency[atom_idx as usize] {
+            let bidx = bond_idx as usize;
+            if bidx == excluded_bond_idx {
+                continue;
+            }
+            let bond = &mol.bonds[bidx];
+            let other = if bond.source == atom_idx {
+                bond.target
+            } else {
+                bond.source
+            };
+            if !ring_set.contains(&other) || !seen.insert(other) {
+                continue;
+            }
+            prev.insert(other, atom_idx);
+            queue.push_back(other);
+        }
+    }
+
+    if !seen.contains(&end) {
+        return None;
+    }
+
+    let mut path = vec![end];
+    let mut current = end;
+    while current != start {
+        current = *prev.get(&current)?;
+        path.push(current);
+    }
+    path.reverse();
+    Some(path)
 }
 
 fn fused_bridge_bond_to_kekulize(mol: &Molecule, ring: &[AtomIdx]) -> Option<usize> {

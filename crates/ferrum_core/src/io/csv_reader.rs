@@ -32,6 +32,9 @@ pub struct CsvReader {
     smiles_column: Option<String>,
     id_column: Option<String>,
     delimiter: u8,
+    include_properties: bool,
+    parse_chunk_size: usize,
+    row_limit: Option<usize>,
 }
 
 /// Result of parsing a single CSV row.
@@ -67,6 +70,9 @@ impl CsvReader {
             smiles_column: None,
             id_column: None,
             delimiter: b',',
+            include_properties: true,
+            parse_chunk_size: 10_000,
+            row_limit: None,
         })
     }
 
@@ -81,6 +87,27 @@ impl CsvReader {
     /// Use b'\t' for TSV files.
     pub fn with_delimiter(mut self, delimiter: u8) -> Self {
         self.delimiter = delimiter;
+        self
+    }
+
+    /// Enables or disables capturing non-SMILES columns as String properties.
+    /// Disable this for lower memory usage in descriptor-only pipelines.
+    pub fn with_properties(mut self, include_properties: bool) -> Self {
+        self.include_properties = include_properties;
+        self
+    }
+
+    /// Sets how many CSV rows are parsed in each parallel chunk.
+    /// Values < 1 are clamped to 1.
+    pub fn with_chunk_size(mut self, chunk_size: usize) -> Self {
+        self.parse_chunk_size = chunk_size.max(1);
+        self
+    }
+
+    /// Limits the number of CSV rows consumed (excluding header).
+    /// Use this to bound memory/time for benchmarking and sampling.
+    pub fn with_row_limit(mut self, row_limit: usize) -> Self {
+        self.row_limit = Some(row_limit);
         self
     }
 
@@ -109,25 +136,64 @@ impl CsvReader {
         ))
     }
 
-    /// Parses the CSV file and returns all records.
+    fn parse_chunk_records(
+        headers: &csv::StringRecord,
+        smiles_idx: usize,
+        include_properties: bool,
+        records: Vec<(usize, csv::StringRecord)>,
+    ) -> Vec<MoleculeRecord> {
+        records
+            .into_par_iter()
+            .map(|(row_idx, record)| {
+                let smiles = record.get(smiles_idx).unwrap_or("").trim().to_string();
+
+                let properties = if include_properties {
+                    let mut properties: Vec<(String, String)> =
+                        Vec::with_capacity(headers.len().saturating_sub(1));
+                    for (idx, (header, value)) in headers.iter().zip(record.iter()).enumerate() {
+                        if idx != smiles_idx {
+                            properties.push((header.to_string(), value.to_string()));
+                        }
+                    }
+                    properties
+                } else {
+                    Vec::new()
+                };
+
+                let (molecule, error) = match parse_smiles(&smiles) {
+                    Ok(mol) => (Some(mol), None),
+                    Err(e) => (None, Some(e.to_string())),
+                };
+
+                MoleculeRecord {
+                    row_index: row_idx,
+                    molecule,
+                    smiles,
+                    error,
+                    properties,
+                }
+            })
+            .collect()
+    }
+
+    /// Parses the CSV file in bounded chunks and streams records to a callback.
     ///
-    /// # Returns
-    /// Vector of `MoleculeRecord` containing molecules and metadata.
-    /// Invalid SMILES are included with error messages (not skipped).
-    pub fn parse(&self) -> Result<Vec<MoleculeRecord>> {
+    /// This avoids materializing the full `Vec<MoleculeRecord>` in memory.
+    pub fn parse_stream<F>(&self, mut on_record: F) -> Result<ParseSummary>
+    where
+        F: FnMut(MoleculeRecord),
+    {
         let file = File::open(&self.path)?;
 
         let mut reader = csv::ReaderBuilder::new()
             .delimiter(self.delimiter)
             .from_reader(file);
 
-        // Get headers
         let headers = reader
             .headers()
             .map_err(|e| FerrumError::ParseError(format!("Failed to read CSV headers: {}", e)))?
             .clone();
 
-        // Find SMILES column
         let smiles_idx = if let Some(ref col_name) = self.smiles_column {
             headers.iter().position(|h| h == col_name).ok_or_else(|| {
                 FerrumError::ParseError(format!("SMILES column '{}' not found in CSV", col_name))
@@ -136,44 +202,67 @@ impl CsvReader {
             Self::detect_smiles_column(&headers)?
         };
 
-        // Parse all rows (sequential, to preserve order)
-        let records: Vec<(usize, csv::StringRecord)> = reader
-            .records()
-            .enumerate()
-            .filter_map(|(row_idx, result)| result.ok().map(|record| (row_idx, record)))
-            .collect();
+        let chunk_size = self.parse_chunk_size.max(1);
+        let mut chunk_records: Vec<(usize, csv::StringRecord)> = Vec::with_capacity(chunk_size);
+        let mut summary = ParseSummary::default();
 
-        // Parallel processing of SMILES strings
-        let results: Vec<MoleculeRecord> = records
-            .par_iter()
-            .map(|(row_idx, record)| {
-                let smiles = record.get(smiles_idx).unwrap_or("").trim().to_string();
+        let row_limit = self.row_limit.unwrap_or(usize::MAX);
+        for (row_idx, result) in reader.records().take(row_limit).enumerate() {
+            if let Ok(record) = result {
+                chunk_records.push((row_idx, record));
+            }
 
-                // Collect other properties
-                let mut properties: Vec<(String, String)> = Vec::new();
-                for (idx, (header, value)) in headers.iter().zip(record.iter()).enumerate() {
-                    if idx != smiles_idx {
-                        properties.push((header.to_string(), value.to_string()));
+            if chunk_records.len() == chunk_size {
+                let current_chunk =
+                    std::mem::replace(&mut chunk_records, Vec::with_capacity(chunk_size));
+                let chunk_results = Self::parse_chunk_records(
+                    &headers,
+                    smiles_idx,
+                    self.include_properties,
+                    current_chunk,
+                );
+                for record in chunk_results {
+                    summary.total_rows += 1;
+                    if record.molecule.is_some() {
+                        summary.valid_molecules += 1;
+                    } else {
+                        summary.failed_parses += 1;
                     }
+                    on_record(record);
                 }
+            }
+        }
 
-                // Parse SMILES
-                let (molecule, error) = match parse_smiles(&smiles) {
-                    Ok(mol) => (Some(mol), None),
-                    Err(e) => (None, Some(e.to_string())),
-                };
-
-                MoleculeRecord {
-                    row_index: *row_idx,
-                    molecule,
-                    smiles,
-                    error,
-                    properties,
+        if !chunk_records.is_empty() {
+            let chunk_results = Self::parse_chunk_records(
+                &headers,
+                smiles_idx,
+                self.include_properties,
+                chunk_records,
+            );
+            for record in chunk_results {
+                summary.total_rows += 1;
+                if record.molecule.is_some() {
+                    summary.valid_molecules += 1;
+                } else {
+                    summary.failed_parses += 1;
                 }
-            })
-            .collect();
+                on_record(record);
+            }
+        }
 
-        Ok(results)
+        Ok(summary)
+    }
+
+    /// Parses the CSV file and returns all records.
+    ///
+    /// # Returns
+    /// Vector of `MoleculeRecord` containing molecules and metadata.
+    /// Invalid SMILES are included with error messages (not skipped).
+    pub fn parse(&self) -> Result<Vec<MoleculeRecord>> {
+        let mut all_results = Vec::new();
+        self.parse_stream(|record| all_results.push(record))?;
+        Ok(all_results)
     }
 
     /// Parses the CSV file and returns only successfully parsed molecules with their SMILES.
@@ -181,39 +270,41 @@ impl CsvReader {
     /// # Returns
     /// Vector of (SMILES, Molecule) tuples. Failed parses are skipped.
     pub fn parse_valid_only(&self) -> Result<Vec<(String, Molecule)>> {
-        let records = self.parse()?;
-
-        Ok(records
-            .into_iter()
-            .filter_map(|record| record.molecule.map(|mol| (record.smiles, mol)))
-            .collect())
+        let mut valid = Vec::new();
+        self.parse_stream(|record| {
+            if let Some(mol) = record.molecule {
+                valid.push((record.smiles, mol));
+            }
+        })?;
+        Ok(valid)
     }
 
     /// Parses the CSV file and returns statistics.
     pub fn parse_with_stats(&self) -> Result<ParseStats> {
-        let records = self.parse()?;
-
-        let total = records.len();
-        let valid = records.iter().filter(|r| r.molecule.is_some()).count();
-        let errors = total - valid;
-
-        let error_messages: Vec<_> = records
-            .iter()
-            .filter_map(|r| {
-                r.error
-                    .as_ref()
-                    .map(|e| (r.row_index, r.smiles.clone(), e.clone()))
-            })
-            .collect();
+        let mut records = Vec::new();
+        let mut error_messages = Vec::new();
+        let summary = self.parse_stream(|record| {
+            if let Some(error) = record.error.as_ref() {
+                error_messages.push((record.row_index, record.smiles.clone(), error.clone()));
+            }
+            records.push(record);
+        })?;
 
         Ok(ParseStats {
-            total_rows: total,
-            valid_molecules: valid,
-            failed_parses: errors,
+            total_rows: summary.total_rows,
+            valid_molecules: summary.valid_molecules,
+            failed_parses: summary.failed_parses,
             error_details: error_messages,
             records,
         })
     }
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct ParseSummary {
+    pub total_rows: usize,
+    pub valid_molecules: usize,
+    pub failed_parses: usize,
 }
 
 /// Statistics from CSV parsing.
@@ -353,5 +444,94 @@ CC
         let valid = reader.parse_valid_only().unwrap();
 
         assert_eq!(valid.len(), 2);
+    }
+
+    #[test]
+    fn test_csv_reader_without_properties() {
+        let csv_content = "\
+SMILES,Name
+CCO,Ethanol
+CC,Ethane
+";
+        let file = create_test_csv(csv_content);
+
+        let reader = CsvReader::from_path(file.path())
+            .unwrap()
+            .with_properties(false);
+        let records = reader.parse().unwrap();
+
+        assert_eq!(records.len(), 2);
+        assert!(records.iter().all(|record| record.properties.is_empty()));
+    }
+
+    #[test]
+    fn test_csv_reader_chunked_parsing_keeps_row_order() {
+        let csv_content = "\
+SMILES
+CCO
+c1ccccc1
+CC
+";
+        let file = create_test_csv(csv_content);
+
+        let reader = CsvReader::from_path(file.path())
+            .unwrap()
+            .with_chunk_size(1);
+        let records = reader.parse().unwrap();
+
+        assert_eq!(records.len(), 3);
+        assert_eq!(records[0].row_index, 0);
+        assert_eq!(records[1].row_index, 1);
+        assert_eq!(records[2].row_index, 2);
+        assert_eq!(records[0].smiles, "CCO");
+        assert_eq!(records[1].smiles, "c1ccccc1");
+        assert_eq!(records[2].smiles, "CC");
+    }
+
+    #[test]
+    fn test_csv_reader_parse_stream_summary_and_order() {
+        let csv_content = "\
+SMILES
+CCO
+INVALID
+CC
+";
+        let file = create_test_csv(csv_content);
+
+        let reader = CsvReader::from_path(file.path())
+            .unwrap()
+            .with_chunk_size(1)
+            .with_properties(false);
+        let mut seen = Vec::new();
+        let summary = reader
+            .parse_stream(|record| {
+                seen.push((record.row_index, record.smiles, record.molecule.is_some()));
+            })
+            .unwrap();
+
+        assert_eq!(summary.total_rows, 3);
+        assert_eq!(summary.valid_molecules, 2);
+        assert_eq!(summary.failed_parses, 1);
+        assert_eq!(seen[0], (0, "CCO".to_string(), true));
+        assert_eq!(seen[1], (1, "INVALID".to_string(), false));
+        assert_eq!(seen[2], (2, "CC".to_string(), true));
+    }
+
+    #[test]
+    fn test_csv_reader_row_limit() {
+        let csv_content = "\
+SMILES
+CCO
+CC
+CCC
+";
+        let file = create_test_csv(csv_content);
+
+        let reader = CsvReader::from_path(file.path()).unwrap().with_row_limit(2);
+        let records = reader.parse().unwrap();
+
+        assert_eq!(records.len(), 2);
+        assert_eq!(records[0].smiles, "CCO");
+        assert_eq!(records[1].smiles, "CC");
     }
 }

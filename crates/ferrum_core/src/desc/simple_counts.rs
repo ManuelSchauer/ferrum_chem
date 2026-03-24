@@ -20,7 +20,7 @@ impl Descriptor for ValenceElectrons {
         "ValenceElectrons"
     }
 
-    fn calculate(&self, mol: &mut Molecule) -> DescriptorValue {
+    fn calculate(&self, mol: &mut Molecule, ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
         let mut count: i32 = 0;
         for atom in &mol.atoms {
             let outer_elec = elements::outer_electrons(atom.atomic_number) as i32;
@@ -46,7 +46,7 @@ impl Descriptor for RadicalElectrons {
         "RadicalElectrons"
     }
 
-    fn calculate(&self, mol: &mut Molecule) -> DescriptorValue {
+    fn calculate(&self, mol: &mut Molecule, ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
         let count: u32 = mol
             .atoms
             .iter()
@@ -70,7 +70,7 @@ impl Descriptor for HeteroatomCount {
         "HeteroatomCount"
     }
 
-    fn calculate(&self, mol: &mut Molecule) -> DescriptorValue {
+    fn calculate(&self, mol: &mut Molecule, ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
         let count = mol
             .atoms
             .iter()
@@ -95,7 +95,7 @@ impl Descriptor for HybridizationRatio {
         "HybridizationRatio"
     }
 
-    fn calculate(&self, mol: &mut Molecule) -> DescriptorValue {
+    fn calculate(&self, mol: &mut Molecule, ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
         let mut sp3_count = 0u32;
         let mut sp2_count = 0u32;
         for (idx, atom) in mol.atoms.iter().enumerate() {
@@ -110,7 +110,11 @@ impl Descriptor for HybridizationRatio {
             }
         }
         let ratio = if sp2_count == 0 {
-            if sp3_count > 0 { f32::INFINITY } else { 0.0 }
+            if sp3_count > 0 {
+                f32::INFINITY
+            } else {
+                0.0
+            }
         } else {
             sp3_count as f32 / sp2_count as f32
         };
@@ -132,7 +136,7 @@ impl Descriptor for VAdjMa {
         "VAdjMa"
     }
 
-    fn calculate(&self, mol: &mut Molecule) -> DescriptorValue {
+    fn calculate(&self, mol: &mut Molecule, ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
         let m = mol.num_bonds() as f32;
         let val = if m == 0.0 { 0.0 } else { 1.0 + m.log2() };
         DescriptorValue::Float(val)
@@ -155,12 +159,12 @@ mod tests {
 
     fn calc_float(desc: &dyn Descriptor, smiles: &str) -> f32 {
         let mut mol = parse_smiles(smiles).expect("Invalid SMILES");
-        desc.calculate(&mut mol).as_float()
+        desc.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()).as_float()
     }
 
     fn calc_int(desc: &dyn Descriptor, smiles: &str) -> u32 {
         let mut mol = parse_smiles(smiles).expect("Invalid SMILES");
-        desc.calculate(&mut mol).as_int()
+        desc.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()).as_int()
     }
 
     // Valence Electrons Tests

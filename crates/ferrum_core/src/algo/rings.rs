@@ -1,6 +1,6 @@
 use crate::mol::molecule::Molecule;
 use crate::types::AtomIdx;
-use std::collections::{BTreeSet, HashSet, VecDeque};
+use std::collections::{HashSet, VecDeque};
 
 /// Detects rings using SSSR (Smallest Set of Smallest Rings) algorithm.
 ///
@@ -34,6 +34,7 @@ use std::collections::{BTreeSet, HashSet, VecDeque};
 /// assert_eq!(rings[0].len(), 6);
 /// ```
 pub fn find_sssr(mol: &mut Molecule) -> Vec<Vec<AtomIdx>> {
+    mol.invalidate_cached_properties();
     if mol.num_atoms() == 0 {
         return Vec::new();
     }
@@ -84,6 +85,12 @@ pub fn find_minimum_cycle_basis_bonds(mol: &Molecule) -> Vec<Vec<usize>> {
         }
 
         let (component_atoms, component_bonds) = collect_component(mol, start, &mut visited);
+        // Cycle rank is E - V + C; for a connected component this is E - V + 1.
+        // If E < V there is no cycle in the component.
+        if component_bonds.len() < component_atoms.len() {
+            continue;
+        }
+
         basis.extend(minimum_cycle_basis_component(
             mol,
             &component_atoms,
@@ -92,6 +99,61 @@ pub fn find_minimum_cycle_basis_bonds(mol: &Molecule) -> Vec<Vec<usize>> {
     }
 
     basis
+}
+
+pub(crate) fn find_minimum_cycle_basis_bonds_cached(mol: &mut Molecule) -> Vec<Vec<usize>> {
+    if let Some(cached) = mol.cached_min_cycle_basis_bonds() {
+        return cached.clone();
+    }
+    let rings = find_minimum_cycle_basis_bonds(mol);
+    mol.store_min_cycle_basis_bonds(rings.clone());
+    rings
+}
+
+pub(crate) fn ensure_minimum_cycle_basis_bonds_cached(mol: &mut Molecule) {
+    if mol.cached_min_cycle_basis_bonds().is_none() {
+        let rings = find_minimum_cycle_basis_bonds(mol);
+        mol.store_min_cycle_basis_bonds(rings);
+    }
+}
+
+fn cycle_rank_count(mol: &Molecule) -> usize {
+    let n_atoms = mol.num_atoms();
+    if n_atoms == 0 {
+        return 0;
+    }
+
+    let mut visited = vec![false; n_atoms];
+    let mut components = 0usize;
+    let mut queue = VecDeque::new();
+
+    for start in 0..n_atoms {
+        if visited[start] {
+            continue;
+        }
+        components += 1;
+        visited[start] = true;
+        queue.push_back(start);
+
+        while let Some(atom_idx) = queue.pop_front() {
+            for &bond_idx in &mol.adjacency[atom_idx] {
+                let bond = &mol.bonds[bond_idx as usize];
+                let neighbor = if bond.source as usize == atom_idx {
+                    bond.target as usize
+                } else {
+                    bond.source as usize
+                };
+                if !visited[neighbor] {
+                    visited[neighbor] = true;
+                    queue.push_back(neighbor);
+                }
+            }
+        }
+    }
+
+    mol.num_bonds()
+        .saturating_add(components)
+        .saturating_sub(n_atoms)
 }
 
 /// Compute a symmetrized small-ring set as bond-index cycles.
@@ -106,25 +168,34 @@ pub fn find_symmetrized_sssr_bonds(mol: &Molecule) -> Vec<Vec<usize>> {
         return Vec::new();
     }
 
-    let mut cycles = BTreeSet::new();
+    let base_count = cycle_rank_count(mol);
+    if base_count == 0 {
+        return Vec::new();
+    }
+    if base_count == 1 {
+        return find_minimum_cycle_basis_bonds(mol);
+    }
+
+    let mut cycles = Vec::new();
+    let mut workspace = ShortestPathWorkspace::new(mol.num_atoms());
 
     for bond_idx in 0..mol.num_bonds() {
         let bond = &mol.bonds[bond_idx];
         let start = bond.source as usize;
         let end = bond.target as usize;
 
-        for mut path in shortest_paths_excluding_bond(mol, start, end, bond_idx) {
+        for mut path in shortest_paths_excluding_bond(mol, start, end, bond_idx, &mut workspace) {
             path.push(bond_idx);
             path.sort_unstable();
             path.dedup();
             if path.len() >= 3 {
-                cycles.insert(path);
+                cycles.push(path);
             }
         }
     }
 
-    let mut cycles: Vec<Vec<usize>> = cycles.into_iter().collect();
-    let base_count = find_minimum_cycle_basis_bonds(mol).len();
+    cycles.sort_unstable();
+    cycles.dedup();
 
     if cycles.len() == base_count + 1 {
         let max_len = cycles.iter().map(|cycle| cycle.len()).max().unwrap_or(0);
@@ -135,9 +206,7 @@ pub fn find_symmetrized_sssr_bonds(mol: &Molecule) -> Vec<Vec<usize>> {
             .collect();
 
         if max_cycles.len() == 2 {
-            let left: HashSet<_> = cycles[max_cycles[0]].iter().copied().collect();
-            let right: HashSet<_> = cycles[max_cycles[1]].iter().copied().collect();
-            let overlap = left.intersection(&right).count();
+            let overlap = sorted_overlap_count(&cycles[max_cycles[0]], &cycles[max_cycles[1]]);
             if overlap == 2 {
                 cycles.remove(max_cycles[1]);
             }
@@ -147,22 +216,71 @@ pub fn find_symmetrized_sssr_bonds(mol: &Molecule) -> Vec<Vec<usize>> {
     cycles
 }
 
+pub(crate) fn find_symmetrized_sssr_bonds_cached(mol: &mut Molecule) -> Vec<Vec<usize>> {
+    if let Some(cached) = mol.cached_symmetrized_sssr_bonds() {
+        return cached.clone();
+    }
+    let rings = find_symmetrized_sssr_bonds(mol);
+    mol.store_symmetrized_sssr_bonds(rings.clone());
+    rings
+}
+
+pub(crate) fn ensure_symmetrized_sssr_bonds_cached(mol: &mut Molecule) {
+    if mol.cached_symmetrized_sssr_bonds().is_none() {
+        let rings = find_symmetrized_sssr_bonds(mol);
+        mol.store_symmetrized_sssr_bonds(rings);
+    }
+}
+
+pub(crate) fn cached_symmetrized_sssr_bonds_ref(mol: &Molecule) -> Option<&[Vec<usize>]> {
+    mol.cached_symmetrized_sssr_bonds().map(|rings| rings.as_slice())
+}
+
+struct ShortestPathWorkspace {
+    dist: Vec<usize>,
+    predecessors: Vec<Vec<(usize, usize)>>,
+    queue: VecDeque<usize>,
+}
+
+impl ShortestPathWorkspace {
+    fn new(n_atoms: usize) -> Self {
+        Self {
+            dist: vec![usize::MAX; n_atoms],
+            predecessors: vec![Vec::new(); n_atoms],
+            queue: VecDeque::new(),
+        }
+    }
+
+    fn prepare(&mut self, n_atoms: usize, start: usize) {
+        if self.dist.len() != n_atoms {
+            self.dist.clear();
+            self.dist.resize(n_atoms, usize::MAX);
+            self.predecessors.clear();
+            self.predecessors.resize_with(n_atoms, Vec::new);
+        } else {
+            self.dist.fill(usize::MAX);
+            for preds in &mut self.predecessors {
+                preds.clear();
+            }
+        }
+        self.queue.clear();
+        self.dist[start] = 0;
+        self.queue.push_back(start);
+    }
+}
+
 fn shortest_paths_excluding_bond(
     mol: &Molecule,
     start: usize,
     target: usize,
     excluded_bond: usize,
+    workspace: &mut ShortestPathWorkspace,
 ) -> Vec<Vec<usize>> {
     let n_atoms = mol.num_atoms();
-    let mut dist = vec![usize::MAX; n_atoms];
-    let mut predecessors: Vec<Vec<(usize, usize)>> = vec![Vec::new(); n_atoms];
-    let mut queue = VecDeque::new();
+    workspace.prepare(n_atoms, start);
 
-    dist[start] = 0;
-    queue.push_back(start);
-
-    while let Some(atom_idx) = queue.pop_front() {
-        let next_dist = dist[atom_idx] + 1;
+    while let Some(atom_idx) = workspace.queue.pop_front() {
+        let next_dist = workspace.dist[atom_idx] + 1;
         for &bond_idx in &mol.adjacency[atom_idx] {
             let bidx = bond_idx as usize;
             if bidx == excluded_bond {
@@ -176,24 +294,42 @@ fn shortest_paths_excluding_bond(
                 bond.source as usize
             };
 
-            if dist[neighbor] == usize::MAX {
-                dist[neighbor] = next_dist;
-                predecessors[neighbor].push((atom_idx, bidx));
-                queue.push_back(neighbor);
-            } else if dist[neighbor] == next_dist {
-                predecessors[neighbor].push((atom_idx, bidx));
+            if workspace.dist[neighbor] == usize::MAX {
+                workspace.dist[neighbor] = next_dist;
+                workspace.predecessors[neighbor].push((atom_idx, bidx));
+                workspace.queue.push_back(neighbor);
+            } else if workspace.dist[neighbor] == next_dist {
+                workspace.predecessors[neighbor].push((atom_idx, bidx));
             }
         }
     }
 
-    if dist[target] == usize::MAX {
+    if workspace.dist[target] == usize::MAX {
         return Vec::new();
     }
 
     let mut out = Vec::new();
-    let mut path = Vec::with_capacity(dist[target]);
-    collect_shortest_bond_paths(target, start, &predecessors, &mut path, &mut out);
+    let mut path = Vec::with_capacity(workspace.dist[target]);
+    collect_shortest_bond_paths(target, start, &workspace.predecessors, &mut path, &mut out);
     out
+}
+
+fn sorted_overlap_count(left: &[usize], right: &[usize]) -> usize {
+    let mut i = 0usize;
+    let mut j = 0usize;
+    let mut overlap = 0usize;
+    while i < left.len() && j < right.len() {
+        match left[i].cmp(&right[j]) {
+            std::cmp::Ordering::Less => i += 1,
+            std::cmp::Ordering::Greater => j += 1,
+            std::cmp::Ordering::Equal => {
+                overlap += 1;
+                i += 1;
+                j += 1;
+            }
+        }
+    }
+    overlap
 }
 
 fn collect_shortest_bond_paths(
@@ -223,18 +359,25 @@ fn collect_component(
     visited: &mut [bool],
 ) -> (Vec<usize>, Vec<usize>) {
     let mut atoms = Vec::new();
-    let mut bonds = HashSet::new();
-    let mut queue = VecDeque::new();
+    let mut bonds = Vec::new();
+    let mut bond_seen = vec![false; mol.num_bonds()];
+    let mut queue = Vec::new();
+    let mut head = 0usize;
 
     visited[start] = true;
-    queue.push_back(start);
+    queue.push(start);
 
-    while let Some(atom_idx) = queue.pop_front() {
+    while head < queue.len() {
+        let atom_idx = queue[head];
+        head += 1;
         atoms.push(atom_idx);
 
         for &bond_idx in &mol.adjacency[atom_idx] {
             let bidx = bond_idx as usize;
-            bonds.insert(bidx);
+            if !bond_seen[bidx] {
+                bond_seen[bidx] = true;
+                bonds.push(bidx);
+            }
 
             let bond = &mol.bonds[bidx];
             let neighbor = if bond.source as usize == atom_idx {
@@ -245,12 +388,12 @@ fn collect_component(
 
             if !visited[neighbor] {
                 visited[neighbor] = true;
-                queue.push_back(neighbor);
+                queue.push(neighbor);
             }
         }
     }
 
-    (atoms, bonds.into_iter().collect())
+    (atoms, bonds)
 }
 
 fn minimum_cycle_basis_component(
@@ -262,56 +405,88 @@ fn minimum_cycle_basis_component(
         return Vec::new();
     }
 
-    let tree_edges = spanning_tree_edges(mol, component_atoms);
-    let mut orth_sets: Vec<HashSet<usize>> = component_bonds
-        .iter()
-        .copied()
-        .filter(|bond_idx| !tree_edges.contains(bond_idx))
-        .map(|bond_idx| HashSet::from([bond_idx]))
-        .collect();
-
-    let mut basis = Vec::new();
-    while let Some(base) = orth_sets.pop() {
-        let cycle = minimum_orthogonal_cycle(mol, component_atoms, component_bonds, &base);
-        if cycle.is_empty() {
-            continue;
-        }
-        basis.push(cycle.clone());
-
-        orth_sets = orth_sets
-            .into_iter()
-            .map(|orth| {
-                let parity = cycle
-                    .iter()
-                    .filter(|bond_idx| orth.contains(bond_idx))
-                    .count()
-                    % 2;
-                if parity == 1 {
-                    symmetric_difference(&orth, &base)
-                } else {
-                    orth
-                }
-            })
-            .collect();
-    }
-
-    basis
-}
-
-fn spanning_tree_edges(mol: &Molecule, component_atoms: &[usize]) -> HashSet<usize> {
-    let mut tree_edges = HashSet::new();
     let mut in_component = vec![false; mol.num_atoms()];
     for &atom_idx in component_atoms {
         in_component[atom_idx] = true;
     }
 
+    let mut bond_pos = vec![usize::MAX; mol.num_bonds()];
+    for (local_idx, &bond_idx) in component_bonds.iter().enumerate() {
+        bond_pos[bond_idx] = local_idx;
+    }
+
+    let tree_edges = spanning_tree_edge_flags(
+        mol,
+        component_atoms,
+        &in_component,
+        &bond_pos,
+        component_bonds.len(),
+    );
+    let mut orth_sets: Vec<Vec<u8>> = component_bonds
+        .iter()
+        .enumerate()
+        .filter_map(|(local_idx, _)| {
+            if tree_edges[local_idx] != 0 {
+                return None;
+            }
+            let mut orth = vec![0u8; component_bonds.len()];
+            orth[local_idx] = 1;
+            Some(orth)
+        })
+        .collect();
+
+    let mut basis = Vec::new();
+    let mut cycle_mask = vec![0u8; component_bonds.len()];
+    while let Some(base) = orth_sets.pop() {
+        let cycle = minimum_orthogonal_cycle(mol, component_atoms, &in_component, &bond_pos, &base);
+        if cycle.is_empty() {
+            continue;
+        }
+
+        cycle_mask.fill(0);
+        for &bond_idx in &cycle {
+            let local_idx = bond_pos[bond_idx];
+            if local_idx != usize::MAX {
+                cycle_mask[local_idx] ^= 1;
+            }
+        }
+
+        for orth in &mut orth_sets {
+            let mut parity = 0u8;
+            for idx in 0..orth.len() {
+                parity ^= cycle_mask[idx] & orth[idx];
+            }
+            if parity == 1 {
+                for idx in 0..orth.len() {
+                    orth[idx] ^= base[idx];
+                }
+            }
+        }
+
+        basis.push(cycle);
+    }
+
+    basis
+}
+
+fn spanning_tree_edge_flags(
+    mol: &Molecule,
+    component_atoms: &[usize],
+    in_component: &[bool],
+    bond_pos: &[usize],
+    component_bond_count: usize,
+) -> Vec<u8> {
+    let mut tree_edges = vec![0u8; component_bond_count];
     let start = component_atoms[0];
     let mut visited = vec![false; mol.num_atoms()];
-    let mut queue = VecDeque::new();
+    let mut queue = Vec::new();
+    let mut head = 0usize;
     visited[start] = true;
-    queue.push_back(start);
+    queue.push(start);
 
-    while let Some(atom_idx) = queue.pop_front() {
+    while head < queue.len() {
+        let atom_idx = queue[head];
+        head += 1;
         for &bond_idx in &mol.adjacency[atom_idx] {
             let bidx = bond_idx as usize;
             let bond = &mol.bonds[bidx];
@@ -326,8 +501,11 @@ fn spanning_tree_edges(mol: &Molecule, component_atoms: &[usize]) -> HashSet<usi
             }
 
             visited[neighbor] = true;
-            tree_edges.insert(bidx);
-            queue.push_back(neighbor);
+            let local_idx = bond_pos[bidx];
+            if local_idx != usize::MAX {
+                tree_edges[local_idx] = 1;
+            }
+            queue.push(neighbor);
         }
     }
 
@@ -337,44 +515,45 @@ fn spanning_tree_edges(mol: &Molecule, component_atoms: &[usize]) -> HashSet<usi
 fn minimum_orthogonal_cycle(
     mol: &Molecule,
     component_atoms: &[usize],
-    component_bonds: &[usize],
-    orth: &HashSet<usize>,
+    in_component: &[bool],
+    bond_pos: &[usize],
+    orth: &[u8],
 ) -> Vec<usize> {
-    let mut in_component = vec![false; mol.num_atoms()];
-    for &atom_idx in component_atoms {
-        in_component[atom_idx] = true;
-    }
-
-    let mut in_bonds = vec![false; mol.num_bonds()];
-    for &bond_idx in component_bonds {
-        in_bonds[bond_idx] = true;
-    }
-
     let mut best_path = None;
     let mut best_len = usize::MAX;
     let lifted_nodes = mol.num_atoms() * 2;
+    let mut prev_node = vec![usize::MAX; lifted_nodes];
+    let mut prev_bond = vec![usize::MAX; lifted_nodes];
+    let mut dist = vec![usize::MAX; lifted_nodes];
+    let mut queue = Vec::new();
 
     for &start in component_atoms {
         let source = start * 2;
         let target = source + 1;
-        let mut prev = vec![usize::MAX; lifted_nodes];
-        let mut dist = vec![usize::MAX; lifted_nodes];
-        let mut queue = VecDeque::new();
+        prev_node.fill(usize::MAX);
+        prev_bond.fill(usize::MAX);
+        dist.fill(usize::MAX);
+        queue.clear();
+        let mut head = 0usize;
 
         dist[source] = 0;
-        queue.push_back(source);
+        queue.push(source);
 
-        while let Some(node) = queue.pop_front() {
+        while head < queue.len() {
+            let node = queue[head];
+            head += 1;
             if node == target {
                 break;
             }
 
             let atom_idx = node / 2;
             let layer = node % 2;
+            let next_dist = dist[node] + 1;
 
             for &bond_idx in &mol.adjacency[atom_idx] {
                 let bidx = bond_idx as usize;
-                if !in_bonds[bidx] {
+                let local_idx = bond_pos[bidx];
+                if local_idx == usize::MAX {
                     continue;
                 }
 
@@ -389,7 +568,7 @@ fn minimum_orthogonal_cycle(
                     continue;
                 }
 
-                let next_layer = if orth.contains(&bidx) {
+                let next_layer = if orth[local_idx] != 0 {
                     1 - layer
                 } else {
                     layer
@@ -397,9 +576,10 @@ fn minimum_orthogonal_cycle(
                 let next = neighbor * 2 + next_layer;
 
                 if dist[next] == usize::MAX {
-                    dist[next] = dist[node] + 1;
-                    prev[next] = node;
-                    queue.push_back(next);
+                    dist[next] = next_dist;
+                    prev_node[next] = node;
+                    prev_bond[next] = bidx;
+                    queue.push(next);
                 }
             }
         }
@@ -408,18 +588,17 @@ fn minimum_orthogonal_cycle(
             continue;
         }
 
-        let mut path = Vec::new();
+        let mut path = Vec::with_capacity(dist[target]);
         let mut current = target;
-        path.push(current);
         while current != source {
-            current = prev[current];
-            if current == usize::MAX {
+            let bond_idx = prev_bond[current];
+            if bond_idx == usize::MAX {
                 path.clear();
                 break;
             }
-            path.push(current);
+            path.push(bond_idx);
+            current = prev_node[current];
         }
-        path.reverse();
 
         if !path.is_empty() {
             best_len = dist[target];
@@ -431,42 +610,26 @@ fn minimum_orthogonal_cycle(
         return Vec::new();
     };
 
-    let atom_path: Vec<usize> = path.into_iter().map(|node| node / 2).collect();
-    let edge_path: Vec<usize> = atom_path
-        .windows(2)
-        .filter_map(|pair| find_bond_between(mol, pair[0] as AtomIdx, pair[1] as AtomIdx))
-        .collect();
+    let edge_path = path;
 
-    let mut parity = HashSet::new();
+    let mut parity = vec![0u8; orth.len()];
     for &bond_idx in &edge_path {
-        if !parity.insert(bond_idx) {
-            parity.remove(&bond_idx);
+        let local_idx = bond_pos[bond_idx];
+        if local_idx != usize::MAX {
+            parity[local_idx] ^= 1;
         }
     }
 
     let mut cycle = Vec::new();
     for &bond_idx in &edge_path {
-        if parity.remove(&bond_idx) {
+        let local_idx = bond_pos[bond_idx];
+        if local_idx != usize::MAX && parity[local_idx] == 1 {
             cycle.push(bond_idx);
+            parity[local_idx] = 0;
         }
     }
 
     cycle
-}
-
-fn symmetric_difference(left: &HashSet<usize>, right: &HashSet<usize>) -> HashSet<usize> {
-    let mut out = HashSet::new();
-    for &item in left {
-        if !right.contains(&item) {
-            out.insert(item);
-        }
-    }
-    for &item in right {
-        if !left.contains(&item) {
-            out.insert(item);
-        }
-    }
-    out
 }
 
 /// Detect rings in a single connected component using cycle detection.
@@ -510,16 +673,17 @@ fn detect_rings_in_component(
 
     // Collect all cycles first (to avoid borrowing issues)
     let mut all_cycles = Vec::new();
+    let mut seen_cycle_keys: HashSet<Vec<AtomIdx>> = HashSet::new();
+    let mut path_start = Vec::new();
+    let mut path_end = Vec::new();
+    let mut membership = vec![false; n_atoms];
 
     for atom_idx in 0..n_atoms {
         if !in_tree[atom_idx] {
             continue;
         }
 
-        // Get adjacency list for this atom (copy to avoid borrow issues)
-        let neighbors: Vec<_> = mol.adjacency[atom_idx].iter().copied().collect();
-
-        for bond_idx in neighbors {
+        for &bond_idx in &mol.adjacency[atom_idx] {
             let bond = &mol.bonds[bond_idx as usize];
             let neighbor = if bond.source == atom_idx as AtomIdx {
                 bond.target
@@ -537,38 +701,36 @@ fn detect_rings_in_component(
                 && parent[neighbor as usize] != Some(atom_idx as AtomIdx)
             {
                 // Found a cycle - trace back from both endpoints to common ancestor
-                let cycle = find_cycle_path(atom_idx as AtomIdx, neighbor, &parent);
+                let cycle = find_cycle_path_reuse(
+                    atom_idx as AtomIdx,
+                    neighbor,
+                    &parent,
+                    &mut path_start,
+                    &mut path_end,
+                    &mut membership,
+                );
                 if !cycle.is_empty() {
-                    all_cycles.push(cycle);
+                    let mut key = cycle.clone();
+                    key.sort_unstable();
+                    key.dedup();
+                    if seen_cycle_keys.insert(key) {
+                        all_cycles.push(cycle);
+                    }
                 }
             }
         }
     }
 
-    // Deduplicate cycles
-    let mut unique_cycles: Vec<Vec<AtomIdx>> = Vec::new();
-    for cycle in all_cycles {
-        let mut is_dup = false;
-        for existing in &unique_cycles {
-            if rings_are_same(&cycle, existing) {
-                is_dup = true;
-                break;
-            }
-        }
-        if !is_dup {
-            unique_cycles.push(cycle);
-        }
-    }
-
     // Now mark all cycles
-    for cycle in &unique_cycles {
+    for cycle in &all_cycles {
         mark_cycle_as_ring(mol, cycle);
     }
 
-    unique_cycles
+    all_cycles
 }
 
 /// Check if two rings contain the same atoms
+#[allow(dead_code)]
 fn rings_are_same(ring1: &[AtomIdx], ring2: &[AtomIdx]) -> bool {
     if ring1.len() != ring2.len() {
         return false;
@@ -583,16 +745,40 @@ fn rings_are_same(ring1: &[AtomIdx], ring2: &[AtomIdx]) -> bool {
 /// # Thread Safety
 /// Read-only function, safe to call concurrently on different molecules.
 fn find_cycle_path(start: AtomIdx, end: AtomIdx, parent: &[Option<AtomIdx>]) -> Vec<AtomIdx> {
-    // Trace paths from both endpoints to root
     let mut path_start = Vec::new();
     let mut path_end = Vec::new();
+    let mut membership = vec![false; parent.len()];
+    find_cycle_path_reuse(
+        start,
+        end,
+        parent,
+        &mut path_start,
+        &mut path_end,
+        &mut membership,
+    )
+}
+
+fn find_cycle_path_reuse(
+    start: AtomIdx,
+    end: AtomIdx,
+    parent: &[Option<AtomIdx>],
+    path_start: &mut Vec<AtomIdx>,
+    path_end: &mut Vec<AtomIdx>,
+    membership: &mut [bool],
+) -> Vec<AtomIdx> {
+    // Trace paths from both endpoints to root
+    path_start.clear();
+    path_end.clear();
+    membership.fill(false);
 
     let mut current = start;
     while let Some(p) = parent[current as usize] {
         path_start.push(current);
+        membership[current as usize] = true;
         current = p;
     }
     path_start.push(current); // Add root
+    membership[current as usize] = true;
 
     current = end;
     while let Some(p) = parent[current as usize] {
@@ -602,15 +788,17 @@ fn find_cycle_path(start: AtomIdx, end: AtomIdx, parent: &[Option<AtomIdx>]) -> 
     path_end.push(current); // Add root
 
     // Find common ancestor
-    let set_start: HashSet<_> = path_start.iter().copied().collect();
-    let common_ancestor = path_end.iter().find(|&&atom| set_start.contains(&atom));
+    let common_ancestor = path_end
+        .iter()
+        .copied()
+        .find(|&atom| membership[atom as usize]);
 
-    if let Some(&ancestor) = common_ancestor {
+    if let Some(ancestor) = common_ancestor {
         // Build cycle: start -> ancestor -> end -> start
         let mut cycle = Vec::new();
 
         // Path from start to ancestor
-        for &atom in &path_start {
+        for &atom in path_start.iter() {
             cycle.push(atom);
             if atom == ancestor {
                 break;
@@ -619,7 +807,7 @@ fn find_cycle_path(start: AtomIdx, end: AtomIdx, parent: &[Option<AtomIdx>]) -> 
 
         // Path from ancestor to end (reversed)
         let mut end_to_ancestor = Vec::new();
-        for &atom in &path_end {
+        for &atom in path_end.iter() {
             if atom == ancestor {
                 break;
             }

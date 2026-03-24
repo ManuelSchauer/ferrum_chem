@@ -101,11 +101,7 @@ pub fn reorder_molecule(mol: Molecule, new_order: &[usize]) -> Molecule {
         adj[b.target as usize].push(bi as u16);
     }
 
-    Molecule {
-        atoms: new_atoms,
-        bonds: new_bonds,
-        adjacency: adj,
-    }
+    Molecule::from_parts(new_atoms, new_bonds, adj)
 }
 
 #[cfg(test)]

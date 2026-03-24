@@ -16,7 +16,8 @@ use crate::mol::molecule::Molecule;
 use std::collections::VecDeque;
 
 /// Compute the distance matrix using BFS from each atom
-fn compute_distance_matrix(mol: &Molecule) -> Vec<u32> {
+#[allow(dead_code)]
+fn _compute_distance_matrix_unused(mol: &Molecule) -> Vec<u32> {
     let n = mol.num_atoms();
     let mut dist = vec![u32::MAX; n * n];
 
@@ -56,7 +57,7 @@ fn compute_distance_matrix(mol: &Molecule) -> Vec<u32> {
 /// - Larger molecules have higher G values
 /// - Heavier atoms contribute more to G
 /// - More compact structures have higher G (shorter distances)
-pub fn calculate(mol: &Molecule) -> f64 {
+pub fn calculate(mol: &mut Molecule, ctx: &mut crate::desc::context::CalculationContext) -> f64 {
     let n = mol.num_atoms();
 
     if n <= 1 {
@@ -64,7 +65,7 @@ pub fn calculate(mol: &Molecule) -> f64 {
     }
 
     // Compute distance matrix
-    let dist = compute_distance_matrix(mol);
+    let dist = crate::algo::paths::compute_unweighted_distance_matrix_cached(mol, ctx);
 
     // Calculate gravitational index
     let mut g = 0.0;
@@ -95,23 +96,23 @@ mod tests {
 
     #[test]
     fn test_gravitational_methane() {
-        let mol = parse("C");
-        let g = calculate(&mol);
+        let mut mol = parse("C");
+        let g = calculate(&mut mol, &mut crate::desc::context::CalculationContext::new());
         assert_eq!(g, 0.0); // Single atom
     }
 
     #[test]
     fn test_gravitational_ethane() {
-        let mol = parse("CC");
-        let g = calculate(&mol);
+        let mut mol = parse("CC");
+        let g = calculate(&mut mol, &mut crate::desc::context::CalculationContext::new());
         // Two carbons at distance 1: (12*12)/1² = 144
         assert!((g - 144.0).abs() < 1.0);
     }
 
     #[test]
     fn test_gravitational_propane() {
-        let mol = parse("CCC");
-        let g = calculate(&mol);
+        let mut mol = parse("CCC");
+        let g = calculate(&mut mol, &mut crate::desc::context::CalculationContext::new());
         // C1-C2: d=1, C2-C3: d=1, C1-C3: d=2
         // G = 12*12/1 + 12*12/1 + 12*12/4 = 144 + 144 + 36 = 324
         assert!((g - 324.0).abs() < 1.0);
@@ -119,13 +120,13 @@ mod tests {
 
     #[test]
     fn test_gravitational_size_ordering() {
-        let ethane = parse("CC");
-        let propane = parse("CCC");
-        let butane = parse("CCCC");
+        let mut ethane = parse("CC");
+        let mut propane = parse("CCC");
+        let mut butane = parse("CCCC");
 
-        let g_eth = calculate(&ethane);
-        let g_prop = calculate(&propane);
-        let g_but = calculate(&butane);
+        let g_eth = calculate(&mut ethane, &mut crate::desc::context::CalculationContext::new());
+        let g_prop = calculate(&mut propane, &mut crate::desc::context::CalculationContext::new());
+        let g_but = calculate(&mut butane, &mut crate::desc::context::CalculationContext::new());
 
         // Larger molecules should have higher G
         assert!(g_prop > g_eth);
@@ -134,11 +135,11 @@ mod tests {
 
     #[test]
     fn test_gravitational_heteroatoms() {
-        let ethane = parse("CC");
-        let ethanol = parse("CCO");
+        let mut ethane = parse("CC");
+        let mut ethanol = parse("CCO");
 
-        let g_eth = calculate(&ethane);
-        let g_etoh = calculate(&ethanol);
+        let g_eth = calculate(&mut ethane, &mut crate::desc::context::CalculationContext::new());
+        let g_etoh = calculate(&mut ethanol, &mut crate::desc::context::CalculationContext::new());
 
         // Oxygen is heavier than carbon, but slightly
         // The difference depends on the structure
@@ -147,19 +148,19 @@ mod tests {
 
     #[test]
     fn test_gravitational_benzene() {
-        let mol = parse("c1ccccc1");
-        let g = calculate(&mol);
+        let mut mol = parse("c1ccccc1");
+        let g = calculate(&mut mol, &mut crate::desc::context::CalculationContext::new());
         // Cyclic structure should have reasonable G value
         assert!(g > 500.0); // 6 carbons with various distances
     }
 
     #[test]
     fn test_gravitational_branched_vs_linear() {
-        let butane = parse("CCCC");
-        let isobutane = parse("CC(C)C");
+        let mut butane = parse("CCCC");
+        let mut isobutane = parse("CC(C)C");
 
-        let g_but = calculate(&butane);
-        let g_iso = calculate(&isobutane);
+        let g_but = calculate(&mut butane, &mut crate::desc::context::CalculationContext::new());
+        let g_iso = calculate(&mut isobutane, &mut crate::desc::context::CalculationContext::new());
 
         // Linear should have higher G (longer max distance)
         // Actually, branched has shorter average distances, so higher G

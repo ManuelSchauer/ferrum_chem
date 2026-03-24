@@ -31,7 +31,7 @@ fn main() {
     let start = std::time::Instant::now();
     let weights: Vec<f32> = molecules
         .par_iter_mut()
-        .map(|mol| descriptor.calculate(mol).as_float())
+        .map(|mol| descriptor.calculate(mol, &mut ferrum_core::desc::context::CalculationContext::new()).as_float())
         .collect();
     let duration = start.elapsed();
 
@@ -70,7 +70,7 @@ fn main() {
         .par_iter()
         .map(|s| {
             let mut mol = parse_smiles(s).unwrap();
-            let mw = descriptor.calculate(&mut mol).as_float();
+            let mw = descriptor.calculate(&mut mol, &mut ferrum_core::desc::context::CalculationContext::new()).as_float();
             (s.to_string(), mol.num_atoms(), mw)
         })
         .collect();

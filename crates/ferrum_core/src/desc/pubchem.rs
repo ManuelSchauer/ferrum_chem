@@ -15,8 +15,8 @@
 //! Reference: ftp://ftp.ncbi.nlm.nih.gov/pubchem/specifications/pubchem_fingerprints.txt
 
 use super::typed::{Descriptor, DescriptorValue};
-use crate::algo::iso::count_matches;
-use crate::io::smarts::{QueryGraph, parse_smarts};
+use crate::algo::iso::has_at_least_matches;
+use crate::io::smarts::{parse_smarts, QueryGraph};
 use crate::mol::molecule::Molecule;
 use bitvec::prelude::*;
 use once_cell::sync::Lazy;
@@ -59,7 +59,7 @@ static PARSED_KEYS: Lazy<Vec<Option<ParsedPubChemKey>>> = Lazy::new(|| {
 ///
 /// let mut mol = parse_smiles("c1ccccc1").unwrap();
 /// let descriptor = PubChem881;
-/// let fp = descriptor.calculate(&mut mol);
+/// let fp = descriptor.calculate(&mut mol, &mut ferrum_core::desc::context::CalculationContext::new());
 ///
 /// let bits = fp.as_binary();
 /// assert_eq!(bits.len(), 881);
@@ -72,13 +72,12 @@ impl Descriptor for PubChem881 {
         "PubChem881"
     }
 
-    fn calculate(&self, mol: &mut Molecule) -> DescriptorValue {
+    fn calculate(&self, mol: &mut Molecule, ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
         let mut bits = bitvec![u8, Lsb0; 0; 881];
 
         for (i, key) in PARSED_KEYS.iter().enumerate() {
             if let Some(pk) = key {
-                let cnt = count_matches(mol, &pk.query);
-                if cnt >= pk.threshold {
+                if has_at_least_matches(mol, &pk.query, pk.threshold) {
                     bits.set(i, true);
                 }
             }
@@ -1205,13 +1204,13 @@ mod tests {
 
     fn calc_pubchem(smiles: &str) -> BitVec<u8, Lsb0> {
         let mut mol = parse_smiles(smiles).expect("valid SMILES");
-        PubChem881.calculate(&mut mol).as_binary().clone()
+        PubChem881.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()).as_binary().clone()
     }
 
     #[test]
     fn test_pubchem_size() {
         let mut mol = parse_smiles("C").unwrap();
-        let fp = PubChem881.calculate(&mut mol);
+        let fp = PubChem881.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new());
         assert_eq!(fp.len(), 881);
     }
 

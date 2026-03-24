@@ -6,6 +6,10 @@ pub fn compute_charges(mol: &Molecule) -> Vec<f64> {
     crate::algo::electronic::compute_gasteiger_charges(mol)
 }
 
+fn compute_charges_cached(mol: &mut Molecule) -> Vec<f64> {
+    crate::algo::electronic::compute_gasteiger_charges_cached(mol)
+}
+
 /// Maximum partial charge across all atoms.
 pub struct MaxPartialCharge;
 
@@ -14,8 +18,8 @@ impl Descriptor for MaxPartialCharge {
         "MaxPartialCharge"
     }
 
-    fn calculate(&self, mol: &mut Molecule) -> DescriptorValue {
-        let charges = compute_charges(mol);
+    fn calculate(&self, mol: &mut Molecule, ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
+        let charges = compute_charges_cached(mol);
         let max = charges.iter().copied().fold(f64::NEG_INFINITY, f64::max);
         DescriptorValue::Float(if max.is_finite() { max as f32 } else { 0.0 })
     }
@@ -29,8 +33,8 @@ impl Descriptor for MinPartialCharge {
         "MinPartialCharge"
     }
 
-    fn calculate(&self, mol: &mut Molecule) -> DescriptorValue {
-        let charges = compute_charges(mol);
+    fn calculate(&self, mol: &mut Molecule, ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
+        let charges = compute_charges_cached(mol);
         let min = charges.iter().copied().fold(f64::INFINITY, f64::min);
         DescriptorValue::Float(if min.is_finite() { min as f32 } else { 0.0 })
     }
@@ -44,8 +48,8 @@ impl Descriptor for MaxAbsPartialCharge {
         "MaxAbsPartialCharge"
     }
 
-    fn calculate(&self, mol: &mut Molecule) -> DescriptorValue {
-        let charges = compute_charges(mol);
+    fn calculate(&self, mol: &mut Molecule, ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
+        let charges = compute_charges_cached(mol);
         let max_abs = charges
             .iter()
             .map(|c| c.abs())
@@ -66,8 +70,8 @@ impl Descriptor for MinAbsPartialCharge {
         "MinAbsPartialCharge"
     }
 
-    fn calculate(&self, mol: &mut Molecule) -> DescriptorValue {
-        let charges = compute_charges(mol);
+    fn calculate(&self, mol: &mut Molecule, ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
+        let charges = compute_charges_cached(mol);
         let min_abs = charges
             .iter()
             .map(|c| c.abs())
@@ -88,8 +92,8 @@ impl Descriptor for GasteigerCharges {
         "GasteigerCharges"
     }
 
-    fn calculate(&self, mol: &mut Molecule) -> DescriptorValue {
-        let charges = compute_charges(mol);
+    fn calculate(&self, mol: &mut Molecule, ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
+        let charges = compute_charges_cached(mol);
         DescriptorValue::FloatVec(charges.iter().map(|&c| c as f32).collect())
     }
 }
@@ -113,7 +117,7 @@ mod tests {
     }
 
     fn calc_float(desc: &dyn Descriptor, mol: &mut Molecule) -> f32 {
-        match desc.calculate(mol) {
+        match desc.calculate(mol, &mut crate::desc::context::CalculationContext::new()) {
             DescriptorValue::Float(v) => v,
             other => panic!("expected Float, got {:?}", other),
         }
@@ -166,7 +170,7 @@ mod tests {
     #[test]
     fn test_charges_vector_length() {
         let mut mol = parse("CCO");
-        match GasteigerCharges.calculate(&mut mol) {
+        match GasteigerCharges.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()) {
             DescriptorValue::FloatVec(v) => {
                 assert_eq!(
                     v.len(),
@@ -217,23 +221,23 @@ mod tests {
     fn test_empty_molecule() {
         let mut mol = Molecule::default();
         assert_eq!(
-            MaxPartialCharge.calculate(&mut mol),
+            MaxPartialCharge.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()),
             DescriptorValue::Float(0.0)
         );
         assert_eq!(
-            MinPartialCharge.calculate(&mut mol),
+            MinPartialCharge.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()),
             DescriptorValue::Float(0.0)
         );
         assert_eq!(
-            MaxAbsPartialCharge.calculate(&mut mol),
+            MaxAbsPartialCharge.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()),
             DescriptorValue::Float(0.0)
         );
         assert_eq!(
-            MinAbsPartialCharge.calculate(&mut mol),
+            MinAbsPartialCharge.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()),
             DescriptorValue::Float(0.0)
         );
         assert_eq!(
-            GasteigerCharges.calculate(&mut mol),
+            GasteigerCharges.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()),
             DescriptorValue::FloatVec(vec![])
         );
     }

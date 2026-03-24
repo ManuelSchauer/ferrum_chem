@@ -14,7 +14,8 @@ use crate::mol::molecule::Molecule;
 use std::collections::VecDeque;
 
 /// Compute the distance matrix using BFS from each atom
-fn compute_distance_matrix(mol: &Molecule) -> Vec<u32> {
+#[allow(dead_code)]
+fn _compute_distance_matrix_unused(mol: &Molecule) -> Vec<u32> {
     let n = mol.num_atoms();
     let mut dist = vec![u32::MAX; n * n];
 
@@ -59,7 +60,7 @@ fn compute_distance_matrix(mol: &Molecule) -> Vec<u32> {
 /// - Linear molecules: high diameter, Petitjean → 1
 /// - Compact molecules: low diameter, Petitjean → 0
 /// - Cyclic molecules: diameter depends on size
-pub fn calculate(mol: &Molecule) -> (u32, u32, f64) {
+pub fn calculate(mol: &mut Molecule, ctx: &mut crate::desc::context::CalculationContext) -> (u32, u32, f64) {
     let n = mol.num_atoms();
 
     if n == 0 {
@@ -71,7 +72,7 @@ pub fn calculate(mol: &Molecule) -> (u32, u32, f64) {
     }
 
     // Compute distance matrix
-    let dist = compute_distance_matrix(mol);
+    let dist = crate::algo::paths::compute_unweighted_distance_matrix_cached(mol, ctx);
 
     // Calculate eccentricity for each atom
     let mut eccentricities = Vec::with_capacity(n);
@@ -113,8 +114,8 @@ impl Descriptor for PetitjeanIndex {
         "PetitjeanIndex"
     }
 
-    fn calculate(&self, mol: &mut Molecule) -> DescriptorValue {
-        let (r, d, p) = calculate(mol);
+    fn calculate(&self, mol: &mut Molecule, ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
+        let (r, d, p) = calculate(mol, ctx);
         DescriptorValue::FloatVec(vec![r as f32, d as f32, p as f32])
     }
 }
@@ -135,8 +136,8 @@ mod tests {
 
     #[test]
     fn test_petitjean_methane() {
-        let mol = parse("C");
-        let (r, d, p) = calculate(&mol);
+        let mut mol = parse("C");
+        let (r, d, p) = calculate(&mut mol, &mut crate::desc::context::CalculationContext::new());
         assert_eq!(r, 0);
         assert_eq!(d, 0);
         assert_eq!(p, 0.0);
@@ -144,8 +145,8 @@ mod tests {
 
     #[test]
     fn test_petitjean_ethane() {
-        let mol = parse("CC");
-        let (r, d, p) = calculate(&mol);
+        let mut mol = parse("CC");
+        let (r, d, p) = calculate(&mut mol, &mut crate::desc::context::CalculationContext::new());
         assert_eq!(r, 1); // Both atoms have eccentricity 1
         assert_eq!(d, 1);
         assert_eq!(p, 0.0); // Perfect symmetry
@@ -153,8 +154,8 @@ mod tests {
 
     #[test]
     fn test_petitjean_propane() {
-        let mol = parse("CCC");
-        let (r, d, p) = calculate(&mol);
+        let mut mol = parse("CCC");
+        let (r, d, p) = calculate(&mut mol, &mut crate::desc::context::CalculationContext::new());
         assert_eq!(r, 1); // Center atom has eccentricity 1
         assert_eq!(d, 2); // End atoms have eccentricity 2
         assert!((p - 0.5).abs() < 0.01); // (2-1)/2 = 0.5
@@ -162,11 +163,11 @@ mod tests {
 
     #[test]
     fn test_petitjean_linear_vs_branched() {
-        let linear = parse("CCCCC"); // Pentane
-        let branched = parse("CC(C)CC"); // Isopentane
+        let mut linear = parse("CCCCC"); // Pentane
+        let mut branched = parse("CC(C)CC"); // Isopentane
 
-        let (r_lin, d_lin, p_lin) = calculate(&linear);
-        let (r_bra, d_bra, p_bra) = calculate(&branched);
+        let (r_lin, d_lin, p_lin) = calculate(&mut linear, &mut crate::desc::context::CalculationContext::new());
+        let (r_bra, d_bra, p_bra) = calculate(&mut branched, &mut crate::desc::context::CalculationContext::new());
 
         // Linear should have higher diameter
         assert!(d_lin > d_bra);
@@ -177,8 +178,8 @@ mod tests {
 
     #[test]
     fn test_petitjean_benzene() {
-        let mol = parse("c1ccccc1");
-        let (r, d, p) = calculate(&mol);
+        let mut mol = parse("c1ccccc1");
+        let (r, d, p) = calculate(&mut mol, &mut crate::desc::context::CalculationContext::new());
 
         // Benzene is symmetric, all atoms have same eccentricity
         assert_eq!(r, d); // Radius = Diameter for symmetric rings
@@ -187,8 +188,8 @@ mod tests {
 
     #[test]
     fn test_petitjean_cyclohexane() {
-        let mol = parse("C1CCCCC1");
-        let (r, d, p) = calculate(&mol);
+        let mut mol = parse("C1CCCCC1");
+        let (r, d, p) = calculate(&mut mol, &mut crate::desc::context::CalculationContext::new());
 
         // Same as benzene structure-wise
         assert_eq!(r, d);
@@ -197,8 +198,8 @@ mod tests {
 
     #[test]
     fn test_petitjean_naphthalene() {
-        let mol = parse("c1ccc2ccccc2c1");
-        let (r, d, p) = calculate(&mol);
+        let mut mol = parse("c1ccc2ccccc2c1");
+        let (r, d, p) = calculate(&mut mol, &mut crate::desc::context::CalculationContext::new());
 
         // Fused rings, somewhat elongated
         assert!(d >= 4); // Distance from one end to the other
@@ -207,16 +208,16 @@ mod tests {
 
     #[test]
     fn test_petitjean_long_chain() {
-        let mol = parse("CCCCCCCCCC"); // Decane
-        let (r, d, p) = calculate(&mol);
+        let mut mol = parse("CCCCCCCCCC"); // Decane
+        let (r, d, p) = calculate(&mut mol, &mut crate::desc::context::CalculationContext::new());
 
         println!("Decane: radius={}, diameter={}, petitjean={}", r, d, p);
 
         // Long linear chain
         assert_eq!(d, 9); // 10 carbons, max distance 9
-        // For a chain of 10: center atoms at positions 4,5 have eccentricity 5
-        // End atoms have eccentricity 9
-        // So radius should be around 5, giving (9-5)/9 ≈ 0.44
+                          // For a chain of 10: center atoms at positions 4,5 have eccentricity 5
+                          // End atoms have eccentricity 9
+                          // So radius should be around 5, giving (9-5)/9 ≈ 0.44
         assert!(p > 0.4 && p < 0.6, "Petitjean = {}", p); // Moderately rod-like
     }
 }

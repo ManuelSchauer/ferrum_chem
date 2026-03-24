@@ -5,7 +5,9 @@
 //! - Aliphatic rings: non-aromatic
 //! - Aromatic rings: marked as aromatic
 
-use crate::algo::rings::find_symmetrized_sssr_bonds;
+use crate::algo::rings::{
+    cached_symmetrized_sssr_bonds_ref, ensure_symmetrized_sssr_bonds_cached,
+};
 use crate::desc::typed::{Descriptor, DescriptorValue};
 use crate::mol::molecule::Molecule;
 use crate::types::BondType;
@@ -29,7 +31,9 @@ fn ring_bonds_all_aromatic(mol: &Molecule, ring: &[usize]) -> bool {
 /// - Benzene: 0 saturated rings (aromatic double bonds)
 /// - Cyclohexene: 0 saturated rings (one double bond)
 pub fn num_saturated_rings(mol: &mut Molecule) -> u32 {
-    let rings = find_symmetrized_sssr_bonds(mol);
+    ensure_symmetrized_sssr_bonds_cached(mol);
+    let rings =
+        cached_symmetrized_sssr_bonds_ref(mol).expect("symmetrized SSSR cache initialized");
 
     rings
         .iter()
@@ -49,7 +53,9 @@ pub fn num_saturated_rings(mol: &mut Molecule) -> u32 {
 /// - Benzene: 0 aliphatic rings (aromatic)
 /// - Naphthalene: 0 aliphatic rings (both rings aromatic)
 pub fn num_aliphatic_rings(mol: &mut Molecule) -> u32 {
-    let rings = find_symmetrized_sssr_bonds(mol);
+    ensure_symmetrized_sssr_bonds_cached(mol);
+    let rings =
+        cached_symmetrized_sssr_bonds_ref(mol).expect("symmetrized SSSR cache initialized");
 
     rings
         .iter()
@@ -69,7 +75,9 @@ pub fn num_aliphatic_rings(mol: &mut Molecule) -> u32 {
 /// - Pyridine: 1 aromatic ring
 /// - Cyclohexane: 0 aromatic rings
 pub fn num_aromatic_rings(mol: &mut Molecule) -> u32 {
-    let rings = find_symmetrized_sssr_bonds(mol);
+    ensure_symmetrized_sssr_bonds_cached(mol);
+    let rings =
+        cached_symmetrized_sssr_bonds_ref(mol).expect("symmetrized SSSR cache initialized");
 
     rings
         .iter()
@@ -187,14 +195,16 @@ impl Descriptor for RingTypeCounts {
         "RingTypeCounts"
     }
 
-    fn calculate(&self, mol: &mut Molecule) -> DescriptorValue {
-        let rings = find_symmetrized_sssr_bonds(mol);
+    fn calculate(&self, mol: &mut Molecule, ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
+        ensure_symmetrized_sssr_bonds_cached(mol);
+        let rings =
+            cached_symmetrized_sssr_bonds_ref(mol).expect("symmetrized SSSR cache initialized");
 
         let mut saturated = 0u16;
         let mut aliphatic = 0u16;
         let mut aromatic = 0u16;
 
-        for ring in &rings {
+        for ring in rings {
             let is_aromatic = ring_bonds_all_aromatic(mol, ring);
 
             if is_aromatic {

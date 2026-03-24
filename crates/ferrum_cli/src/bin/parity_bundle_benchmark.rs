@@ -1,17 +1,7 @@
-use ferrum_core::desc::aromatic_ring_count::AromaticRingCount;
-use ferrum_core::desc::atom_count::{AromaticAtomCount, AtomCount, HeavyAtomCount};
-use ferrum_core::desc::balaban::BalabanIndex;
-use ferrum_core::desc::bond_count::{BondCount, RotatableBondCount};
-use ferrum_core::desc::extra_counts::{BertzCT, FractionCSP3, HallKierAlpha, NumAmideBonds};
-use ferrum_core::desc::formal_charge::FormalCharge;
-use ferrum_core::desc::hbond::{HBondAcceptor, HBondDonor};
-use ferrum_core::desc::logp::{LogP, MolarRefractivity};
-use ferrum_core::desc::molecular_weight::MolecularWeight;
-use ferrum_core::desc::qed::Qed;
-use ferrum_core::desc::simple_counts::HeteroatomCount;
-use ferrum_core::desc::tpsa::Tpsa;
-use ferrum_core::desc::typed::Descriptor;
-use ferrum_core::desc::vsa::{LabuteASA, PeoeVsa, SlogpVSA, SmrVSA};
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
+use ferrum_core::desc::batch::BatchDescriptor;
 use ferrum_core::io::smiles::parse_smiles;
 use std::env;
 use std::hint::black_box;
@@ -26,52 +16,51 @@ struct Case {
     smiles: &'static str,
 }
 
-fn scalar_descriptors() -> Vec<Box<dyn Descriptor>> {
+fn bundle_descriptors() -> Vec<BatchDescriptor> {
     vec![
-        Box::new(MolecularWeight),
-        Box::new(LogP),
-        Box::new(MolarRefractivity),
-        Box::new(Tpsa),
-        Box::new(HBondDonor),
-        Box::new(HBondAcceptor),
-        Box::new(RotatableBondCount),
-        Box::new(HeavyAtomCount),
-        Box::new(AtomCount),
-        Box::new(AromaticAtomCount),
-        Box::new(HeteroatomCount),
-        Box::new(AromaticRingCount),
-        Box::new(FormalCharge),
-        Box::new(FractionCSP3),
-        Box::new(BertzCT),
-        Box::new(LabuteASA),
-        Box::new(Qed),
-        Box::new(NumAmideBonds),
-        Box::new(HallKierAlpha),
-        Box::new(BalabanIndex),
-        Box::new(BondCount),
+        BatchDescriptor::MolecularWeight,
+        BatchDescriptor::LogP,
+        BatchDescriptor::MolarRefractivity,
+        BatchDescriptor::Tpsa,
+        BatchDescriptor::HBondDonor,
+        BatchDescriptor::HBondAcceptor,
+        BatchDescriptor::RotatableBondCount,
+        BatchDescriptor::HeavyAtomCount,
+        BatchDescriptor::AtomCount,
+        BatchDescriptor::AromaticAtomCount,
+        BatchDescriptor::HeteroatomCount,
+        BatchDescriptor::AromaticRingCount,
+        BatchDescriptor::FormalCharge,
+        BatchDescriptor::FractionCSP3,
+        BatchDescriptor::BertzCT,
+        BatchDescriptor::LabuteAsa,
+        BatchDescriptor::Qed,
+        BatchDescriptor::NumAmideBonds,
+        BatchDescriptor::HallKierAlpha,
+        BatchDescriptor::BalabanIndex,
+        BatchDescriptor::BondCount,
+        BatchDescriptor::SlogpVsa,
+        BatchDescriptor::SmrVsa,
+        BatchDescriptor::PeoeVsa,
     ]
 }
 
-fn bundle_output_len(smiles: &str, scalar: &[Box<dyn Descriptor>]) -> usize {
+fn bundle_output_len(smiles: &str, descriptors: &[BatchDescriptor]) -> usize {
     let mut mol = parse_smiles(smiles).expect("valid benchmark SMILES");
     let mut total = 0usize;
-    for desc in scalar {
-        total += desc.calculate(&mut mol).len();
+    let mut ctx = ferrum_core::desc::context::CalculationContext::new();
+    for &desc in descriptors {
+        total += desc.calculate(&mut mol, &mut ctx).len();
     }
-    total += SlogpVSA.calculate(&mut mol).len();
-    total += SmrVSA.calculate(&mut mol).len();
-    total += PeoeVsa.calculate(&mut mol).len();
     total
 }
 
-fn run_bundle(smiles: &str, scalar: &[Box<dyn Descriptor>]) {
+fn run_bundle(smiles: &str, descriptors: &[BatchDescriptor]) {
     let mut mol = parse_smiles(smiles).expect("valid benchmark SMILES");
-    for desc in scalar {
-        black_box(desc.calculate(&mut mol));
+    let mut ctx = ferrum_core::desc::context::CalculationContext::new();
+    for &desc in descriptors {
+        black_box(desc.calculate(&mut mol, &mut ctx));
     }
-    black_box(SlogpVSA.calculate(&mut mol));
-    black_box(SmrVSA.calculate(&mut mol));
-    black_box(PeoeVsa.calculate(&mut mol));
 }
 
 fn median(values: &mut [f64]) -> f64 {
@@ -111,24 +100,23 @@ fn main() {
         },
     ];
 
-    let scalar = scalar_descriptors();
+    let descriptors = bundle_descriptors();
     println!(
         "tool\tcase\tsmiles\theavy_atoms\titerations\toutputs\tmedian_seconds\tms_per_molecule\tmolecules_per_second"
     );
     for case in cases {
         let mol = parse_smiles(case.smiles).expect("valid benchmark SMILES");
         let heavy_atoms = mol.num_atoms();
-        let outputs = bundle_output_len(case.smiles, &scalar);
-
+        let outputs = bundle_output_len(case.smiles, &descriptors);
         for _ in 0..warmup {
-            run_bundle(case.smiles, &scalar);
+            run_bundle(case.smiles, &descriptors);
         }
 
         let mut timings = Vec::with_capacity(repeats);
         for _ in 0..repeats {
             let start = Instant::now();
             for _ in 0..iterations {
-                run_bundle(case.smiles, &scalar);
+                run_bundle(case.smiles, &descriptors);
             }
             timings.push(start.elapsed().as_secs_f64());
         }

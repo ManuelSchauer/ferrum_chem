@@ -33,7 +33,7 @@ impl Descriptor for KappaIndices {
         "KappaIndices"
     }
 
-    fn calculate(&self, mol: &mut Molecule) -> DescriptorValue {
+    fn calculate(&self, mol: &mut Molecule, ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
         let n = mol.num_atoms();
 
         if n == 0 {
@@ -104,7 +104,7 @@ mod tests {
 
     fn calc_kappa(smiles: &str) -> Vec<f32> {
         let mut mol = parse_smiles(smiles).expect("valid SMILES");
-        match KappaIndices.calculate(&mut mol) {
+        match KappaIndices.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()) {
             DescriptorValue::FloatVec(v) => v,
             other => panic!("expected FloatVec, got {:?}", other),
         }

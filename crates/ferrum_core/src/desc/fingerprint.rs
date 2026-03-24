@@ -260,7 +260,7 @@ fn fold_fingerprint(features: &[u64], num_bits: usize) -> BitVec<u8, Lsb0> {
 /// perceive_aromaticity(&mut mol);
 ///
 /// let descriptor = ECFP::ecfp4();
-/// let fp = descriptor.calculate(&mut mol);
+/// let fp = descriptor.calculate(&mut mol, &mut ferrum_core::desc::context::CalculationContext::new());
 ///
 /// let bits = fp.as_binary();
 /// assert_eq!(bits.len(), 2048);
@@ -320,7 +320,7 @@ impl Descriptor for ECFP {
         }
     }
 
-    fn calculate(&self, mol: &mut Molecule) -> DescriptorValue {
+    fn calculate(&self, mol: &mut Molecule, ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
         let features = morgan_features(mol, self.radius as u32);
         let bits = fold_fingerprint(&features, self.num_bits);
         DescriptorValue::Binary(bits)
@@ -344,7 +344,7 @@ impl Descriptor for ECFP {
 /// perceive_aromaticity(&mut mol);
 ///
 /// let descriptor = FCFP::fcfp4();
-/// let fp = descriptor.calculate(&mut mol);
+/// let fp = descriptor.calculate(&mut mol, &mut ferrum_core::desc::context::CalculationContext::new());
 ///
 /// let bits = fp.as_binary();
 /// assert_eq!(bits.len(), 2048);
@@ -400,7 +400,7 @@ impl Descriptor for FCFP {
         }
     }
 
-    fn calculate(&self, mol: &mut Molecule) -> DescriptorValue {
+    fn calculate(&self, mol: &mut Molecule, ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
         let features = fcfp_features(mol, self.radius as u32);
         let bits = fold_fingerprint(&features, self.num_bits);
         DescriptorValue::Binary(bits)
@@ -421,7 +421,7 @@ mod tests {
     fn calc_fp(smiles: &str, radius: u8, bits: usize) -> BitVec<u8, Lsb0> {
         let mut mol = parse_smiles(smiles).expect("valid SMILES");
         let desc = ECFP::new(radius, bits);
-        desc.calculate(&mut mol).as_binary().clone()
+        desc.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()).as_binary().clone()
     }
 
     fn count_bits(fp: &BitVec<u8, Lsb0>) -> usize {
@@ -447,7 +447,7 @@ mod tests {
     fn test_empty_molecule() {
         let mut mol = Molecule::new();
         let desc = Morgan::ecfp4();
-        let fp = desc.calculate(&mut mol).as_binary().clone();
+        let fp = desc.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()).as_binary().clone();
         assert_eq!(count_bits(&fp), 0);
     }
 
@@ -524,7 +524,7 @@ mod tests {
         let mut mol = parse_smiles("c1ccc(CC(=O)O)cc1").unwrap();
         for bits in [1024, 2048, 4096] {
             let desc = Morgan::new(2, bits);
-            let fp = desc.calculate(&mut mol).as_binary().clone();
+            let fp = desc.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()).as_binary().clone();
             assert_eq!(fp.len(), bits);
             assert!(count_bits(&fp) > 0);
         }
@@ -572,7 +572,7 @@ mod tests {
     fn calc_fcfp(smiles: &str, radius: u8, bits: usize) -> BitVec<u8, Lsb0> {
         let mut mol = parse_smiles(smiles).expect("valid SMILES");
         let desc = FCFP::new(radius, bits);
-        desc.calculate(&mut mol).as_binary().clone()
+        desc.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()).as_binary().clone()
     }
 
     #[test]
@@ -609,7 +609,7 @@ mod tests {
     fn test_fcfp_empty_molecule() {
         let mut mol = Molecule::new();
         let desc = FCFP::fcfp4();
-        let fp = desc.calculate(&mut mol).as_binary().clone();
+        let fp = desc.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()).as_binary().clone();
         assert_eq!(count_bits(&fp), 0);
     }
 

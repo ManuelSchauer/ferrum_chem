@@ -32,6 +32,7 @@ use crate::types::{AtomIdx, BondType};
 /// // Now bonds have explicit Single/Double types, but aromatic flags are set
 /// ```
 pub fn kekulize(mol: &mut Molecule) {
+    mol.invalidate_cached_properties();
     // Find all aromatic rings
     let rings = find_sssr(mol);
 

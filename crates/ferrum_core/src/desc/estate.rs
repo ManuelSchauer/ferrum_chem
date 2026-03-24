@@ -53,7 +53,7 @@ fn intrinsic_states(mol: &Molecule) -> Vec<f64> {
 
 /// Compute E-State values for all heavy atoms.
 /// Returns (e_states, atom_types) where atom_types[i] is the E-State atom type index.
-fn compute_estates(mol: &Molecule) -> Vec<f64> {
+fn compute_estates(mol: &mut Molecule, ctx: &mut crate::desc::context::CalculationContext) -> Vec<f64> {
     let n = mol.num_atoms();
     if n == 0 {
         return vec![];
@@ -85,7 +85,7 @@ fn compute_estates(mol: &Molecule) -> Vec<f64> {
         .collect();
 
     // Step 2: compute BFS distance matrix
-    let dist = compute_distance_matrix(mol);
+    let dist = crate::algo::paths::compute_unweighted_distance_matrix_cached(mol, ctx);
 
     // Step 3: compute perturbation ΔI for each atom
     let mut estates = intrinsic.clone();
@@ -120,7 +120,8 @@ fn principal_quantum_number(atomic_number: u8) -> u8 {
     }
 }
 
-fn compute_distance_matrix(mol: &Molecule) -> Vec<u32> {
+#[allow(dead_code)]
+fn _compute_distance_matrix_unused(mol: &Molecule) -> Vec<u32> {
     let n = mol.num_atoms();
     let mut distances = vec![u32::MAX; n * n];
 
@@ -319,15 +320,15 @@ mod tests {
 
     fn calc_estate(smiles: &str) -> Vec<f32> {
         let mut mol = parse_smiles(smiles).expect("valid SMILES");
-        match EStateIndices.calculate(&mut mol) {
+        match EStateIndices.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()) {
             DescriptorValue::FloatVec(v) => v,
             other => panic!("expected FloatVec, got {:?}", other),
         }
     }
 
     fn estates_raw(smiles: &str) -> Vec<f64> {
-        let mol = parse_smiles(smiles).expect("valid SMILES");
-        compute_estates(&mol)
+        let mut mol = parse_smiles(smiles).expect("valid SMILES");
+        compute_estates(&mut mol, &mut crate::desc::context::CalculationContext::new())
     }
 
     #[test]
@@ -358,8 +359,8 @@ mod tests {
 
     #[test]
     fn test_estate_sum_conservation() {
-        let mol = parse_smiles("CCCC").expect("valid");
-        let estates = compute_estates(&mol);
+        let mut mol = parse_smiles("CCCC").expect("valid");
+        let estates = compute_estates(&mut mol, &mut crate::desc::context::CalculationContext::new());
         let n = mol.num_atoms();
         let intrinsic_sum: f64 = (0..n)
             .map(|i| {
@@ -445,10 +446,10 @@ impl Descriptor for EStateIndices {
         "EStateIndices"
     }
 
-    fn calculate(&self, mol: &mut Molecule) -> DescriptorValue {
+    fn calculate(&self, mol: &mut Molecule, ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
         let mut values = Vec::with_capacity(47);
 
-        let estates = compute_estates(mol);
+        let estates = compute_estates(mol, ctx);
 
         // Summary (3 values)
         if estates.is_empty() {

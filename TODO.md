@@ -27,6 +27,18 @@ All parity validation should be run in `--release` mode.
 - Remaining validated 500-row gap: **Ipc**
 - Dominant 1000-row non-Ipc cluster: **CNP0594395.1** (fused heteroaromatic aromaticity/ring/HBA/amide/LogP/TPSA/VSA cascade)
 
+## ⚡ March 2026 Performance Snapshot & Refactor Focus
+
+- Current single-thread CSV parity slice (`coconut_csv_lite-02-2026.csv`, 1000 rows): Ferrum ~**2.5k mol/s** vs RDKit ~**0.63k mol/s**
+- Current single-thread parity benchmark cases: Ferrum ahead on **Ethane / Aspirin / Caffeine / LargeDruglike**
+- Remaining top hotspots: `find_minimum_cycle_basis_bonds`, `balaban::compute_distance_matrix`, SMARTS/VF2 primitive feasibility and candidate selection
+
+### Deep Performance Refactors (current execution focus)
+
+- [ ] Introduce descriptor-level calculation context + thread-local reusable workspace (`rayon::map_init`)
+- [ ] Unify unweighted + bond-order distance-kernel backend and share it across distance-based descriptors
+- [ ] Add SMARTS specialization layer for fixed pattern families (QED, MACCS, PubChem) while keeping generic VF2 fallback
+
 ## 🎯 Active Descriptor Backlog
 
 - [ ] Close the fused heteroaromatic `CNP0594395.1` descriptor cascade (aromaticity/ring typing, HBA, amide count, LogP/TPSA, SlogP_VSA, SMR_VSA)
@@ -465,8 +477,9 @@ All parity validation should be run in `--release` mode.
 **Last Updated**: March 2026  
 **Status**: RDKit parity push in progress — 500-row scalar **99.78%**, ring **100.0%**, VSA **100.0%**, Chi/Kappa **100.0%**; 1000-row scalar **99.75%**, ring **99.95%**, VSA **99.97%**, Chi/Kappa **100.0%**  
 **Validation**: release-mode parser / SMARTS / QED / rotatable tests plus scalar, ring, VSA, and Chi/Kappa parity suites and 1000-row audits ✅  
+**Performance Snapshot (single-thread, current median band)**: Ferrum CSV-1000 ~**2.5k mol/s** vs RDKit ~**0.63k mol/s**; parity benchmark currently has Ferrum ahead on Ethane/Aspirin/Caffeine/LargeDruglike  
 **Descriptors**: 72 implementations, 17,710+ dimensions  
 **RDKit 500-row wins**: AromaticAtomCount 100% · AromaticRingCount 100% · AliphaticRings 100% · AromaticRings(RT) 100% · SaturatedRings 100% · TotalRings 100% · HBondAcceptor 100% · NumAmideBonds 100% · QED 100% · RotatableBonds 100% · Chi3v 100% · Chi4v 100% · Kappa3 100%  
 **ML Pipeline**: QsarDataset, Scalers, PCA, k-NN, RF, PLS, ElasticNet, ART-2A, AD, QsarPipeline, AutoQsar, CV, Metrics  
 **API**: Single `Descriptor` trait with `DescriptorValue` enum returns  
-**Next Priority**: Close the fused heteroaromatic `CNP0594395.1` cluster; keep exact **Ipc** emulation deferred unless strict RDKit reproduction becomes necessary
+**Next Priority**: Deep performance refactors first (descriptor context/workspace reuse, unified distance kernels, SMARTS specialization) while keeping parity green; `CNP0594395.1` and exact **Ipc** emulation remain secondary unless they block the speed roadmap

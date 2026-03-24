@@ -35,7 +35,8 @@ pub struct WienerIndex;
 
 impl WienerIndex {
     /// Compute all-pairs shortest path distances using BFS.
-    fn compute_distance_matrix(mol: &Molecule) -> Vec<u32> {
+    #[allow(dead_code)]
+fn _compute_distance_matrix_unused(mol: &Molecule) -> Vec<u32> {
         let n = mol.num_atoms();
         let mut distances = vec![u32::MAX; n * n];
 
@@ -90,14 +91,14 @@ impl Descriptor for WienerIndex {
         "WienerIndex"
     }
 
-    fn calculate(&self, mol: &mut Molecule) -> DescriptorValue {
+    fn calculate(&self, mol: &mut Molecule, ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
         let n = mol.num_atoms();
 
         if n <= 1 {
             return DescriptorValue::Float(0.0);
         }
 
-        let distances = Self::compute_distance_matrix(mol);
+        let distances = crate::algo::paths::compute_unweighted_distance_matrix_cached(mol, ctx);
         let wiener = Self::wiener_from_distances(&distances, n);
 
         DescriptorValue::Float(wiener)
@@ -117,7 +118,7 @@ mod tests {
 
     fn calculate_wiener(smiles: &str) -> f32 {
         let mut mol = parse_smiles(smiles).expect("Invalid SMILES");
-        WienerIndex.calculate(&mut mol).as_float()
+        WienerIndex.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()).as_float()
     }
 
     #[test]

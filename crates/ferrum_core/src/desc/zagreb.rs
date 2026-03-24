@@ -26,7 +26,7 @@ impl Descriptor for ZagrebIndices {
         "ZagrebIndices"
     }
 
-    fn calculate(&self, mol: &mut Molecule) -> DescriptorValue {
+    fn calculate(&self, mol: &mut Molecule, ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
         let n = mol.num_atoms();
 
         if n == 0 {
@@ -63,7 +63,7 @@ mod tests {
 
     fn calculate_zagreb(smiles: &str) -> (f32, f32) {
         let mut mol = parse_smiles(smiles).expect("Invalid SMILES");
-        let v = ZagrebIndices.calculate(&mut mol).as_float_vec().to_vec();
+        let v = ZagrebIndices.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()).as_float_vec().to_vec();
         (v[0], v[1])
     }
 

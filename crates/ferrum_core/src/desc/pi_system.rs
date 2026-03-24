@@ -80,7 +80,7 @@ impl Descriptor for PiSystemCounts {
         "PiSystemCounts"
     }
 
-    fn calculate(&self, mol: &mut Molecule) -> DescriptorValue {
+    fn calculate(&self, mol: &mut Molecule, ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
         let mut visited = HashSet::new();
         let mut largest_size = 0u16;
         let mut num_systems = 0u16;
@@ -117,7 +117,7 @@ impl Descriptor for LargestPiSystem {
         "LargestPiSystem"
     }
 
-    fn calculate(&self, mol: &mut Molecule) -> DescriptorValue {
+    fn calculate(&self, mol: &mut Molecule, ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
         let mut visited = HashSet::new();
         let mut largest_system_size = 0;
 
@@ -162,32 +162,32 @@ mod tests {
     #[test]
     fn test_pi_system_benzene() {
         let mut mol = parse_and_prepare("c1ccccc1");
-        assert_eq!(LargestPiSystem.calculate(&mut mol), DescriptorValue::Int(6));
+        assert_eq!(LargestPiSystem.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()), DescriptorValue::Int(6));
     }
 
     #[test]
     fn test_pi_system_ethene() {
         let mut mol = parse_and_prepare("C=C");
-        assert_eq!(LargestPiSystem.calculate(&mut mol), DescriptorValue::Int(2));
+        assert_eq!(LargestPiSystem.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()), DescriptorValue::Int(2));
     }
 
     #[test]
     fn test_pi_system_butadiene() {
         let mut mol = parse_and_prepare("C=CC=C");
-        assert_eq!(LargestPiSystem.calculate(&mut mol), DescriptorValue::Int(4));
+        assert_eq!(LargestPiSystem.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()), DescriptorValue::Int(4));
     }
 
     #[test]
     fn test_pi_system_ethane() {
         let mut mol = parse_and_prepare("CC");
-        assert_eq!(LargestPiSystem.calculate(&mut mol), DescriptorValue::Int(0));
+        assert_eq!(LargestPiSystem.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()), DescriptorValue::Int(0));
     }
 
     #[test]
     fn test_pi_system_naphthalene() {
         let mut mol = parse_and_prepare("c1ccc2ccccc2c1");
         assert_eq!(
-            LargestPiSystem.calculate(&mut mol),
+            LargestPiSystem.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()),
             DescriptorValue::Int(10)
         );
     }
@@ -195,37 +195,37 @@ mod tests {
     #[test]
     fn test_pi_system_styrene() {
         let mut mol = parse_and_prepare("C=Cc1ccccc1");
-        assert_eq!(LargestPiSystem.calculate(&mut mol), DescriptorValue::Int(8));
+        assert_eq!(LargestPiSystem.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()), DescriptorValue::Int(8));
     }
 
     #[test]
     fn test_pi_system_separated_double_bonds() {
         let mut mol = parse_and_prepare("C=CCC=C");
-        assert_eq!(LargestPiSystem.calculate(&mut mol), DescriptorValue::Int(2));
+        assert_eq!(LargestPiSystem.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()), DescriptorValue::Int(2));
     }
 
     #[test]
     fn test_pi_system_benzyl_alkane() {
         let mut mol = parse_and_prepare("c1ccccc1CCC");
-        assert_eq!(LargestPiSystem.calculate(&mut mol), DescriptorValue::Int(6));
+        assert_eq!(LargestPiSystem.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()), DescriptorValue::Int(6));
     }
 
     #[test]
     fn test_pi_system_triple_bond() {
         let mut mol = parse_and_prepare("C#C");
-        assert_eq!(LargestPiSystem.calculate(&mut mol), DescriptorValue::Int(2));
+        assert_eq!(LargestPiSystem.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()), DescriptorValue::Int(2));
     }
 
     #[test]
     fn test_pi_system_extended_conjugation() {
         let mut mol = parse_and_prepare("C=CC=CC=C");
-        assert_eq!(LargestPiSystem.calculate(&mut mol), DescriptorValue::Int(6));
+        assert_eq!(LargestPiSystem.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()), DescriptorValue::Int(6));
     }
 
     #[test]
     fn test_pi_system_counts_benzene() {
         let mut mol = parse_and_prepare("c1ccccc1");
-        let value = PiSystemCounts.calculate(&mut mol);
+        let value = PiSystemCounts.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new());
         match value {
             DescriptorValue::IntU16Vec(v) => {
                 assert_eq!(v.len(), 2);

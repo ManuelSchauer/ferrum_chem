@@ -51,13 +51,13 @@ pub fn compute_molecular_weight_f64(mol: &Molecule) -> f64 {
 ///
 /// let mut mol = parse_smiles("CCO").unwrap();
 /// let desc = MolecularWeight;
-/// let value = desc.calculate(&mut mol);
+/// let value = desc.calculate(&mut mol, &mut ferrum_core::desc::context::CalculationContext::new());
 ///
 /// match value {
-///     ferrum_core::desc::typed::DescriptorValue::Float(mw) => {
+///     ferrum_core::desc::typed::DescriptorValue::Float64(mw) => {
 ///         assert!((mw - 46.07).abs() < 0.1); // Ethanol ≈ 46 Da
 ///     }
-///     _ => panic!("Expected Float"),
+///     _ => panic!("Expected Float64"),
 /// }
 /// ```
 pub struct MolecularWeight;
@@ -67,7 +67,7 @@ impl Descriptor for MolecularWeight {
         "MolecularWeight"
     }
 
-    fn calculate(&self, mol: &mut Molecule) -> DescriptorValue {
+    fn calculate(&self, mol: &mut Molecule, ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
         DescriptorValue::Float64(compute_molecular_weight_f64(mol))
     }
 }
@@ -88,7 +88,7 @@ mod tests {
         // Water: H2O = 2*1.008 + 15.999 = 18.015
         let mut mol = parse_smiles("O").unwrap();
         let desc = MolecularWeight;
-        match desc.calculate(&mut mol) {
+        match desc.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()) {
             DescriptorValue::Float(v) => assert!(((v as f64) - 18.015).abs() < 0.01),
             DescriptorValue::Float64(v) => assert!((v - 18.015).abs() < 0.01),
             _ => panic!("Expected Float"),
@@ -100,7 +100,7 @@ mod tests {
         // Methane: CH4
         let mut mol = parse_smiles("C").unwrap();
         let desc = MolecularWeight;
-        match desc.calculate(&mut mol) {
+        match desc.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()) {
             DescriptorValue::Float(v) => assert!(((v as f64) - 16.043).abs() < 0.01),
             DescriptorValue::Float64(v) => assert!((v - 16.043).abs() < 0.01),
             _ => panic!("Expected Float"),
@@ -112,7 +112,7 @@ mod tests {
         // Methane with explicit H: [CH4]
         let mut mol = parse_smiles("[CH4]").unwrap();
         let desc = MolecularWeight;
-        match desc.calculate(&mut mol) {
+        match desc.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()) {
             DescriptorValue::Float(v) => assert!(((v as f64) - 16.043).abs() < 0.01),
             DescriptorValue::Float64(v) => assert!((v - 16.043).abs() < 0.01),
             _ => panic!("Expected Float"),
@@ -124,7 +124,7 @@ mod tests {
         // Benzene: C6H6
         let mut mol = parse_smiles("c1ccccc1").unwrap();
         let desc = MolecularWeight;
-        match desc.calculate(&mut mol) {
+        match desc.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()) {
             DescriptorValue::Float(v) => assert!(((v as f64) - 78.114).abs() < 0.01),
             DescriptorValue::Float64(v) => assert!((v - 78.114).abs() < 0.01),
             _ => panic!("Expected Float"),
@@ -136,7 +136,7 @@ mod tests {
         // Ethanol: C2H6O = 2*12.011 + 6*1.008 + 15.999 = 46.069
         let mut mol = parse_smiles("CCO").unwrap();
         let desc = MolecularWeight;
-        match desc.calculate(&mut mol) {
+        match desc.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()) {
             DescriptorValue::Float(v) => assert!(((v as f64) - 46.069).abs() < 0.01),
             DescriptorValue::Float64(v) => assert!((v - 46.069).abs() < 0.01),
             _ => panic!("Expected Float"),
@@ -148,7 +148,7 @@ mod tests {
         // Heavy water: [2H]O[2H]
         let mut mol = parse_smiles("[2H]O[2H]").unwrap();
         let desc = MolecularWeight;
-        match desc.calculate(&mut mol) {
+        match desc.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()) {
             DescriptorValue::Float(v) => assert!(((v as f64) - 19.999).abs() < 0.01),
             DescriptorValue::Float64(v) => assert!((v - 19.999).abs() < 0.01),
             _ => panic!("Expected Float"),

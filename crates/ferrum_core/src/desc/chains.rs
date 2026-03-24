@@ -71,7 +71,7 @@ impl Descriptor for LongestAliphaticChain {
         "LongestAliphaticChain"
     }
 
-    fn calculate(&self, mol: &mut Molecule) -> DescriptorValue {
+    fn calculate(&self, mol: &mut Molecule, ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
         DescriptorValue::Int(Self::compute(mol))
     }
 }
@@ -123,7 +123,7 @@ impl Descriptor for LargestChain {
         "LargestChain"
     }
 
-    fn calculate(&self, mol: &mut Molecule) -> DescriptorValue {
+    fn calculate(&self, mol: &mut Molecule, ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
         DescriptorValue::Int(Self::compute(mol))
     }
 }
@@ -152,7 +152,7 @@ mod tests {
     fn test_longest_aliphatic_chain_linear() {
         let mut mol = parse_and_prepare("CCCCCC");
         assert_eq!(
-            LongestAliphaticChain.calculate(&mut mol),
+            LongestAliphaticChain.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()),
             DescriptorValue::Int(6)
         );
     }
@@ -161,7 +161,7 @@ mod tests {
     fn test_longest_aliphatic_chain_branched() {
         let mut mol = parse_and_prepare("CC(C)CCC");
         assert_eq!(
-            LongestAliphaticChain.calculate(&mut mol),
+            LongestAliphaticChain.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()),
             DescriptorValue::Int(6)
         );
     }
@@ -170,7 +170,7 @@ mod tests {
     fn test_longest_aliphatic_chain_aromatic() {
         let mut mol = parse_and_prepare("CCCc1ccccc1");
         assert_eq!(
-            LongestAliphaticChain.calculate(&mut mol),
+            LongestAliphaticChain.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()),
             DescriptorValue::Int(3)
         );
     }
@@ -179,7 +179,7 @@ mod tests {
     fn test_longest_aliphatic_chain_aromatic_only() {
         let mut mol = parse_and_prepare("c1ccccc1");
         assert_eq!(
-            LongestAliphaticChain.calculate(&mut mol),
+            LongestAliphaticChain.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()),
             DescriptorValue::Int(0)
         );
     }
@@ -188,7 +188,7 @@ mod tests {
     fn test_longest_aliphatic_chain_complex() {
         let mut mol = parse_and_prepare("CCCCC(CC)CCCC");
         assert_eq!(
-            LongestAliphaticChain.calculate(&mut mol),
+            LongestAliphaticChain.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()),
             DescriptorValue::Int(11)
         );
     }
@@ -196,25 +196,25 @@ mod tests {
     #[test]
     fn test_largest_chain_linear() {
         let mut mol = parse_and_prepare("CCCCCC");
-        assert_eq!(LargestChain.calculate(&mut mol), DescriptorValue::Int(6));
+        assert_eq!(LargestChain.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()), DescriptorValue::Int(6));
     }
 
     #[test]
     fn test_largest_chain_aromatic() {
         let mut mol = parse_and_prepare("c1ccccc1");
-        assert_eq!(LargestChain.calculate(&mut mol), DescriptorValue::Int(6));
+        assert_eq!(LargestChain.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()), DescriptorValue::Int(6));
     }
 
     #[test]
     fn test_largest_chain_with_heteroatom() {
         let mut mol = parse_and_prepare("CCOCCOC");
-        assert_eq!(LargestChain.calculate(&mut mol), DescriptorValue::Int(7));
+        assert_eq!(LargestChain.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()), DescriptorValue::Int(7));
     }
 
     #[test]
     fn test_largest_chain_branched() {
         let mut mol = parse_and_prepare("CC(C)(C)C");
-        assert_eq!(LargestChain.calculate(&mut mol), DescriptorValue::Int(5));
+        assert_eq!(LargestChain.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()), DescriptorValue::Int(5));
     }
 
     #[test]

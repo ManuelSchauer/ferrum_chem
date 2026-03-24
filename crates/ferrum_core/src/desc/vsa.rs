@@ -14,11 +14,20 @@
 //! - Labute (2000) J. Mol. Graph. Model. 18, 464
 //! - Wildman & Crippen (1999) JCICS 39(5), 868
 
-use super::logp::crippen_atom_contributions;
+use super::logp::{
+    cached_crippen_atom_contributions_ref, crippen_atom_contributions,
+    ensure_crippen_atom_contributions_cached,
+};
 use super::typed::{Descriptor, DescriptorValue};
-use crate::algo::electronic::compute_gasteiger_charges;
+use crate::algo::electronic::{
+    cached_gasteiger_charges_ref, compute_gasteiger_charges, ensure_gasteiger_charges_cached,
+};
 use crate::mol::molecule::Molecule;
+use once_cell::sync::Lazy;
 use std::f64::consts::PI;
+
+static LABUTE_CACHE_ENABLED: Lazy<bool> =
+    Lazy::new(|| std::env::var_os("FERRUM_DISABLE_LABUTE_CACHE").is_none());
 
 // ---------------------------------------------------------------------------
 // Covalent bond radii (Rb0, Å) — same as RDKit GetRb0()
@@ -139,7 +148,7 @@ fn bond_scale_factor(bond: &crate::mol::bond::Bond) -> f64 {
 ///   Vi[i] = 4π·Ri² − π·Ri·Σoverlap
 ///
 /// Returns (heavy_atom_vsa, h_contribution).
-fn compute_labute_contribs(mol: &Molecule) -> (Vec<f64>, f64) {
+fn compute_labute_contribs_uncached(mol: &Molecule) -> (Vec<f64>, f64) {
     let n = mol.atoms.len();
     // overlap_sum[i] accumulates overlap for each heavy atom
     let mut overlap = vec![0.0f64; n];
@@ -196,6 +205,26 @@ fn compute_labute_contribs(mol: &Molecule) -> (Vec<f64>, f64) {
     (vsa, h_contrib)
 }
 
+fn compute_labute_contribs(mol: &Molecule) -> (Vec<f64>, f64) {
+    compute_labute_contribs_uncached(mol)
+}
+
+fn ensure_labute_contribs_cached(mol: &mut Molecule) {
+    if !*LABUTE_CACHE_ENABLED || mol.cached_labute_contribs().is_some() {
+        return;
+    }
+    let (atom_vsa, h_contrib) = compute_labute_contribs_uncached(mol);
+    mol.store_labute_contribs(atom_vsa, h_contrib);
+}
+
+fn compute_labute_contribs_cached(mol: &mut Molecule) -> (Vec<f64>, f64) {
+    ensure_labute_contribs_cached(mol);
+    if let Some((atom_vsa, h_contrib)) = mol.cached_labute_contribs() {
+        return (atom_vsa.to_vec(), h_contrib);
+    }
+    compute_labute_contribs_uncached(mol)
+}
+
 // ---------------------------------------------------------------------------
 // SlogP_VSA — 12 bins
 // ---------------------------------------------------------------------------
@@ -220,26 +249,53 @@ const SLOGP_BINS: [f64; 12] = [
     f64::INFINITY,
 ];
 
+fn fill_binned_vsa(
+    mol: &Molecule,
+    atom_property: &[f64],
+    atom_vsa: &[f64],
+    bins: &[f64],
+    out: &mut [f32],
+) {
+    out.fill(0.0);
+    for i in 0..mol.atoms.len() {
+        if mol.atoms[i].atomic_number <= 1 {
+            continue;
+        }
+        let bin = find_bin(atom_property[i], bins);
+        out[bin] += atom_vsa[i] as f32;
+    }
+}
+
+pub(crate) fn fill_slogp_vsa_into(mol: &mut Molecule, out: &mut [f32]) {
+    assert_eq!(
+        out.len(),
+        SLOGP_BINS.len(),
+        "SlogP_VSA output length mismatch"
+    );
+
+    ensure_labute_contribs_cached(mol);
+    ensure_crippen_atom_contributions_cached(mol);
+    if let (Some((atom_vsa, _)), Some((logp_contrib, _))) = (
+        mol.cached_labute_contribs(),
+        cached_crippen_atom_contributions_ref(mol),
+    ) {
+        fill_binned_vsa(mol, logp_contrib, atom_vsa, &SLOGP_BINS, out);
+        return;
+    }
+
+    let (atom_vsa, _) = compute_labute_contribs_uncached(mol);
+    let (logp_contrib, _) = crippen_atom_contributions(mol);
+    fill_binned_vsa(mol, &logp_contrib, &atom_vsa, &SLOGP_BINS, out);
+}
+
 impl Descriptor for SlogpVSA {
     fn name(&self) -> &str {
         "SlogP_VSA"
     }
 
-    fn calculate(&self, mol: &mut Molecule) -> DescriptorValue {
+    fn calculate(&self, mol: &mut Molecule, ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
         let mut values = vec![0.0f32; 12];
-
-        let (vsa, _) = compute_labute_contribs(mol);
-        let (logp_contrib, _) = crippen_atom_contributions(mol);
-
-        for i in 0..mol.atoms.len() {
-            if mol.atoms[i].atomic_number <= 1 {
-                continue;
-            }
-            let lp = logp_contrib[i];
-            let bin = find_bin(lp, &SLOGP_BINS);
-            values[bin] += vsa[i] as f32;
-        }
-
+        fill_slogp_vsa_into(mol, &mut values);
         DescriptorValue::FloatVec(values)
     }
 }
@@ -266,26 +322,32 @@ const SMR_BINS: [f64; 10] = [
     f64::INFINITY,
 ];
 
+pub(crate) fn fill_smr_vsa_into(mol: &mut Molecule, out: &mut [f32]) {
+    assert_eq!(out.len(), SMR_BINS.len(), "SMR_VSA output length mismatch");
+
+    ensure_labute_contribs_cached(mol);
+    ensure_crippen_atom_contributions_cached(mol);
+    if let (Some((atom_vsa, _)), Some((_, mr_contrib))) = (
+        mol.cached_labute_contribs(),
+        cached_crippen_atom_contributions_ref(mol),
+    ) {
+        fill_binned_vsa(mol, mr_contrib, atom_vsa, &SMR_BINS, out);
+        return;
+    }
+
+    let (atom_vsa, _) = compute_labute_contribs_uncached(mol);
+    let (_, mr_contrib) = crippen_atom_contributions(mol);
+    fill_binned_vsa(mol, &mr_contrib, &atom_vsa, &SMR_BINS, out);
+}
+
 impl Descriptor for SmrVSA {
     fn name(&self) -> &str {
         "SMR_VSA"
     }
 
-    fn calculate(&self, mol: &mut Molecule) -> DescriptorValue {
+    fn calculate(&self, mol: &mut Molecule, ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
         let mut values = vec![0.0f32; 10];
-
-        let (vsa, _) = compute_labute_contribs(mol);
-        let (_, mr_contrib) = crippen_atom_contributions(mol);
-
-        for i in 0..mol.atoms.len() {
-            if mol.atoms[i].atomic_number <= 1 {
-                continue;
-            }
-            let mr = mr_contrib[i];
-            let bin = find_bin(mr, &SMR_BINS);
-            values[bin] += vsa[i] as f32;
-        }
-
+        fill_smr_vsa_into(mol, &mut values);
         DescriptorValue::FloatVec(values)
     }
 }
@@ -304,10 +366,15 @@ impl Descriptor for LabuteASA {
         "LabuteASA"
     }
 
-    fn calculate(&self, mol: &mut Molecule) -> DescriptorValue {
-        let (vsa, h_contrib) = compute_labute_contribs(mol);
-        let total: f64 = vsa.iter().sum::<f64>() + h_contrib;
-        DescriptorValue::Float(total as f32)
+    fn calculate(&self, mol: &mut Molecule, ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
+        ensure_labute_contribs_cached(mol);
+        let (total, h_contrib) = if let Some((vsa, h_contrib)) = mol.cached_labute_contribs() {
+            (vsa.iter().sum::<f64>(), h_contrib)
+        } else {
+            let (vsa, h_contrib) = compute_labute_contribs_uncached(mol);
+            (vsa.iter().sum::<f64>(), h_contrib)
+        };
+        DescriptorValue::Float((total + h_contrib) as f32)
     }
 }
 
@@ -337,26 +404,36 @@ const PEOE_BINS: [f64; 14] = [
     f64::INFINITY,
 ];
 
+pub(crate) fn fill_peoe_vsa_into(mol: &mut Molecule, out: &mut [f32]) {
+    assert_eq!(
+        out.len(),
+        PEOE_BINS.len(),
+        "PEOE_VSA output length mismatch"
+    );
+
+    ensure_labute_contribs_cached(mol);
+    ensure_gasteiger_charges_cached(mol);
+    if let (Some((atom_vsa, _)), Some(charges)) = (
+        mol.cached_labute_contribs(),
+        cached_gasteiger_charges_ref(mol),
+    ) {
+        fill_binned_vsa(mol, charges, atom_vsa, &PEOE_BINS, out);
+        return;
+    }
+
+    let (atom_vsa, _) = compute_labute_contribs_uncached(mol);
+    let charges = compute_gasteiger_charges(mol);
+    fill_binned_vsa(mol, &charges, &atom_vsa, &PEOE_BINS, out);
+}
+
 impl Descriptor for PeoeVsa {
     fn name(&self) -> &str {
         "PEOE_VSA"
     }
 
-    fn calculate(&self, mol: &mut Molecule) -> DescriptorValue {
+    fn calculate(&self, mol: &mut Molecule, ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
         let mut values = vec![0.0f32; 14];
-
-        let charges = compute_gasteiger_charges(mol);
-        let (vsa, _) = compute_labute_contribs(mol);
-
-        for i in 0..mol.atoms.len() {
-            if mol.atoms[i].atomic_number <= 1 {
-                continue;
-            }
-            let charge = charges[i];
-            let bin = find_bin(charge, &PEOE_BINS);
-            values[bin] += vsa[i] as f32;
-        }
-
+        fill_peoe_vsa_into(mol, &mut values);
         DescriptorValue::FloatVec(values)
     }
 }
@@ -397,7 +474,7 @@ mod tests {
 
     fn calc_float_vec(d: &dyn Descriptor, smiles: &str) -> Vec<f32> {
         let mut mol = parse_smiles(smiles).expect("valid SMILES");
-        match d.calculate(&mut mol) {
+        match d.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()) {
             DescriptorValue::FloatVec(v) => v,
             other => panic!("expected FloatVec, got {:?}", other),
         }
@@ -405,7 +482,7 @@ mod tests {
 
     fn calc_float(d: &dyn Descriptor, smiles: &str) -> f32 {
         let mut mol = parse_smiles(smiles).expect("valid SMILES");
-        match d.calculate(&mut mol) {
+        match d.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()) {
             DescriptorValue::Float(v) => v,
             other => panic!("expected Float, got {:?}", other),
         }

@@ -1,9 +1,11 @@
 // Public modules
 pub mod aromatic_ring_count;
 pub mod atom_count;
+mod atomic_props;
 pub mod autocorrelation;
 pub mod balaban;
 pub mod batch;
+pub mod context;
 pub mod bcut;
 pub mod bond_count;
 pub mod carbon_types;
@@ -44,7 +46,7 @@ pub mod zagreb;
 
 // Re-export the core descriptor API
 pub use typed::{
-    BitVector, Descriptor, DescriptorValue, build_ml_vector, build_ml_vectors_parallel,
+    build_ml_vector, build_ml_vectors_parallel, BitVector, Descriptor, DescriptorValue,
 };
 
 #[cfg(test)]
@@ -58,7 +60,7 @@ mod descriptor_tests {
 
     fn calc_float(desc: &dyn Descriptor, smiles: &str) -> f32 {
         let mut mol = parse(smiles);
-        match desc.calculate(&mut mol) {
+        match desc.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()) {
             DescriptorValue::Float(v) => v,
             DescriptorValue::Float64(v) => v as f32,
             other => panic!("{} expected Float, got {:?}", desc.name(), other),
@@ -67,7 +69,7 @@ mod descriptor_tests {
 
     fn calc_int(desc: &dyn Descriptor, smiles: &str) -> u32 {
         let mut mol = parse(smiles);
-        match desc.calculate(&mut mol) {
+        match desc.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()) {
             DescriptorValue::Int(v) => v,
             other => panic!("{} expected Int, got {:?}", desc.name(), other),
         }
@@ -75,7 +77,7 @@ mod descriptor_tests {
 
     fn calc_float_vec(desc: &dyn Descriptor, smiles: &str) -> Vec<f32> {
         let mut mol = parse(smiles);
-        match desc.calculate(&mut mol) {
+        match desc.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()) {
             DescriptorValue::FloatVec(v) => v,
             other => panic!("{} expected FloatVec, got {:?}", desc.name(), other),
         }
@@ -83,7 +85,7 @@ mod descriptor_tests {
 
     fn calc_u16_vec(desc: &dyn Descriptor, smiles: &str) -> Vec<u16> {
         let mut mol = parse(smiles);
-        match desc.calculate(&mut mol) {
+        match desc.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()) {
             DescriptorValue::IntU16Vec(v) => v,
             other => panic!("{} expected IntU16Vec, got {:?}", desc.name(), other),
         }
@@ -91,7 +93,7 @@ mod descriptor_tests {
 
     fn calc_binary_len(desc: &dyn Descriptor, smiles: &str) -> usize {
         let mut mol = parse(smiles);
-        match desc.calculate(&mut mol) {
+        match desc.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()) {
             DescriptorValue::Binary(bv) => bv.len(),
             other => panic!("{} expected Binary, got {:?}", desc.name(), other),
         }
@@ -160,7 +162,7 @@ mod descriptor_tests {
     fn test_bond_count_detailed() {
         use super::bond_count::BondCountDetailed;
         let mut mol = parse("c1ccccc1");
-        match BondCountDetailed.calculate(&mut mol) {
+        match BondCountDetailed.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()) {
             DescriptorValue::IntVec(v) => {
                 assert_eq!(v.len(), 5, "should have 5 bond type counts");
                 assert!(v[4] > 0, "benzene should have aromatic bonds");
@@ -824,7 +826,7 @@ mod descriptor_tests {
         for smiles in &smiles_list {
             let mut mol = parse(smiles);
             for desc in &descriptors {
-                let _value = desc.calculate(&mut mol);
+                let _value = desc.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new());
             }
         }
     }

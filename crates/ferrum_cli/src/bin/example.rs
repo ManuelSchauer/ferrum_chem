@@ -44,7 +44,7 @@ fn main() {
 
     for (name, smiles) in &molecules {
         if let Ok(mut mol) = parse_smiles(smiles) {
-            let value = mw_descriptor.calculate(&mut mol);
+            let value = mw_descriptor.calculate(&mut mol, &mut ferrum_core::desc::context::CalculationContext::new());
             println!("{:12} MW = {:7.2} Da", name, value.as_float());
         }
     }
@@ -73,7 +73,7 @@ fn main() {
         heavy_water.atoms[0].isotope, heavy_water.atoms[2].isotope
     );
 
-    let mw_val = mw_descriptor.calculate(&mut heavy_water);
+    let mw_val = mw_descriptor.calculate(&mut heavy_water, &mut ferrum_core::desc::context::CalculationContext::new());
     println!(
         "  MW: {:.2} Da (vs 18.01 for normal water)",
         mw_val.as_float()
@@ -88,7 +88,7 @@ fn main() {
         methane.atoms[0].num_explicit_h
     );
 
-    let mw_val = mw_descriptor.calculate(&mut methane);
+    let mw_val = mw_descriptor.calculate(&mut methane, &mut ferrum_core::desc::context::CalculationContext::new());
     println!("  MW: {:.2} Da", mw_val.as_float());
 
     // Aromatic systems
@@ -103,7 +103,7 @@ fn main() {
     println!("  Aromatic atoms: {}", aromatic_count);
     let implicit_h: u8 = benzene.atoms.iter().map(|a| a.num_implicit_h).sum();
     println!("  Implicit H: {} (automatically calculated)", implicit_h);
-    let mw_val = mw_descriptor.calculate(&mut benzene);
+    let mw_val = mw_descriptor.calculate(&mut benzene, &mut ferrum_core::desc::context::CalculationContext::new());
     println!("  MW: {:.2} Da", mw_val.as_float());
 
     println!("\n");
@@ -120,7 +120,7 @@ fn main() {
 
     for (name, smiles) in &complex_molecules {
         if let Ok(mut mol) = parse_smiles(smiles) {
-            let mw_val = mw_descriptor.calculate(&mut mol);
+            let mw_val = mw_descriptor.calculate(&mut mol, &mut ferrum_core::desc::context::CalculationContext::new());
             println!(
                 "{:15} → {} atoms, MW = {:.2} Da",
                 name,

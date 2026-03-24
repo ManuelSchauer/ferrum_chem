@@ -1,4 +1,6 @@
-use crate::algo::rings::find_symmetrized_sssr_bonds;
+use crate::algo::rings::{
+    cached_symmetrized_sssr_bonds_ref, ensure_symmetrized_sssr_bonds_cached,
+};
 use crate::desc::typed::{Descriptor, DescriptorValue};
 use crate::mol::molecule::Molecule;
 use crate::types::AtomIdx;
@@ -24,7 +26,7 @@ impl Descriptor for SmallRingDescriptor {
         "SmallRingDescriptor"
     }
 
-    fn calculate(&self, mol: &mut Molecule) -> DescriptorValue {
+    fn calculate(&self, mol: &mut Molecule, ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
         let mut counts = vec![0u16; 11];
 
         // RDKit ring counts are based on a symmetrized SSSR-like set, so bridged
@@ -70,8 +72,11 @@ const _: () = {
     let _ = assert_send_sync::<SmallRingDescriptor>;
 };
 
-fn compute_total_ring_count(mol: &Molecule) -> usize {
-    find_symmetrized_sssr_bonds(mol).len()
+fn compute_total_ring_count(mol: &mut Molecule) -> usize {
+    ensure_symmetrized_sssr_bonds_cached(mol);
+    cached_symmetrized_sssr_bonds_ref(mol)
+        .expect("symmetrized SSSR cache initialized")
+        .len()
 }
 
 /// Find all small rings in a molecule (sizes min_size to max_size).
@@ -395,7 +400,7 @@ mod tests {
 
     fn calc_small_ring(smiles: &str) -> Vec<u16> {
         let mut mol = prepare_molecule(smiles);
-        match SmallRingDescriptor.calculate(&mut mol) {
+        match SmallRingDescriptor.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()) {
             DescriptorValue::IntU16Vec(v) => v,
             other => panic!("expected IntU16Vec, got {:?}", other),
         }

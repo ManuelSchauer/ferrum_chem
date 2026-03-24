@@ -130,6 +130,18 @@ pub fn compute_tpsa(mol: &Molecule, include_sp: bool) -> f64 {
     tpsa
 }
 
+pub(crate) fn compute_tpsa_cached(mol: &mut Molecule, include_sp: bool) -> f64 {
+    if include_sp {
+        return compute_tpsa(mol, true);
+    }
+    if let Some(cached) = mol.cached_tpsa() {
+        return cached;
+    }
+    let tpsa = compute_tpsa(mol, false);
+    mol.store_tpsa(tpsa);
+    tpsa
+}
+
 /// Check if atom is in a 3-membered ring.
 /// An atom is in a 3-ring if any two of its neighbors are bonded to each other.
 fn is_in_3_ring(mol: &Molecule, atom_idx: usize) -> bool {
@@ -618,7 +630,7 @@ mod tests {
 /// perceive_aromaticity(&mut mol);
 ///
 /// let descriptor = Tpsa;
-/// let tpsa = descriptor.calculate(&mut mol);
+/// let tpsa = descriptor.calculate(&mut mol, &mut ferrum_core::desc::context::CalculationContext::new());
 ///
 /// // Benzene has no polar atoms
 /// match tpsa {
@@ -635,8 +647,8 @@ impl Descriptor for Tpsa {
         "TPSA"
     }
 
-    fn calculate(&self, mol: &mut Molecule) -> DescriptorValue {
-        let tpsa = compute_tpsa(mol, false) as f32;
+    fn calculate(&self, mol: &mut Molecule, ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
+        let tpsa = compute_tpsa_cached(mol, false) as f32;
         DescriptorValue::Float(tpsa)
     }
 }

@@ -3,8 +3,8 @@
 //! Provides counts for common functional groups, acidic groups, and basic groups.
 
 use super::typed::{Descriptor, DescriptorValue};
-use crate::algo::iso::find_all_matches;
-use crate::io::smarts::{QueryGraph, parse_smarts};
+use crate::algo::iso::count_matches as smarts_count_matches;
+use crate::io::smarts::{parse_smarts, QueryGraph};
 use crate::mol::molecule::Molecule;
 use once_cell::sync::Lazy;
 
@@ -70,16 +70,6 @@ fg_patterns!(
     ("Amidine", "[NX3][CX3]=[NX2]"),
 );
 
-fn count_matches(mol: &Molecule, patterns: &[FuncGroupPattern]) -> Vec<(String, u32)> {
-    patterns
-        .iter()
-        .map(|p| {
-            let matches = find_all_matches(mol, &p.query);
-            (p.name.to_string(), matches.len() as u32)
-        })
-        .collect()
-}
-
 /// Functional Group Counts descriptor.
 ///
 /// Counts 16 common functional groups using SMARTS patterns.
@@ -93,10 +83,10 @@ impl Descriptor for FunctionalGroupCounts {
         "FunctionalGroupCounts"
     }
 
-    fn calculate(&self, mol: &mut Molecule) -> DescriptorValue {
+    fn calculate(&self, mol: &mut Molecule, ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
         let counts: Vec<u16> = FUNC_GROUP_PATTERNS
             .iter()
-            .map(|p| find_all_matches(mol, &p.query).len() as u16)
+            .map(|p| smarts_count_matches(mol, &p.query) as u16)
             .collect();
         DescriptorValue::IntU16Vec(counts)
     }
@@ -112,10 +102,10 @@ impl Descriptor for AcidicGroupCount {
         "AcidicGroupCount"
     }
 
-    fn calculate(&self, mol: &mut Molecule) -> DescriptorValue {
+    fn calculate(&self, mol: &mut Molecule, ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
         let total: usize = ACIDIC_PATTERNS
             .iter()
-            .map(|p| find_all_matches(mol, &p.query).len())
+            .map(|p| smarts_count_matches(mol, &p.query))
             .sum();
         DescriptorValue::Int(total as u32)
     }
@@ -131,10 +121,10 @@ impl Descriptor for BasicGroupCount {
         "BasicGroupCount"
     }
 
-    fn calculate(&self, mol: &mut Molecule) -> DescriptorValue {
+    fn calculate(&self, mol: &mut Molecule, ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
         let total: usize = BASIC_PATTERNS
             .iter()
-            .map(|p| find_all_matches(mol, &p.query).len())
+            .map(|p| smarts_count_matches(mol, &p.query))
             .sum();
         DescriptorValue::Int(total as u32)
     }
@@ -154,7 +144,7 @@ mod tests {
 
     fn calc_fg(smiles: &str) -> Vec<u16> {
         let mut mol = parse_smiles(smiles).expect("valid SMILES");
-        match FunctionalGroupCounts.calculate(&mut mol) {
+        match FunctionalGroupCounts.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()) {
             DescriptorValue::IntU16Vec(v) => v,
             other => panic!("expected IntU16Vec, got {:?}", other),
         }
@@ -162,7 +152,7 @@ mod tests {
 
     fn calc_acidic(smiles: &str) -> u32 {
         let mut mol = parse_smiles(smiles).expect("valid SMILES");
-        match AcidicGroupCount.calculate(&mut mol) {
+        match AcidicGroupCount.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()) {
             DescriptorValue::Int(v) => v,
             other => panic!("expected Int, got {:?}", other),
         }
@@ -170,7 +160,7 @@ mod tests {
 
     fn calc_basic(smiles: &str) -> u32 {
         let mut mol = parse_smiles(smiles).expect("valid SMILES");
-        match BasicGroupCount.calculate(&mut mol) {
+        match BasicGroupCount.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()) {
             DescriptorValue::Int(v) => v,
             other => panic!("expected Int, got {:?}", other),
         }

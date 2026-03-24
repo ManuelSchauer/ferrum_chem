@@ -1,5 +1,9 @@
-use crate::io::smarts::{QueryAtom, QueryBond, QueryGraph};
+use crate::io::smarts::{
+    AtomPrimitive, QueryAtom, QueryBond, QueryGraph, SmartsRecursiveCache, SmartsRingContext,
+    query_atom_matches_with_cache, query_atom_matches_with_context, query_graph_needs_ring_context,
+};
 use crate::mol::molecule::Molecule;
+use smallvec::SmallVec;
 
 /// Substructure matching using VF2 algorithm.
 ///
@@ -30,8 +34,23 @@ pub fn find_first_match(target: &Molecule, pattern: &QueryGraph) -> Option<Vec<u
     if pattern.atoms.len() > target.atoms.len() {
         return None;
     }
+    if pattern.bonds.len() > target.bonds.len() {
+        return None;
+    }
 
-    let mut state = MatchState::new(target, pattern);
+    if let Some(fast_path) = detect_fast_path(pattern) {
+        let mut first = None;
+        visit_fast_path_matches(target, pattern, fast_path, |mapping| {
+            first = Some(mapping.to_vec());
+            false
+        });
+        return first;
+    }
+
+    let mut state = MatchState::new(target, pattern, MatchMode::FirstMatch);
+    if !state.overall_possible {
+        return None;
+    }
 
     // Try matching starting from each atom in the target
     if backtrack(&mut state, 0) {
@@ -43,7 +62,83 @@ pub fn find_first_match(target: &Molecule, pattern: &QueryGraph) -> Option<Vec<u
 
 /// Counts the number of substructure matches.
 pub fn count_matches(target: &Molecule, pattern: &QueryGraph) -> usize {
-    find_all_matches(target, pattern).len()
+    if pattern.atoms.is_empty() {
+        return 1;
+    }
+    if pattern.atoms.len() > target.atoms.len() {
+        return 0;
+    }
+    if pattern.bonds.len() > target.bonds.len() {
+        return 0;
+    }
+
+    if let Some(fast_path) = detect_fast_path(pattern) {
+        let mut count = 0usize;
+        visit_fast_path_matches(target, pattern, fast_path, |_| {
+            count += 1;
+            true
+        });
+        return count;
+    }
+
+    let mut state = MatchState::new(target, pattern, MatchMode::Enumerate);
+    if !state.overall_possible {
+        return 0;
+    }
+
+    let mut count = 0usize;
+    backtrack_count(&mut state, 0, &mut count);
+    count
+}
+
+/// Returns true if the pattern has at least `min_matches` matches.
+///
+/// Uses early-stop enumeration, so it avoids counting all matches when only
+/// a threshold decision is needed.
+pub fn has_at_least_matches(target: &Molecule, pattern: &QueryGraph, min_matches: usize) -> bool {
+    if min_matches == 0 {
+        return true;
+    }
+    if min_matches == 1 {
+        return has_substruct_match(target, pattern);
+    }
+    let mut matched = 0usize;
+    visit_matches(target, pattern, |_| {
+        matched += 1;
+        matched < min_matches
+    });
+    matched >= min_matches
+}
+
+/// Visits all substructure matches without materializing them.
+///
+/// The visitor returns `true` to continue enumeration or `false` to stop early.
+pub fn visit_matches<F>(target: &Molecule, pattern: &QueryGraph, mut visit: F)
+where
+    F: FnMut(&[u16]) -> bool,
+{
+    if pattern.atoms.is_empty() {
+        let _ = visit(&[]);
+        return;
+    }
+
+    if pattern.atoms.len() > target.atoms.len() {
+        return;
+    }
+    if pattern.bonds.len() > target.bonds.len() {
+        return;
+    }
+
+    if let Some(fast_path) = detect_fast_path(pattern) {
+        visit_fast_path_matches(target, pattern, fast_path, visit);
+        return;
+    }
+
+    let mut state = MatchState::new(target, pattern, MatchMode::FirstMatch);
+    if !state.overall_possible {
+        return;
+    }
+    let _ = backtrack_visit(&mut state, 0, &mut visit);
 }
 
 /// Finds all substructure matches.
@@ -58,13 +153,255 @@ pub fn find_all_matches(target: &Molecule, pattern: &QueryGraph) -> Vec<Vec<u16>
     if pattern.atoms.len() > target.atoms.len() {
         return vec![];
     }
+    if pattern.bonds.len() > target.bonds.len() {
+        return vec![];
+    }
+
+    if let Some(fast_path) = detect_fast_path(pattern) {
+        let mut matches = Vec::new();
+        visit_fast_path_matches(target, pattern, fast_path, |mapping| {
+            matches.push(mapping.to_vec());
+            true
+        });
+        return matches;
+    }
 
     let mut matches = Vec::new();
-    let mut state = MatchState::new(target, pattern);
+    let mut state = MatchState::new(target, pattern, MatchMode::Enumerate);
+    if !state.overall_possible {
+        return matches;
+    }
 
     backtrack_all(&mut state, 0, &mut matches);
 
     matches
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FastPathKind {
+    SingleAtom,
+    SingleBond {
+        pattern_source: usize,
+        pattern_target: usize,
+        pattern_bond_idx: u16,
+    },
+}
+
+fn detect_fast_path(pattern: &QueryGraph) -> Option<FastPathKind> {
+    if pattern.atoms.len() == 1 && pattern.bonds.is_empty() {
+        return Some(FastPathKind::SingleAtom);
+    }
+
+    if pattern.atoms.len() == 2 && pattern.bonds.len() == 1 {
+        let bond = &pattern.bonds[0];
+        return Some(FastPathKind::SingleBond {
+            pattern_source: bond.source as usize,
+            pattern_target: bond.target as usize,
+            pattern_bond_idx: 0,
+        });
+    }
+
+    None
+}
+
+fn visit_fast_path_matches<F>(
+    target: &Molecule,
+    pattern: &QueryGraph,
+    fast_path: FastPathKind,
+    mut visit: F,
+) where
+    F: FnMut(&[u16]) -> bool,
+{
+    let ring_ctx = if query_graph_needs_ring_context(pattern) {
+        Some(SmartsRingContext::for_molecule(target))
+    } else {
+        None
+    };
+    let recursive_cache = SmartsRecursiveCache::default();
+
+    match fast_path {
+        FastPathKind::SingleAtom => {
+            let mut mapping = [0u16; 1];
+            let query_atom = &pattern.atoms[0];
+            for target_idx in 0..target.atoms.len() {
+                mapping[0] = target_idx as u16;
+                if query_atom_matches_with_cache(
+                    query_atom,
+                    target,
+                    mapping[0],
+                    ring_ctx.as_ref(),
+                    Some(&recursive_cache),
+                ) && !visit(&mapping)
+                {
+                    return;
+                }
+            }
+        }
+        FastPathKind::SingleBond {
+            pattern_source,
+            pattern_target,
+            pattern_bond_idx,
+        } => {
+            let pattern_bond = &pattern.bonds[pattern_bond_idx as usize];
+            let query_source = &pattern.atoms[pattern_source];
+            let query_target = &pattern.atoms[pattern_target];
+            let mut mapping = [u16::MAX; 2];
+
+            for (target_bond_idx, target_bond) in target.bonds.iter().enumerate() {
+                if !pattern_bond.query.matches(target, target_bond_idx as u16) {
+                    continue;
+                }
+
+                let orientations = [
+                    (target_bond.source, target_bond.target),
+                    (target_bond.target, target_bond.source),
+                ];
+
+                for (target_src, target_dst) in orientations {
+                    if !query_atom_matches_with_cache(
+                        query_source,
+                        target,
+                        target_src,
+                        ring_ctx.as_ref(),
+                        Some(&recursive_cache),
+                    ) {
+                        continue;
+                    }
+                    if !query_atom_matches_with_cache(
+                        query_target,
+                        target,
+                        target_dst,
+                        ring_ctx.as_ref(),
+                        Some(&recursive_cache),
+                    ) {
+                        continue;
+                    }
+
+                    mapping[pattern_source] = target_src;
+                    mapping[pattern_target] = target_dst;
+                    if !visit(&mapping) {
+                        return;
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MatchMode {
+    FirstMatch,
+    Enumerate,
+}
+
+#[derive(Debug, Clone)]
+struct SmallTargetGraphCache {
+    n_atoms: usize,
+    bond_lookup: Vec<u16>,
+}
+
+impl SmallTargetGraphCache {
+    fn for_target(target: &Molecule) -> Option<Self> {
+        let n_atoms = target.num_atoms();
+        if n_atoms > 64 {
+            return None;
+        }
+        let mut bond_lookup = vec![u16::MAX; n_atoms * n_atoms];
+        for (bond_idx, bond) in target.bonds.iter().enumerate() {
+            let bond_idx = bond_idx as u16;
+            let src = bond.source as usize;
+            let dst = bond.target as usize;
+            bond_lookup[src * n_atoms + dst] = bond_idx;
+            bond_lookup[dst * n_atoms + src] = bond_idx;
+        }
+        Some(Self {
+            n_atoms,
+            bond_lookup,
+        })
+    }
+
+    #[inline]
+    fn lookup_bond(&self, a: u16, b: u16) -> Option<u16> {
+        let a = a as usize;
+        let b = b as usize;
+        if a >= self.n_atoms || b >= self.n_atoms {
+            return None;
+        }
+        let idx = self.bond_lookup[a * self.n_atoms + b];
+        (idx != u16::MAX).then_some(idx)
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct TargetAtomStats {
+    aromatic_atoms: u16,
+    aliphatic_atoms: u16,
+    aromatic_bonds: u16,
+    ring_bonds: u16,
+}
+
+impl TargetAtomStats {
+    fn from_molecule(target: &Molecule) -> Self {
+        let mut aromatic_atoms = 0u16;
+        let mut aromatic_bonds = 0u16;
+        let mut ring_bonds = 0u16;
+
+        for atom in &target.atoms {
+            if atom.is_aromatic() {
+                aromatic_atoms = aromatic_atoms.saturating_add(1);
+            }
+        }
+
+        for bond in &target.bonds {
+            if bond.is_aromatic() {
+                aromatic_bonds = aromatic_bonds.saturating_add(1);
+            }
+            if bond.is_in_ring() {
+                ring_bonds = ring_bonds.saturating_add(1);
+            }
+        }
+
+        let total_atoms = target.atoms.len().min(u16::MAX as usize) as u16;
+        let aliphatic_atoms = total_atoms.saturating_sub(aromatic_atoms);
+
+        Self {
+            aromatic_atoms,
+            aliphatic_atoms,
+            aromatic_bonds,
+            ring_bonds,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct AtomFastFilter {
+    required_element: Option<u8>,
+    requires_aromatic: bool,
+    requires_aliphatic: bool,
+    required_charge: Option<i8>,
+}
+
+impl AtomFastFilter {
+    #[inline]
+    fn matches_atom(&self, atom: &crate::mol::atom::Atom) -> bool {
+        if let Some(required_element) = self.required_element {
+            if atom.atomic_number != required_element {
+                return false;
+            }
+        }
+        if self.requires_aromatic && !atom.is_aromatic() {
+            return false;
+        }
+        if self.requires_aliphatic && atom.is_aromatic() {
+            return false;
+        }
+        if let Some(required_charge) = self.required_charge {
+            if atom.formal_charge != required_charge {
+                return false;
+            }
+        }
+        true
+    }
 }
 
 /// State for VF2 algorithm.
@@ -73,38 +410,148 @@ struct MatchState<'a> {
     pattern: &'a QueryGraph,
     mapping: Vec<u16>,                 // pattern_idx -> target_idx
     reverse_mapping: Vec<Option<u16>>, // target_idx -> Some(pattern_idx) or None
+    ring_ctx: Option<SmartsRingContext>,
+    recursive_cache: SmartsRecursiveCache,
+    candidate_targets: Vec<Vec<u16>>, // pattern_idx -> candidate target atom idx
+    estimated_candidate_sizes: Vec<usize>,
+    search_order: Vec<usize>,       // search depth -> pattern_idx
+    atom_match_cache: Vec<Vec<u8>>, // 0=unknown, 1=false, 2=true
+    atom_fast_filters: Vec<AtomFastFilter>,
+    small_target_cache: Option<SmallTargetGraphCache>,
+    precomputed_atom_matches: bool,
+    overall_possible: bool,
 }
 
 impl<'a> MatchState<'a> {
-    fn new(target: &'a Molecule, pattern: &'a QueryGraph) -> Self {
+    fn new(target: &'a Molecule, pattern: &'a QueryGraph, mode: MatchMode) -> Self {
+        let ring_ctx = if query_graph_needs_ring_context(pattern) {
+            Some(SmartsRingContext::for_molecule(target))
+        } else {
+            None
+        };
+
+        let target_counts = target_element_counts(target);
+        let target_stats = TargetAtomStats::from_molecule(target);
+        let mut overall_possible = pattern.bonds.len() <= target.bonds.len();
+        if overall_possible {
+            overall_possible = passes_element_screen(pattern, &target_counts, &target_stats);
+        }
+
+        let atom_fast_filters: Vec<AtomFastFilter> = pattern
+            .atoms
+            .iter()
+            .map(|query_atom| AtomFastFilter {
+                required_element: fixed_atomic_number(query_atom),
+                requires_aromatic: query_atom_requires_aromatic(query_atom),
+                requires_aliphatic: query_atom_requires_aliphatic(query_atom),
+                required_charge: query_atom_required_charge(query_atom),
+            })
+            .collect();
+
+        if overall_possible {
+            overall_possible = atom_fast_filters
+                .iter()
+                .all(|filter| !(filter.requires_aromatic && filter.requires_aliphatic));
+        }
+
+        let precomputed_atom_matches = overall_possible && mode == MatchMode::Enumerate;
+
+        let mut candidate_targets = Vec::with_capacity(pattern.atoms.len());
+        let mut estimated_candidate_sizes = Vec::with_capacity(pattern.atoms.len());
+        if precomputed_atom_matches {
+            for (pattern_idx, query_atom) in pattern.atoms.iter().enumerate() {
+                let filter = atom_fast_filters[pattern_idx];
+                let mut candidates = Vec::new();
+                for target_idx in 0..target.atoms.len() {
+                    let target_idx = target_idx as u16;
+                    if !filter.matches_atom(&target.atoms[target_idx as usize]) {
+                        continue;
+                    }
+                    if query_atom_matches_with_context(
+                        query_atom,
+                        target,
+                        target_idx,
+                        ring_ctx.as_ref(),
+                    ) {
+                        candidates.push(target_idx);
+                    }
+                }
+                if candidates.is_empty() {
+                    overall_possible = false;
+                }
+                estimated_candidate_sizes.push(candidates.len());
+                candidate_targets.push(candidates);
+            }
+        } else {
+            candidate_targets.resize(pattern.atoms.len(), Vec::new());
+            estimated_candidate_sizes.extend(pattern.atoms.iter().map(|query_atom| {
+                fixed_atomic_number(query_atom)
+                    .map(|z| target_counts[z as usize] as usize)
+                    .unwrap_or(target.atoms.len())
+            }));
+        }
+
+        let mut search_order: Vec<usize> = (0..pattern.atoms.len()).collect();
+        search_order.sort_by_key(|&pattern_idx| {
+            (
+                estimated_candidate_sizes[pattern_idx],
+                usize::MAX - pattern.adjacency[pattern_idx].len(),
+                pattern_idx,
+            )
+        });
+
+        let atom_match_cache = if precomputed_atom_matches {
+            Vec::new()
+        } else {
+            vec![vec![0u8; target.atoms.len()]; pattern.atoms.len()]
+        };
         Self {
             target,
             pattern,
             mapping: vec![u16::MAX; pattern.atoms.len()],
             reverse_mapping: vec![None; target.atoms.len()],
+            ring_ctx,
+            recursive_cache: SmartsRecursiveCache::default(),
+            candidate_targets,
+            estimated_candidate_sizes,
+            search_order,
+            atom_match_cache,
+            atom_fast_filters,
+            small_target_cache: SmallTargetGraphCache::for_target(target),
+            precomputed_atom_matches,
+            overall_possible,
         }
     }
 
     /// Checks if a pattern atom can be mapped to a target atom.
-    fn is_feasible(&self, pattern_idx: usize, target_idx: u16) -> bool {
+    fn is_feasible(&mut self, pattern_idx: usize, target_idx: u16) -> bool {
         // Check if target atom already mapped
         if self.reverse_mapping[target_idx as usize].is_some() {
             return false;
         }
 
-        // Check atom compatibility
-        if !self.pattern.atoms[pattern_idx].matches(self.target, target_idx) {
+        if !self.atom_fast_filters[pattern_idx].matches_atom(&self.target.atoms[target_idx as usize]) {
             return false;
         }
 
-        // Check bond compatibility with already mapped neighbors
-        for (neighbor_pattern_idx, neighbor_target_idx) in self.mapped_neighbors(pattern_idx) {
-            if !self.check_bond_compatibility(
-                pattern_idx,
-                neighbor_pattern_idx,
-                target_idx,
-                neighbor_target_idx,
-            ) {
+        if !self.precomputed_atom_matches && !self.atom_matches_cached(pattern_idx, target_idx) {
+            return false;
+        }
+
+        // Check bond compatibility with already mapped neighbors.
+        // Iterate adjacency directly to avoid per-call allocation.
+        for &pattern_bond_idx in &self.pattern.adjacency[pattern_idx] {
+            let pattern_bond = &self.pattern.bonds[pattern_bond_idx as usize];
+            let neighbor_pattern_idx = if pattern_bond.source == pattern_idx as u16 {
+                pattern_bond.target as usize
+            } else {
+                pattern_bond.source as usize
+            };
+            let neighbor_target_idx = self.mapping[neighbor_pattern_idx];
+            if neighbor_target_idx == u16::MAX {
+                continue;
+            }
+            if !self.check_bond_compatibility(pattern_bond_idx, target_idx, neighbor_target_idx) {
                 return false;
             }
         }
@@ -112,57 +559,45 @@ impl<'a> MatchState<'a> {
         true
     }
 
-    /// Returns iterator over mapped neighbors of a pattern atom.
-    fn mapped_neighbors(&self, pattern_idx: usize) -> Vec<(usize, u16)> {
-        self.pattern.adjacency[pattern_idx]
-            .iter()
-            .filter_map(|&bond_idx| {
-                let bond = &self.pattern.bonds[bond_idx as usize];
-                let neighbor_idx = if bond.source == pattern_idx as u16 {
-                    bond.target as usize
-                } else {
-                    bond.source as usize
-                };
+    fn atom_matches_cached(&mut self, pattern_idx: usize, target_idx: u16) -> bool {
+        let cached = self.atom_match_cache[pattern_idx][target_idx as usize];
+        if cached == 1 {
+            return false;
+        }
+        if cached == 2 {
+            return true;
+        }
 
-                let mapped_target = self.mapping[neighbor_idx];
-                if mapped_target != u16::MAX {
-                    Some((neighbor_idx, mapped_target))
-                } else {
-                    None
-                }
-            })
-            .collect()
+        let matches = query_atom_matches_with_cache(
+            &self.pattern.atoms[pattern_idx],
+            self.target,
+            target_idx,
+            self.ring_ctx.as_ref(),
+            Some(&self.recursive_cache),
+        );
+        self.atom_match_cache[pattern_idx][target_idx as usize] = if matches { 2 } else { 1 };
+        matches
     }
 
-    /// Checks if bonds between pattern atoms match bonds between target atoms.
-    fn check_bond_compatibility(&self, p1: usize, p2: usize, t1: u16, t2: u16) -> bool {
-        // Find bond in pattern
-        let pattern_bond_idx = self.pattern.adjacency[p1].iter().find(|&&bond_idx| {
-            let bond = &self.pattern.bonds[bond_idx as usize];
-            (bond.source == p1 as u16 && bond.target == p2 as u16)
-                || (bond.target == p1 as u16 && bond.source == p2 as u16)
-        });
-
-        if pattern_bond_idx.is_none() {
-            return false;
-        }
-
-        let pattern_bond_idx = *pattern_bond_idx.unwrap();
+    /// Checks if one pattern bond is compatible with a target bond.
+    fn check_bond_compatibility(&self, pattern_bond_idx: u16, t1: u16, t2: u16) -> bool {
         let pattern_bond = &self.pattern.bonds[pattern_bond_idx as usize];
 
-        // Find bond in target
-        let target_bond_idx = self.target.adjacency[t1 as usize]
-            .iter()
-            .find(|&&bond_idx| {
-                let bond = &self.target.bonds[bond_idx as usize];
-                (bond.source == t1 && bond.target == t2) || (bond.target == t1 && bond.source == t2)
+        let target_bond_idx = self
+            .small_target_cache
+            .as_ref()
+            .and_then(|cache| cache.lookup_bond(t1, t2))
+            .or_else(|| {
+                self.target.adjacency[t1 as usize].iter().copied().find(|&bond_idx| {
+                    let bond = &self.target.bonds[bond_idx as usize];
+                    (bond.source == t1 && bond.target == t2)
+                        || (bond.target == t1 && bond.source == t2)
+                })
             });
 
-        if target_bond_idx.is_none() {
+        let Some(target_bond_idx) = target_bond_idx else {
             return false;
-        }
-
-        let target_bond_idx = *target_bond_idx.unwrap();
+        };
 
         // Check if bond types match
         pattern_bond.query.matches(self.target, target_bond_idx)
@@ -182,23 +617,370 @@ impl<'a> MatchState<'a> {
             self.reverse_mapping[target_idx as usize] = None;
         }
     }
+
+    #[inline]
+    fn pattern_idx_at_depth(&self, depth: usize) -> usize {
+        if self.precomputed_atom_matches {
+            self.search_order[depth]
+        } else {
+            self.select_next_pattern_idx()
+        }
+    }
+
+    fn select_next_pattern_idx(&self) -> usize {
+        let mut best_idx = None;
+        let mut best_has_frontier = false;
+        let mut best_mapped_neighbors = 0usize;
+        let mut best_estimated_candidates = usize::MAX;
+        let mut best_degree = 0usize;
+
+        for &pattern_idx in &self.search_order {
+            if self.mapping[pattern_idx] != u16::MAX {
+                continue;
+            }
+            let mapped_neighbors = self.mapped_neighbor_count(pattern_idx);
+            let has_frontier = mapped_neighbors > 0;
+            let estimated_candidates = self.estimated_candidate_sizes[pattern_idx];
+            let degree = self.pattern.adjacency[pattern_idx].len();
+
+            let better = if best_idx.is_none() {
+                true
+            } else if has_frontier != best_has_frontier {
+                has_frontier
+            } else if mapped_neighbors != best_mapped_neighbors {
+                mapped_neighbors > best_mapped_neighbors
+            } else if estimated_candidates != best_estimated_candidates {
+                estimated_candidates < best_estimated_candidates
+            } else {
+                degree > best_degree
+            };
+
+            if better {
+                best_idx = Some(pattern_idx);
+                best_has_frontier = has_frontier;
+                best_mapped_neighbors = mapped_neighbors;
+                best_estimated_candidates = estimated_candidates;
+                best_degree = degree;
+            }
+        }
+
+        best_idx.unwrap_or(0)
+    }
+
+    fn mapped_neighbor_count(&self, pattern_idx: usize) -> usize {
+        self.pattern.adjacency[pattern_idx]
+            .iter()
+            .filter(|&&pattern_bond_idx| {
+                let pattern_bond = &self.pattern.bonds[pattern_bond_idx as usize];
+                let neighbor_pattern_idx = if pattern_bond.source == pattern_idx as u16 {
+                    pattern_bond.target as usize
+                } else {
+                    pattern_bond.source as usize
+                };
+                self.mapping[neighbor_pattern_idx] != u16::MAX
+            })
+            .count()
+    }
+
+    fn collect_candidates(&self, pattern_idx: usize, out: &mut SmallVec<[u16; 32]>) {
+        out.clear();
+        let fast_filter = self.atom_fast_filters[pattern_idx];
+        if self.precomputed_atom_matches {
+            out.extend(self.candidate_targets[pattern_idx].iter().copied());
+            return;
+        }
+
+        let mut anchor_target = None;
+        let mut anchor_degree = usize::MAX;
+        for &pattern_bond_idx in &self.pattern.adjacency[pattern_idx] {
+            let pattern_bond = &self.pattern.bonds[pattern_bond_idx as usize];
+            let neighbor_pattern_idx = if pattern_bond.source == pattern_idx as u16 {
+                pattern_bond.target as usize
+            } else {
+                pattern_bond.source as usize
+            };
+            let neighbor_target_idx = self.mapping[neighbor_pattern_idx];
+            if neighbor_target_idx == u16::MAX {
+                continue;
+            }
+            let degree = self.target.adjacency[neighbor_target_idx as usize].len();
+            if degree < anchor_degree {
+                anchor_degree = degree;
+                anchor_target = Some(neighbor_target_idx);
+            }
+        }
+
+        if let Some(anchor_target_idx) = anchor_target {
+            for &target_bond_idx in &self.target.adjacency[anchor_target_idx as usize] {
+                let target_bond = &self.target.bonds[target_bond_idx as usize];
+                let candidate = if target_bond.source == anchor_target_idx {
+                    target_bond.target
+                } else {
+                    target_bond.source
+                };
+                if fast_filter.matches_atom(&self.target.atoms[candidate as usize]) {
+                    out.push(candidate);
+                }
+            }
+            return;
+        }
+
+        for target_idx in 0..self.target.atoms.len() {
+            let target_idx = target_idx as u16;
+            if fast_filter.matches_atom(&self.target.atoms[target_idx as usize]) {
+                out.push(target_idx);
+            }
+        }
+    }
+}
+
+fn passes_element_screen(
+    pattern: &QueryGraph,
+    target_counts: &[u16; 119],
+    target_stats: &TargetAtomStats,
+) -> bool {
+    let required_counts = required_element_counts(pattern);
+    if !required_counts
+        .iter()
+        .zip(target_counts.iter())
+        .all(|(required, available)| required <= available)
+    {
+        return false;
+    }
+
+    let required_aromatic_atoms = pattern
+        .atoms
+        .iter()
+        .filter(|atom| query_atom_requires_aromatic(atom))
+        .count() as u16;
+    if required_aromatic_atoms > target_stats.aromatic_atoms {
+        return false;
+    }
+
+    let required_aliphatic_atoms = pattern
+        .atoms
+        .iter()
+        .filter(|atom| query_atom_requires_aliphatic(atom))
+        .count() as u16;
+    if required_aliphatic_atoms > target_stats.aliphatic_atoms {
+        return false;
+    }
+
+    let required_aromatic_bonds = pattern
+        .bonds
+        .iter()
+        .filter(|bond| query_bond_requires_aromatic(&bond.query))
+        .count() as u16;
+    if required_aromatic_bonds > target_stats.aromatic_bonds {
+        return false;
+    }
+
+    let required_ring_bonds = pattern
+        .bonds
+        .iter()
+        .filter(|bond| query_bond_requires_ring(&bond.query))
+        .count() as u16;
+    if required_ring_bonds > target_stats.ring_bonds {
+        return false;
+    }
+
+    true
+}
+
+fn target_element_counts(target: &Molecule) -> [u16; 119] {
+    let mut target_counts = [0u16; 119];
+    for atom in &target.atoms {
+        let idx = atom.atomic_number as usize;
+        if idx < target_counts.len() {
+            target_counts[idx] = target_counts[idx].saturating_add(1);
+        }
+    }
+    target_counts
+}
+
+fn required_element_counts(pattern: &QueryGraph) -> [u16; 119] {
+    let mut required_counts = [0u16; 119];
+    for query_atom in &pattern.atoms {
+        if let Some(element) = fixed_atomic_number(query_atom) {
+            let idx = element as usize;
+            if idx < required_counts.len() {
+                required_counts[idx] = required_counts[idx].saturating_add(1);
+            }
+        }
+    }
+    required_counts
+}
+
+fn fixed_atomic_number(query_atom: &QueryAtom) -> Option<u8> {
+    let mut fixed = None;
+
+    for primitive in &query_atom.primitives {
+        let Some(element) = fixed_atomic_number_primitive(primitive) else {
+            continue;
+        };
+
+        if let Some(prev) = fixed {
+            if prev != element {
+                return None;
+            }
+        } else {
+            fixed = Some(element);
+        }
+    }
+
+    fixed
+}
+
+fn fixed_atomic_number_primitive(primitive: &AtomPrimitive) -> Option<u8> {
+    match primitive {
+        AtomPrimitive::Element(z) | AtomPrimitive::Aromatic(z) | AtomPrimitive::Aliphatic(z) => {
+            Some(*z)
+        }
+        AtomPrimitive::And(requirements) => {
+            let mut fixed = None;
+            for requirement in requirements {
+                let Some(element) = fixed_atomic_number_primitive(requirement) else {
+                    continue;
+                };
+                if let Some(prev) = fixed {
+                    if prev != element {
+                        return None;
+                    }
+                } else {
+                    fixed = Some(element);
+                }
+            }
+            fixed
+        }
+        AtomPrimitive::Or(options) => {
+            let mut options = options.iter().filter_map(fixed_atomic_number_primitive);
+            let first = options.next()?;
+            if options.all(|element| element == first) {
+                Some(first)
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
+}
+
+fn query_atom_required_charge(query_atom: &QueryAtom) -> Option<i8> {
+    let mut required_charge: Option<i8> = None;
+    for primitive in &query_atom.primitives {
+        let Some(charge) = required_charge_from_primitive(primitive) else {
+            continue;
+        };
+        match required_charge {
+            Some(prev) if prev != charge => return None,
+            Some(_) => {}
+            None => required_charge = Some(charge),
+        }
+    }
+    required_charge
+}
+
+fn required_charge_from_primitive(primitive: &AtomPrimitive) -> Option<i8> {
+    match primitive {
+        AtomPrimitive::Charge(c) => Some(*c),
+        AtomPrimitive::And(requirements) => {
+            let mut required = None;
+            for req in requirements {
+                let Some(charge) = required_charge_from_primitive(req) else {
+                    continue;
+                };
+                match required {
+                    Some(prev) if prev != charge => return None,
+                    Some(_) => {}
+                    None => required = Some(charge),
+                }
+            }
+            required
+        }
+        AtomPrimitive::Or(options) => {
+            let mut options = options.iter().filter_map(required_charge_from_primitive);
+            let first = options.next()?;
+            if options.all(|charge| charge == first) {
+                Some(first)
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
+}
+
+fn query_atom_requires_aromatic(query_atom: &QueryAtom) -> bool {
+    query_atom
+        .primitives
+        .iter()
+        .any(atom_primitive_requires_aromatic)
+}
+
+fn query_atom_requires_aliphatic(query_atom: &QueryAtom) -> bool {
+    query_atom
+        .primitives
+        .iter()
+        .any(atom_primitive_requires_aliphatic)
+}
+
+fn atom_primitive_requires_aromatic(primitive: &AtomPrimitive) -> bool {
+    match primitive {
+        AtomPrimitive::AnyAromatic | AtomPrimitive::Aromatic(_) => true,
+        AtomPrimitive::And(requirements) => requirements.iter().any(atom_primitive_requires_aromatic),
+        AtomPrimitive::Or(options) => {
+            !options.is_empty() && options.iter().all(atom_primitive_requires_aromatic)
+        }
+        _ => false,
+    }
+}
+
+fn atom_primitive_requires_aliphatic(primitive: &AtomPrimitive) -> bool {
+    match primitive {
+        AtomPrimitive::AnyAliphatic | AtomPrimitive::Aliphatic(_) => true,
+        AtomPrimitive::And(requirements) => requirements.iter().any(atom_primitive_requires_aliphatic),
+        AtomPrimitive::Or(options) => {
+            !options.is_empty() && options.iter().all(atom_primitive_requires_aliphatic)
+        }
+        _ => false,
+    }
+}
+
+fn query_bond_requires_ring(query_bond: &QueryBond) -> bool {
+    match query_bond {
+        QueryBond::Ring => true,
+        QueryBond::And(parts) => parts.iter().any(query_bond_requires_ring),
+        QueryBond::Or(parts) => !parts.is_empty() && parts.iter().all(query_bond_requires_ring),
+        _ => false,
+    }
+}
+
+fn query_bond_requires_aromatic(query_bond: &QueryBond) -> bool {
+    match query_bond {
+        QueryBond::Aromatic => true,
+        QueryBond::And(parts) => parts.iter().any(query_bond_requires_aromatic),
+        QueryBond::Or(parts) => !parts.is_empty() && parts.iter().all(query_bond_requires_aromatic),
+        _ => false,
+    }
 }
 
 /// VF2 backtracking to find first match.
-fn backtrack(state: &mut MatchState, pattern_idx: usize) -> bool {
+fn backtrack(state: &mut MatchState, depth: usize) -> bool {
     // All pattern atoms mapped - success!
-    if pattern_idx >= state.pattern.atoms.len() {
+    if depth >= state.pattern.atoms.len() {
         return true;
     }
 
-    // Try mapping current pattern atom to each target atom
-    for target_idx in 0..state.target.atoms.len() {
-        let target_idx = target_idx as u16;
+    let pattern_idx = state.pattern_idx_at_depth(depth);
+    let mut candidates = SmallVec::<[u16; 32]>::new();
+    state.collect_candidates(pattern_idx, &mut candidates);
 
+    // Try mapping current pattern atom to each target atom
+    for &target_idx in &candidates {
         if state.is_feasible(pattern_idx, target_idx) {
             state.add_pair(pattern_idx, target_idx);
 
-            if backtrack(state, pattern_idx + 1) {
+            if backtrack(state, depth + 1) {
                 return true;
             }
 
@@ -210,24 +992,74 @@ fn backtrack(state: &mut MatchState, pattern_idx: usize) -> bool {
 }
 
 /// VF2 backtracking to find all matches.
-fn backtrack_all(state: &mut MatchState, pattern_idx: usize, matches: &mut Vec<Vec<u16>>) {
+fn backtrack_all(state: &mut MatchState, depth: usize, matches: &mut Vec<Vec<u16>>) {
     // All pattern atoms mapped - record this match
-    if pattern_idx >= state.pattern.atoms.len() {
+    if depth >= state.pattern.atoms.len() {
         matches.push(state.mapping.clone());
         return;
     }
 
-    // Try mapping current pattern atom to each target atom
-    for target_idx in 0..state.target.atoms.len() {
-        let target_idx = target_idx as u16;
+    let pattern_idx = state.pattern_idx_at_depth(depth);
+    let mut candidates = SmallVec::<[u16; 32]>::new();
+    state.collect_candidates(pattern_idx, &mut candidates);
 
+    // Try mapping current pattern atom to each target atom
+    for &target_idx in &candidates {
         if state.is_feasible(pattern_idx, target_idx) {
             state.add_pair(pattern_idx, target_idx);
-            backtrack_all(state, pattern_idx + 1, matches);
+            backtrack_all(state, depth + 1, matches);
             state.remove_pair(pattern_idx);
         }
     }
 }
+
+/// VF2 backtracking visitor; returns false to stop early.
+fn backtrack_visit<F>(state: &mut MatchState, depth: usize, visit: &mut F) -> bool
+where
+    F: FnMut(&[u16]) -> bool,
+{
+    if depth >= state.pattern.atoms.len() {
+        return visit(&state.mapping);
+    }
+
+    let pattern_idx = state.pattern_idx_at_depth(depth);
+    let mut candidates = SmallVec::<[u16; 32]>::new();
+    state.collect_candidates(pattern_idx, &mut candidates);
+
+    for &target_idx in &candidates {
+        if state.is_feasible(pattern_idx, target_idx) {
+            state.add_pair(pattern_idx, target_idx);
+            let should_continue = backtrack_visit(state, depth + 1, visit);
+            state.remove_pair(pattern_idx);
+            if !should_continue {
+                return false;
+            }
+        }
+    }
+
+    true
+}
+
+/// VF2 backtracking count optimized for full enumeration.
+fn backtrack_count(state: &mut MatchState, depth: usize, count: &mut usize) {
+    if depth >= state.pattern.atoms.len() {
+        *count += 1;
+        return;
+    }
+
+    let pattern_idx = state.pattern_idx_at_depth(depth);
+    let mut candidates = SmallVec::<[u16; 32]>::new();
+    state.collect_candidates(pattern_idx, &mut candidates);
+
+    for &target_idx in &candidates {
+        if state.is_feasible(pattern_idx, target_idx) {
+            state.add_pair(pattern_idx, target_idx);
+            backtrack_count(state, depth + 1, count);
+            state.remove_pair(pattern_idx);
+        }
+    }
+}
+
 
 /// Helper to create simple query graphs for testing.
 impl QueryGraph {
@@ -259,7 +1091,7 @@ impl QueryGraph {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::io::smarts::QueryBond;
+    use crate::io::smarts::{QueryBond, parse_smarts};
     use crate::io::smiles::parse_smiles;
 
     #[test]
@@ -317,6 +1149,52 @@ mod tests {
     }
 
     #[test]
+    fn test_has_at_least_matches_thresholds() {
+        let mol = parse_smiles("CCCC").unwrap();
+        let carbon = QueryGraph::single_atom(6);
+        assert!(has_at_least_matches(&mol, &carbon, 0));
+        assert!(has_at_least_matches(&mol, &carbon, 1));
+        assert!(has_at_least_matches(&mol, &carbon, 4));
+        assert!(!has_at_least_matches(&mol, &carbon, 5));
+
+        let cc_bond = QueryGraph::two_atoms(6, 6, QueryBond::Single);
+        assert!(has_at_least_matches(&mol, &cc_bond, 6));
+        assert!(!has_at_least_matches(&mol, &cc_bond, 7));
+    }
+
+    #[test]
+    fn test_visit_matches_early_stop() {
+        let mol = parse_smiles("CCCC").unwrap();
+        let pattern = QueryGraph::single_atom(6);
+        let mut visited = 0usize;
+
+        visit_matches(&mol, &pattern, |_| {
+            visited += 1;
+            visited < 2
+        });
+
+        assert_eq!(visited, 2);
+    }
+
+    #[test]
+    fn test_visit_matches_empty_pattern_once() {
+        let mol = parse_smiles("CC").unwrap();
+        let empty = QueryGraph {
+            atoms: vec![],
+            bonds: vec![],
+            adjacency: vec![],
+        };
+
+        let mut visited = 0usize;
+        visit_matches(&mol, &empty, |_| {
+            visited += 1;
+            true
+        });
+
+        assert_eq!(visited, 1);
+    }
+
+    #[test]
     fn test_double_bond_match() {
         let mol = parse_smiles("C=C").unwrap(); // Ethene
 
@@ -363,5 +1241,17 @@ mod tests {
         let target = &mol;
         assert_eq!(target.atoms[mapping[0] as usize].atomic_number, 6); // Carbon
         assert_eq!(target.atoms[mapping[1] as usize].atomic_number, 8); // Oxygen
+    }
+
+    #[test]
+    fn test_ring_size_and_membership_primitives() {
+        let mut mol = parse_smiles("C1CCCCC1").unwrap();
+        crate::algo::rings::find_sssr(&mut mol);
+
+        let membership = parse_smarts("[CR1]").unwrap();
+        assert_eq!(count_matches(&mol, &membership), 6);
+
+        let ring_size = parse_smarts("[C;r6]").unwrap();
+        assert_eq!(count_matches(&mol, &ring_size), 6);
     }
 }

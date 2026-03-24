@@ -9,31 +9,10 @@
 //! Reference: Randić, M. (1993) "Novel graph theoretical approach to
 //!            heteroatoms in QSAR", Chemometrics & Intell. Lab. Systems.
 
+use super::atomic_props::{atomic_mass, pauling_electronegativity};
 use super::typed::{Descriptor, DescriptorValue};
 use crate::mol::molecule::Molecule;
 use crate::types::AtomIdx;
-
-fn atomic_mass(an: u8) -> f64 {
-    crate::mol::elements::ATOMIC_MASSES[an as usize] as f64
-}
-
-fn electronegativity(an: u8) -> f64 {
-    match an {
-        1 => 2.20,
-        5 => 2.04,
-        6 => 2.55,
-        7 => 3.04,
-        8 => 3.44,
-        9 => 3.98,
-        14 => 1.90,
-        15 => 2.19,
-        16 => 2.58,
-        17 => 3.16,
-        35 => 2.96,
-        53 => 2.66,
-        _ => 2.00,
-    }
-}
 
 const MAX_PATH_LEN: usize = 5;
 
@@ -104,7 +83,7 @@ impl Descriptor for WeightedPath {
         "WeightedPath"
     }
 
-    fn calculate(&self, mol: &mut Molecule) -> DescriptorValue {
+    fn calculate(&self, mol: &mut Molecule, ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
         let mut values = vec![0.0f32; MAX_PATH_LEN * 2];
 
         let n = mol.num_atoms();
@@ -116,7 +95,7 @@ impl Descriptor for WeightedPath {
             .map(|i| atomic_mass(mol.atoms[i].atomic_number))
             .collect();
         let w_en: Vec<f64> = (0..n)
-            .map(|i| electronegativity(mol.atoms[i].atomic_number))
+            .map(|i| pauling_electronegativity(mol.atoms[i].atomic_number))
             .collect();
 
         let wp_mass = weighted_paths(mol, &w_mass);
@@ -144,7 +123,7 @@ mod tests {
 
     fn calc_wp(smiles: &str) -> Vec<f32> {
         let mut mol = parse_smiles(smiles).expect("valid SMILES");
-        match WeightedPath.calculate(&mut mol) {
+        match WeightedPath.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()) {
             DescriptorValue::FloatVec(v) => v,
             other => panic!("expected FloatVec, got {:?}", other),
         }

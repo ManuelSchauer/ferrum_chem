@@ -21,7 +21,51 @@ Current parity validation is run in `--release` mode and is now descriptor-local
 - Highest-value non-Ipc cleanup: fused heteroaromatic `CNP0594395.1` aromaticity/ring/HBA/amide/VSA cascade
 - Exact `Ipc` emulation is currently deferred for ML use because the mismatch appears NumPy/Accelerate-specific rather than chemical
 
-The detailed phase-by-phase implementation history remains below; the immediate roadmap is now focused on those remaining descriptor mismatches before returning to broader platform work like the TUI and infrastructure phases.
+The detailed phase-by-phase implementation history remains below; the immediate roadmap is now performance-first (deep refactors) while keeping the remaining descriptor mismatches as secondary correctness backlog items.
+
+## March 2026 Performance Baseline & Optimization Roadmap
+
+With descriptor accuracy now above 99% on the broader RDKit audits, the execution focus can shift from chemistry closure to performance work as long as the release-mode parity baseline stays green.
+
+### Current single-thread benchmark baseline
+
+Matched FerrumChem vs RDKit benchmark for the current 57-output scalar+VSA bundle (1000 iterations, repeated median runs, Apple Silicon, single-threaded):
+
+| Case | Heavy atoms | FerrumChem | RDKit | Relative result |
+|------|-------------|------------|-------|-----------------|
+| Ethane | 2 | 205,435.49 mol/s | 4,774.64 mol/s | FerrumChem 43.03x faster |
+| Aspirin | 13 | 15,532.97 mol/s | 1,874.80 mol/s | FerrumChem 8.29x faster |
+| Caffeine | 14 | 11,284.21 mol/s | 1,767.66 mol/s | FerrumChem 6.38x faster |
+| Large drug-like amide | 30 | 3,567.89 mol/s | 862.07 mol/s | FerrumChem 4.14x faster |
+
+Detailed audit and optimization notes are tracked in `process_documentatation/PERFORMANCE_OPTIMIZATION_PLAN.md`.
+
+### Immediate performance priorities
+
+1. **Wave 1 — shared caches and fused descriptor work (low risk)**
+   - Cache Gasteiger charges, Labute VSA contributions, Crippen atom typing, and graph/ring summaries in `Molecule`
+   - Fuse the VSA family so `SlogP_VSA`, `SMR_VSA`, `PEOE_VSA`, and `LabuteASA` share the same expensive intermediates
+   - Preallocate descriptor output vectors in `build_ml_vector()`
+   - **Expected gain**: roughly **1.25x to 1.5x** overall on common descriptor workloads
+
+2. **Wave 2 — matcher, path, and graph infrastructure refactors (medium risk)**
+   - Add threshold-limited SMARTS matching APIs so MACCS/PubChem/QED/function-group style checks stop materializing all matches
+   - Share distance-matrix infrastructure across Wiener / Balaban / ATS / MDE / eccentricity / Petitjean families
+   - Rewrite path enumeration in Chi / weighted-path / path fingerprints to avoid map/cloning churn
+   - **Expected gain**: roughly **1.5x to 2.5x total** after Wave 1 + Wave 2 are both in place
+
+3. **Wave 3 — SIMD and numeric-kernel work (higher effort)**
+   - SIMD parser/token classification
+   - word-wise fingerprint bit operations / popcount
+   - data-oriented Gasteiger/Labute loops
+   - in-place or accelerated kernels for BCUT / BertzCT / future numeric hot paths
+   - **Expected gain**: usually another **5% to 20%** on the main descriptor bundle, with larger wins on specific kernels
+
+### Performance guardrails
+
+- Keep the current matched benchmark as the regression baseline for this phase
+- Rerun release-mode parity suites after each performance wave
+- Do not accept optimizations that only improve parser-only microbenchmarks while worsening larger VSA/Gasteiger-heavy molecules
 
 ## Project Structure
 
@@ -446,11 +490,12 @@ Before tackling Gasteiger charges (2 weeks) or 3D conformers (3 weeks), we have 
 5. **Rayon parallelism**: Automatic work stealing
 
 ### Future Optimizations
-1. **SIMD for parsing**: Vectorized character classification
-2. **Arena allocation**: Bulk molecule allocation for parsers
-3. **Memory pooling**: Reuse molecule buffers
-4. **Cache-oblivious algorithms**: Better CPU cache utilization
-5. **Profile-guided optimization (PGO)**: With real-world datasets
+1. **Shared per-molecule caches**: Gasteiger charges, Labute VSA, Crippen typing, ring summaries, weighted/unweighted distance matrices
+2. **Fused descriptor bundles**: especially the VSA/charge/logP family to remove recomputation
+3. **Threshold-limited SMARTS APIs**: boolean and “at least N” matching without building all mappings
+4. **Path and graph traversal rewrites**: marker arrays / bitsets instead of repeated `Vec` membership checks and map cloning
+5. **Traversal-oriented adjacency layout**: store neighbor atom indices alongside bond indices
+6. **Selective SIMD and backend acceleration**: parser tokenization, fingerprint popcount, BCUT/other numeric kernels, plus PGO after the structural wins land
 
 ## Scientific Extensions & Ideas
 
@@ -655,8 +700,9 @@ Before tackling Gasteiger charges (2 weeks) or 3D conformers (3 weeks), we have 
 **Last Updated**: March 2026  
 **Status**: Phase 13 complete; RDKit parity push now at 500-row scalar **99.78%**, ring **100.0%**, VSA **100.0%**, Chi/Kappa **100.0%** and 1000-row scalar **99.75%**, ring **99.95%**, VSA **99.97%**, Chi/Kappa **100.0%**  
 **Validation**: release-mode parser / SMARTS / descriptor suites plus RDKit scalar, ring, VSA, and Chi/Kappa parity runs and 1000-row audits ✅  
+**Performance Snapshot (single-thread, current median band)**: Ferrum CSV-1000 ~**2.5k mol/s** vs RDKit ~**0.63k mol/s**; parity cases currently show Ferrum ahead on Ethane/Aspirin/Caffeine/LargeDruglike  
 **Descriptors**: 72 implementations, 17,710+ dimensions  
 **ML Pipeline**: QsarDataset, Scalers, PCA, k-NN, RF, PLS, ElasticNet, ART-2A, AD, QsarPipeline, AutoQsar, CV, Metrics  
 **API**: Single `Descriptor` trait with `DescriptorValue` enum returns  
-**Next Priority**: Close the fused heteroaromatic `CNP0594395.1` cluster before resuming Phase 14; keep exact **Ipc** emulation deferred unless exact RDKit parity becomes a hard requirement  
+**Next Priority**: Execute deep performance refactors while preserving the release-mode parity baseline: (1) descriptor context + thread-local workspaces (`rayon::map_init`), (2) unified unweighted/weighted distance-kernel backend shared across descriptor families, (3) SMARTS specialization for fixed pattern sets (QED/MACCS/PubChem)  
 **Code**: ~20,500+ lines Rust

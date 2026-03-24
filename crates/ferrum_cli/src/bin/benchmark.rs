@@ -52,7 +52,7 @@ fn main() {
         let start = Instant::now();
         let mut mw_val = 0.0f32;
         for _ in 0..iterations {
-            mw_val = descriptor.calculate(&mut mol).as_float();
+            mw_val = descriptor.calculate(&mut mol, &mut ferrum_core::desc::context::CalculationContext::new()).as_float();
         }
 
         let duration = start.elapsed();
@@ -73,7 +73,7 @@ fn main() {
         let mut last_mw = 0.0f32;
         for _ in 0..iterations {
             let mut mol = parse_smiles(smiles).unwrap();
-            last_mw = descriptor.calculate(&mut mol).as_float();
+            last_mw = descriptor.calculate(&mut mol, &mut ferrum_core::desc::context::CalculationContext::new()).as_float();
         }
         let _ = last_mw;
 
@@ -97,7 +97,7 @@ fn main() {
 
         for _ in 0..size {
             let mut mol = parse_smiles(sample_smiles).unwrap();
-            descriptor.calculate(&mut mol);
+            descriptor.calculate(&mut mol, &mut ferrum_core::desc::context::CalculationContext::new());
         }
 
         let duration = start.elapsed();
