@@ -509,7 +509,7 @@ struct SmartsParser {
     atoms: Vec<QueryAtom>,
     bonds: Vec<QueryGraphBond>,
     adjacency: Vec<SmallVec<[u16; 4]>>,
-    ring_closures: std::collections::HashMap<u32, (u16, Option<QueryBond>)>,
+    ring_closures: [Option<(u16, Option<QueryBond>)>; 10],
 }
 
 impl SmartsParser {
@@ -520,7 +520,7 @@ impl SmartsParser {
             atoms: Vec::new(),
             bonds: Vec::new(),
             adjacency: Vec::new(),
-            ring_closures: std::collections::HashMap::new(),
+            ring_closures: [const { None }; 10],
         }
     }
 
@@ -536,7 +536,7 @@ impl SmartsParser {
         self.parse_chain()?;
 
         // Check for unclosed ring closures
-        if !self.ring_closures.is_empty() {
+        if self.ring_closures.iter().any(|r| r.is_some()) {
             return Err(format!("Unclosed ring closures"));
         }
 
@@ -1175,12 +1175,14 @@ impl SmartsParser {
             let first_ch = self.input[self.pos];
             if first_ch.is_alphabetic()
                 && (first_ch.is_uppercase()
+                    || first_ch == 'b'
                     || first_ch == 'a'
                     || first_ch == 'c'
                     || first_ch == 'n'
                     || first_ch == 'o'
                     || first_ch == 'p'
-                    || first_ch == 's')
+                    || first_ch == 's'
+                    || first_ch == 't')
             {
                 element.push(first_ch);
                 self.pos += 1;
@@ -1224,7 +1226,12 @@ impl SmartsParser {
             Ok(AtomPrimitive::Charge(-1))
         } else {
             let is_aromatic = element.chars().next().unwrap().is_lowercase();
-            let symbol = if is_aromatic {
+            // Preserve lowercase aromatic two-letter symbols like [se], [as], [te].
+            // Uppercasing them would produce "SE"/"AS"/"TE", which are not valid
+            // element symbols in `symbol_to_atomic_number()`.
+            let symbol = if is_aromatic && element.len() > 1 {
+                element
+            } else if is_aromatic {
                 element.to_uppercase()
             } else {
                 element
@@ -1292,7 +1299,7 @@ impl SmartsParser {
             let ring_num = (self.input[self.pos] as u32) - ('0' as u32);
             self.pos += 1;
 
-            if let Some((prev_idx, stored_bond)) = self.ring_closures.remove(&ring_num) {
+            if let Some((prev_idx, stored_bond)) = self.ring_closures[ring_num as usize].take() {
                 // Closing a ring - determine bond type:
                 // 1. Use pending_bond if specified (from current position, e.g., ~1)
                 // 2. Otherwise use stored_bond (from opening position)
@@ -1305,8 +1312,7 @@ impl SmartsParser {
             } else {
                 // Opening a ring closure - store the pending bond type for later
                 let bond_to_store = pending_bond.take();
-                self.ring_closures
-                    .insert(ring_num, (atom_idx, bond_to_store));
+                self.ring_closures[ring_num as usize] = Some((atom_idx, bond_to_store));
             }
         }
 
@@ -1715,6 +1721,14 @@ mod smarts_advanced_tests {
             pattern3.is_ok(),
             "Should parse [Ag,Au,Hg]: {:?}",
             pattern3.err()
+        );
+
+        // Aromatic two-letter elements used by RDKit QED alerts.
+        let aromatic_two = parse_smarts("[se,as,te]");
+        assert!(
+            aromatic_two.is_ok(),
+            "Should parse aromatic two-letter elements [se,as,te]: {:?}",
+            aromatic_two.err()
         );
     }
 

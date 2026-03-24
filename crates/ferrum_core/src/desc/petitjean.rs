@@ -77,14 +77,14 @@ pub fn calculate(mol: &mut Molecule, ctx: &mut crate::desc::context::Calculation
     // Calculate eccentricity for each atom
     let mut eccentricities = Vec::with_capacity(n);
     for i in 0..n {
-        let mut max_dist = 0u32;
+        let mut max_dist = 0u8;
         for j in 0..n {
             let d = dist[i * n + j];
-            if d != u32::MAX && d > max_dist {
+            if d != 255 && d > max_dist {
                 max_dist = d;
             }
         }
-        eccentricities.push(max_dist);
+        eccentricities.push(max_dist as u32);
     }
 
     // Radius = min eccentricity, Diameter = max eccentricity

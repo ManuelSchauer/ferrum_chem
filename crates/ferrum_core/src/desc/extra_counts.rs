@@ -387,9 +387,7 @@ fn pack_bertz_triple_key(class_a: usize, class_b: usize, class_c: usize) -> u64 
     (1u64 << 62) | ((class_a as u64) << 32) | ((class_b as u64) << 16) | class_c as u64
 }
 
-fn compute_bertz_ct(mol: &mut Molecule) -> f32 {
-    use std::collections::HashMap;
-
+fn compute_bertz_ct(mol: &mut Molecule, ctx: &mut crate::desc::context::CalculationContext) -> f32 {
     let n = mol.num_atoms();
     if n < 2 {
         return 0.0;
@@ -397,13 +395,9 @@ fn compute_bertz_ct(mol: &mut Molecule) -> f32 {
 
     // Step 1: Build an adjacency list that carries the effective bond-order weight used by
     // Bertz connection counting.
-    //
-    // Why this shape:
-    // - SmallVec keeps common valence (<=4) neighbor lists on stack and avoids heap churn.
-    // - Storing BO next to the neighbor index avoids a second map lookup inside the hot loop.
-    // - Neighbor ordering is intentionally left as insertion order; all downstream accumulation
-    //   logic is commutative and does not require sorted neighbors.
-    let mut neighbors: Vec<SmallVec<[(usize, f64); 4]>> = vec![SmallVec::new(); n];
+    let neighbors = &mut ctx.weighted_neighbors;
+    neighbors.clear();
+    neighbors.resize(n, SmallVec::new());
 
     for bond in &mol.bonds {
         let a1 = bond.source as usize;
@@ -414,7 +408,7 @@ fn compute_bertz_ct(mol: &mut Molecule) -> f32 {
             match bond.bond_type {
                 BondType::Double => 2.0,
                 BondType::Triple => 3.0,
-                BondType::Dative => 17.0, // Matches RDKit: float(BondType.DATIVE) = 17
+                BondType::Dative => 17.0,
                 _ => 1.0,
             }
         };
@@ -423,17 +417,20 @@ fn compute_bertz_ct(mol: &mut Molecule) -> f32 {
     }
 
     // Step 2: Symmetry classes from bond-order-weighted distance matrix.
-    //
-    // We intentionally derive classes from sorted BO-distance signatures (RDKit-like behavior).
-    // The reusable buffers below avoid per-atom heap allocations while preserving exact logic.
     super::balaban::ensure_bo_distance_matrix_cached(mol);
     let bo_dist = super::balaban::cached_bo_distance_matrix_ref(mol)
         .expect("Balaban BO distance cache initialized");
-    let mut sym_classes = vec![0usize; n];
+        
+    ctx.bfs_dist.clear();
+    ctx.bfs_dist.resize(n, 0);
+    let sym_classes = &mut ctx.bfs_dist;
     let cutoff = n.min(100);
-    let mut class_by_key: HashMap<SmallVec<[i32; 64]>, usize> = HashMap::with_capacity(n);
+    
+    let mut class_by_key: std::collections::HashMap<SmallVec<[i32; 64]>, usize> = 
+        std::collections::HashMap::with_capacity(n);
     let mut next_class = 1usize;
-    let mut sorted_distances = Vec::with_capacity(n);
+    
+    let sorted_distances = &mut ctx.vec_a;
     let mut key_buf = SmallVec::<[i32; 64]>::new();
     for i in 0..n {
         sorted_distances.clear();
@@ -447,7 +444,6 @@ fn compute_bertz_ct(mol: &mut Molecule) -> f32 {
                 .take(cutoff)
                 .map(|x| (x * 10_000.0).round() as i32),
         );
-
         let class = if let Some(&class) = class_by_key.get(&key_buf) {
             class
         } else {
@@ -567,7 +563,7 @@ impl Descriptor for BertzCT {
     }
 
     fn calculate(&self, mol: &mut Molecule, ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
-        DescriptorValue::Float(compute_bertz_ct(mol))
+        DescriptorValue::Float(compute_bertz_ct(mol, ctx))
     }
 }
 
@@ -600,15 +596,28 @@ fn shannon_entropy(counts: &[u32]) -> f64 {
 /// Reference: D. Bonchev & N. Trinajstic, J. Chem. Phys. 67, 4517-4533 (1977)
 pub struct Ipc;
 
-fn compute_ipc(mol: &Molecule) -> f64 {
+fn compute_ipc(mol: &Molecule, ctx: &mut crate::desc::context::CalculationContext) -> f64 {
     let n = mol.num_atoms();
     if n < 2 {
         return 0.0;
     }
 
-    // Build simple adjacency matrix (unweighted graph).
-    // Use direct bond connectivity instead of distance reconstruction.
-    let mut adj = vec![0.0f64; n * n];
+    let n2 = n * n;
+    
+    // Borrow context buffers
+    ctx.mat_a.clear(); ctx.mat_a.resize(n2, 0.0);
+    ctx.mat_b.clear(); ctx.mat_b.resize(n2, 0.0);
+    ctx.mat_c.clear(); ctx.mat_c.resize(n2, 0.0);
+    ctx.mat_d.clear(); ctx.mat_d.resize(n2, 0.0);
+    ctx.vec_a.clear(); ctx.vec_a.resize(n + 1, 0.0);
+    
+    let adj = &mut ctx.mat_a;
+    let mut an = &mut ctx.mat_b;
+    let mut bn = &mut ctx.mat_c;
+    let mut next = &mut ctx.mat_d;
+    let cpoly = &mut ctx.vec_a;
+
+    // Build simple adjacency matrix
     for bond in &mol.bonds {
         let i = bond.source as usize;
         let j = bond.target as usize;
@@ -616,34 +625,24 @@ fn compute_ipc(mol: &Molecule) -> f64 {
         adj[j * n + i] = 1.0;
     }
 
-    // Characteristic polynomial via Le Verrier-Faddeev-Frame
-    let mut cpoly = vec![0.0f64; n + 1];
     cpoly[0] = 1.0;
-
-    // an = current matrix power (A^n in the recurrence)
-    let mut an = adj.clone();
+    an.copy_from_slice(adj);
 
     for k in 1..=n {
-        // res[k] = (1/k) * trace(an)
         let mut trace = 0.0f64;
         for i in 0..n {
             trace += an[i * n + i];
         }
-        cpoly[k] = trace / k as f64;
+        let ck = trace / k as f64;
+        cpoly[k] = ck;
 
-        // bn = an - cpoly[k] * I
-        let mut bn = an.clone();
+        bn.copy_from_slice(an);
         for i in 0..n {
-            bn[i * n + i] -= cpoly[k];
+            bn[i * n + i] -= ck;
         }
 
-        // an = A * bn (matrix multiplication)
-        //
-        // Loop order is intentionally i-l-j (instead of i-j-l) so we walk bn
-        // rows and next rows contiguously in memory, which improves cache
-        // locality in this O(n^3) kernel.
         if k < n {
-            let mut next = vec![0.0f64; n * n];
+            next.fill(0.0);
             for i in 0..n {
                 let row = i * n;
                 for l in 0..n {
@@ -657,21 +656,31 @@ fn compute_ipc(mol: &Molecule) -> f64 {
                     }
                 }
             }
-            an = next;
+            std::mem::swap(&mut an, &mut next);
         }
     }
 
-    // Negate coefficients 1..n (as per the algorithm)
+    // Negate coefficients 1..n
     for i in 1..=n {
         cpoly[i] = -cpoly[i];
     }
 
-    // Take absolute values
-    let abs_cpoly: Vec<f64> = cpoly.iter().map(|&x| x.abs()).collect();
+    let mut total = 0.0;
+    for &c in cpoly.iter() {
+        total += c.abs();
+    }
 
-    // Ipc = sum(|coeffs|) * InfoEntropy(|coeffs|)
-    let total: f64 = abs_cpoly.iter().sum();
-    let ie = info_entropy(&abs_cpoly);
+    let mut ie = 0.0;
+    if total > 0.0 {
+        for &c in cpoly.iter() {
+            let ac = c.abs();
+            if ac > 0.0 {
+                let p = ac / total;
+                ie -= p * p.log2();
+            }
+        }
+    }
+
     total * ie
 }
 
@@ -681,7 +690,7 @@ impl Descriptor for Ipc {
     }
 
     fn calculate(&self, mol: &mut Molecule, ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
-        DescriptorValue::Float64(compute_ipc(mol))
+        DescriptorValue::Float64(compute_ipc(mol, ctx))
     }
 }
 

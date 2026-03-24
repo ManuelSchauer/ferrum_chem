@@ -148,10 +148,17 @@ fn bond_scale_factor(bond: &crate::mol::bond::Bond) -> f64 {
 ///   Vi[i] = 4π·Ri² − π·Ri·Σoverlap
 ///
 /// Returns (heavy_atom_vsa, h_contribution).
-fn compute_labute_contribs_uncached(mol: &Molecule) -> (Vec<f64>, f64) {
+fn compute_labute_contribs_uncached<'a>(
+    mol: &Molecule,
+    ctx: &'a mut crate::desc::context::CalculationContext,
+) -> (&'a [f64], f64) {
     let n = mol.atoms.len();
-    // overlap_sum[i] accumulates overlap for each heavy atom
-    let mut overlap = vec![0.0f64; n];
+    ctx.vec_a.clear();
+    ctx.vec_a.resize(n, 0.0);
+    ctx.vec_b.clear();
+    ctx.vec_b.resize(n, 0.0);
+
+    let overlap = &mut ctx.vec_a;
     let mut h_overlap = 0.0f64;
 
     let r_h = rb0_radius(1);
@@ -191,7 +198,7 @@ fn compute_labute_contribs_uncached(mol: &Molecule) -> (Vec<f64>, f64) {
     }
 
     // Convert overlap sums to surface area contributions
-    let mut vsa = vec![0.0f64; n];
+    let vsa = &mut ctx.vec_b;
     for i in 0..n {
         let ai = mol.atoms[i].atomic_number;
         if ai <= 1 {
@@ -205,24 +212,23 @@ fn compute_labute_contribs_uncached(mol: &Molecule) -> (Vec<f64>, f64) {
     (vsa, h_contrib)
 }
 
-fn compute_labute_contribs(mol: &Molecule) -> (Vec<f64>, f64) {
-    compute_labute_contribs_uncached(mol)
+fn compute_labute_contribs(
+    mol: &Molecule,
+    ctx: &mut crate::desc::context::CalculationContext,
+) -> (Vec<f64>, f64) {
+    let (vsa, h) = compute_labute_contribs_uncached(mol, ctx);
+    (vsa.to_vec(), h)
 }
 
-fn ensure_labute_contribs_cached(mol: &mut Molecule) {
+fn ensure_labute_contribs_cached(
+    mol: &mut Molecule,
+    ctx: &mut crate::desc::context::CalculationContext,
+) {
     if !*LABUTE_CACHE_ENABLED || mol.cached_labute_contribs().is_some() {
         return;
     }
-    let (atom_vsa, h_contrib) = compute_labute_contribs_uncached(mol);
-    mol.store_labute_contribs(atom_vsa, h_contrib);
-}
-
-fn compute_labute_contribs_cached(mol: &mut Molecule) -> (Vec<f64>, f64) {
-    ensure_labute_contribs_cached(mol);
-    if let Some((atom_vsa, h_contrib)) = mol.cached_labute_contribs() {
-        return (atom_vsa.to_vec(), h_contrib);
-    }
-    compute_labute_contribs_uncached(mol)
+    let (atom_vsa, h_contrib) = compute_labute_contribs_uncached(mol, ctx);
+    mol.store_labute_contribs(atom_vsa.to_vec(), h_contrib);
 }
 
 // ---------------------------------------------------------------------------
@@ -266,14 +272,18 @@ fn fill_binned_vsa(
     }
 }
 
-pub(crate) fn fill_slogp_vsa_into(mol: &mut Molecule, out: &mut [f32]) {
+pub(crate) fn fill_slogp_vsa_into(
+    mol: &mut Molecule,
+    out: &mut [f32],
+    ctx: &mut crate::desc::context::CalculationContext,
+) {
     assert_eq!(
         out.len(),
         SLOGP_BINS.len(),
         "SlogP_VSA output length mismatch"
     );
 
-    ensure_labute_contribs_cached(mol);
+    ensure_labute_contribs_cached(mol, ctx);
     ensure_crippen_atom_contributions_cached(mol);
     if let (Some((atom_vsa, _)), Some((logp_contrib, _))) = (
         mol.cached_labute_contribs(),
@@ -283,9 +293,9 @@ pub(crate) fn fill_slogp_vsa_into(mol: &mut Molecule, out: &mut [f32]) {
         return;
     }
 
-    let (atom_vsa, _) = compute_labute_contribs_uncached(mol);
     let (logp_contrib, _) = crippen_atom_contributions(mol);
-    fill_binned_vsa(mol, &logp_contrib, &atom_vsa, &SLOGP_BINS, out);
+    let (atom_vsa, _) = compute_labute_contribs_uncached(mol, ctx);
+    fill_binned_vsa(mol, &logp_contrib, atom_vsa, &SLOGP_BINS, out);
 }
 
 impl Descriptor for SlogpVSA {
@@ -295,7 +305,7 @@ impl Descriptor for SlogpVSA {
 
     fn calculate(&self, mol: &mut Molecule, ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
         let mut values = vec![0.0f32; 12];
-        fill_slogp_vsa_into(mol, &mut values);
+        fill_slogp_vsa_into(mol, &mut values, ctx);
         DescriptorValue::FloatVec(values)
     }
 }
@@ -322,10 +332,14 @@ const SMR_BINS: [f64; 10] = [
     f64::INFINITY,
 ];
 
-pub(crate) fn fill_smr_vsa_into(mol: &mut Molecule, out: &mut [f32]) {
+pub(crate) fn fill_smr_vsa_into(
+    mol: &mut Molecule,
+    out: &mut [f32],
+    ctx: &mut crate::desc::context::CalculationContext,
+) {
     assert_eq!(out.len(), SMR_BINS.len(), "SMR_VSA output length mismatch");
 
-    ensure_labute_contribs_cached(mol);
+    ensure_labute_contribs_cached(mol, ctx);
     ensure_crippen_atom_contributions_cached(mol);
     if let (Some((atom_vsa, _)), Some((_, mr_contrib))) = (
         mol.cached_labute_contribs(),
@@ -335,9 +349,9 @@ pub(crate) fn fill_smr_vsa_into(mol: &mut Molecule, out: &mut [f32]) {
         return;
     }
 
-    let (atom_vsa, _) = compute_labute_contribs_uncached(mol);
     let (_, mr_contrib) = crippen_atom_contributions(mol);
-    fill_binned_vsa(mol, &mr_contrib, &atom_vsa, &SMR_BINS, out);
+    let (atom_vsa, _) = compute_labute_contribs_uncached(mol, ctx);
+    fill_binned_vsa(mol, &mr_contrib, atom_vsa, &SMR_BINS, out);
 }
 
 impl Descriptor for SmrVSA {
@@ -347,7 +361,7 @@ impl Descriptor for SmrVSA {
 
     fn calculate(&self, mol: &mut Molecule, ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
         let mut values = vec![0.0f32; 10];
-        fill_smr_vsa_into(mol, &mut values);
+        fill_smr_vsa_into(mol, &mut values, ctx);
         DescriptorValue::FloatVec(values)
     }
 }
@@ -367,11 +381,11 @@ impl Descriptor for LabuteASA {
     }
 
     fn calculate(&self, mol: &mut Molecule, ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
-        ensure_labute_contribs_cached(mol);
+        ensure_labute_contribs_cached(mol, ctx);
         let (total, h_contrib) = if let Some((vsa, h_contrib)) = mol.cached_labute_contribs() {
             (vsa.iter().sum::<f64>(), h_contrib)
         } else {
-            let (vsa, h_contrib) = compute_labute_contribs_uncached(mol);
+            let (vsa, h_contrib) = compute_labute_contribs_uncached(mol, ctx);
             (vsa.iter().sum::<f64>(), h_contrib)
         };
         DescriptorValue::Float((total + h_contrib) as f32)
@@ -404,14 +418,18 @@ const PEOE_BINS: [f64; 14] = [
     f64::INFINITY,
 ];
 
-pub(crate) fn fill_peoe_vsa_into(mol: &mut Molecule, out: &mut [f32]) {
+pub(crate) fn fill_peoe_vsa_into(
+    mol: &mut Molecule,
+    out: &mut [f32],
+    ctx: &mut crate::desc::context::CalculationContext,
+) {
     assert_eq!(
         out.len(),
         PEOE_BINS.len(),
         "PEOE_VSA output length mismatch"
     );
 
-    ensure_labute_contribs_cached(mol);
+    ensure_labute_contribs_cached(mol, ctx);
     ensure_gasteiger_charges_cached(mol);
     if let (Some((atom_vsa, _)), Some(charges)) = (
         mol.cached_labute_contribs(),
@@ -421,9 +439,9 @@ pub(crate) fn fill_peoe_vsa_into(mol: &mut Molecule, out: &mut [f32]) {
         return;
     }
 
-    let (atom_vsa, _) = compute_labute_contribs_uncached(mol);
     let charges = compute_gasteiger_charges(mol);
-    fill_binned_vsa(mol, &charges, &atom_vsa, &PEOE_BINS, out);
+    let (atom_vsa, _) = compute_labute_contribs_uncached(mol, ctx);
+    fill_binned_vsa(mol, &charges, atom_vsa, &PEOE_BINS, out);
 }
 
 impl Descriptor for PeoeVsa {
@@ -433,7 +451,7 @@ impl Descriptor for PeoeVsa {
 
     fn calculate(&self, mol: &mut Molecule, ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
         let mut values = vec![0.0f32; 14];
-        fill_peoe_vsa_into(mol, &mut values);
+        fill_peoe_vsa_into(mol, &mut values, ctx);
         DescriptorValue::FloatVec(values)
     }
 }
@@ -492,8 +510,9 @@ mod tests {
 
     #[test]
     fn test_vsa_positive() {
-        let mol = parse_smiles("CCO").unwrap();
-        let (vsa, _) = compute_labute_contribs(&mol);
+        let mut mol = parse_smiles("CCO").unwrap();
+        let mut ctx = crate::desc::context::CalculationContext::new();
+        let (vsa, _) = compute_labute_contribs(&mut mol, &mut ctx);
         for (i, &v) in vsa.iter().enumerate() {
             if mol.atoms[i].atomic_number > 1 {
                 assert!(v > 0.0, "atom {} VSA = {}", i, v);
@@ -503,8 +522,9 @@ mod tests {
 
     #[test]
     fn test_vsa_benzene_symmetry() {
-        let mol = parse_smiles("c1ccccc1").unwrap();
-        let (vsa, _) = compute_labute_contribs(&mol);
+        let mut mol = parse_smiles("c1ccccc1").unwrap();
+        let mut ctx = crate::desc::context::CalculationContext::new();
+        let (vsa, _) = compute_labute_contribs(&mut mol, &mut ctx);
         let c_vsas: Vec<f64> = vsa
             .iter()
             .copied()

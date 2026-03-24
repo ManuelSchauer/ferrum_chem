@@ -70,13 +70,13 @@ fn _compute_distance_matrix_unused(mol: &Molecule) -> Vec<u32> {
     }
 
     /// Calculate Wiener Index from distance matrix.
-    fn wiener_from_distances(distances: &[u32], n: usize) -> f32 {
+    fn wiener_from_distances(distances: &[u8], n: usize) -> f32 {
         let mut sum: u64 = 0;
 
         for i in 0..n {
             for j in (i + 1)..n {
                 let dist = distances[i * n + j];
-                if dist != u32::MAX {
+                if dist != 255 {
                     sum += dist as u64;
                 }
             }

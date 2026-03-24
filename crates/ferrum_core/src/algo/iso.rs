@@ -898,6 +898,15 @@ fn required_charge_from_primitive(primitive: &AtomPrimitive) -> Option<i8> {
             required
         }
         AtomPrimitive::Or(options) => {
+            // OR branches that include charge constraints are not globally
+            // charge-fixed unless all branches constrain to the same charge.
+            // If any branch lacks an explicit charge primitive (e.g.
+            // [$([N+R]),$([n+R]),$([N+]=C)]), we must not derive a fixed charge
+            // for fast filtering; otherwise valid neutral alternatives can be
+            // rejected before full SMARTS evaluation.
+            if options.iter().any(|opt| !primitive_contains_charge(opt)) {
+                return None;
+            }
             let mut options = options.iter().filter_map(required_charge_from_primitive);
             let first = options.next()?;
             if options.all(|charge| charge == first) {
@@ -907,6 +916,17 @@ fn required_charge_from_primitive(primitive: &AtomPrimitive) -> Option<i8> {
             }
         }
         _ => None,
+    }
+}
+
+fn primitive_contains_charge(primitive: &AtomPrimitive) -> bool {
+    match primitive {
+        AtomPrimitive::Charge(_) => true,
+        AtomPrimitive::And(requirements) | AtomPrimitive::Or(requirements) => {
+            requirements.iter().any(primitive_contains_charge)
+        }
+        AtomPrimitive::Not(inner) => primitive_contains_charge(inner),
+        _ => false,
     }
 }
 
@@ -1253,5 +1273,31 @@ mod tests {
 
         let ring_size = parse_smarts("[C;r6]").unwrap();
         assert_eq!(count_matches(&mol, &ring_size), 6);
+    }
+
+    #[test]
+    fn test_or_charge_fast_filter_does_not_reject_neutral_branches() {
+        // This pattern includes an OR branch (`[N+]=C`) where the Charge primitive
+        // is nested under an AND node. Prefilter charge extraction must remain
+        // branch-sensitive and semantically aligned with full SMARTS matching.
+        let pattern = parse_smarts("[$([N+R]),$([n+R]),$([N+]=C)]").unwrap();
+
+        let charged_imine = parse_smiles("C=[N+]C").unwrap();
+        assert!(
+            has_substruct_match(&charged_imine, &pattern),
+            "charged imine branch must remain matchable"
+        );
+
+        let ring_cation = parse_smiles("[n+]1ccccc1").unwrap();
+        assert!(
+            has_substruct_match(&ring_cation, &pattern),
+            "charged aromatic branch must remain matchable"
+        );
+
+        let neutral_imine = parse_smiles("NC=O").unwrap();
+        assert!(
+            !has_substruct_match(&neutral_imine, &pattern),
+            "neutral imine should not match this charged-only OR pattern"
+        );
     }
 }

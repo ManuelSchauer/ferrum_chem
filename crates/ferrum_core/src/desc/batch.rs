@@ -158,17 +158,17 @@ impl BatchDescriptor {
         match self {
             Self::SlogpVsa => {
                 let end = *offset + self.feature_len();
-                fill_slogp_vsa_into(mol, &mut row[*offset..end]);
+                fill_slogp_vsa_into(mol, &mut row[*offset..end], ctx);
                 *offset = end;
             }
             Self::SmrVsa => {
                 let end = *offset + self.feature_len();
-                fill_smr_vsa_into(mol, &mut row[*offset..end]);
+                fill_smr_vsa_into(mol, &mut row[*offset..end], ctx);
                 *offset = end;
             }
             Self::PeoeVsa => {
                 let end = *offset + self.feature_len();
-                fill_peoe_vsa_into(mol, &mut row[*offset..end]);
+                fill_peoe_vsa_into(mol, &mut row[*offset..end], ctx);
                 *offset = end;
             }
             _ => write_descriptor_value(self.calculate(mol, ctx), row, offset),

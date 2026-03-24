@@ -116,23 +116,20 @@ fn chi_path(mol: &Molecule, deltas: &[f64], length: usize) -> f64 {
 }
 
 fn chi_path_rdkit_like(mol: &Molecule, deltas: &[f64], length: usize) -> f64 {
-    find_all_paths_of_length(mol, length)
-        .into_iter()
-        .map(|path| {
-            let atoms = if path.first() == path.last() {
-                &path[..path.len() - 1]
-            } else {
-                &path[..]
-            };
+    let mut sum = 0.0;
+    find_all_paths_of_length(mol, length, |path| {
+        let atoms = if path.first() == path.last() {
+            &path[..path.len() - 1]
+        } else {
+            &path[..]
+        };
 
-            let prod: f64 = atoms.iter().map(|&idx| deltas[idx as usize]).product();
-            if prod > 0.0 {
-                1.0 / prod.sqrt()
-            } else {
-                0.0
-            }
-        })
-        .sum()
+        let prod: f64 = atoms.iter().map(|&idx| deltas[idx as usize]).product();
+        if prod > 0.0 {
+            sum += 1.0 / prod.sqrt();
+        }
+    });
+    sum
 }
 
 fn dfs_paths(

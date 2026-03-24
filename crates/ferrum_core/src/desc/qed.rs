@@ -421,13 +421,21 @@ fn primitive_requires_ring_atom(primitive: &AtomPrimitive) -> bool {
         | AtomPrimitive::RingSize(_)
         | AtomPrimitive::RingMembership(_)
         | AtomPrimitive::RingBonds(_) => true,
-        AtomPrimitive::Not(inner) => primitive_requires_ring_atom(inner),
-        AtomPrimitive::Or(options) | AtomPrimitive::And(options) => {
-            options.iter().any(primitive_requires_ring_atom)
+        // Negation does not imply a positive ring requirement for screening.
+        AtomPrimitive::Not(_) => false,
+        // In conjunctions, any ring-constrained term is sufficient to require
+        // ring atoms for a valid match.
+        AtomPrimitive::And(options) => options.iter().any(primitive_requires_ring_atom),
+        // For OR branches, require ring atoms only if every branch does.
+        AtomPrimitive::Or(options) => {
+            !options.is_empty() && options.iter().all(primitive_requires_ring_atom)
         }
-        AtomPrimitive::Recursive(sub_pattern) => {
-            sub_pattern.atoms.iter().any(query_atom_requires_ring)
-        }
+        // Recursive SMARTS can encode complex alternatives; avoid over-restrictive
+        // screening by only considering the recursive root atom.
+        AtomPrimitive::Recursive(sub_pattern) => sub_pattern
+            .atoms
+            .first()
+            .is_some_and(query_atom_requires_ring),
         _ => false,
     }
 }
@@ -442,13 +450,20 @@ fn query_atom_requires_aromatic(query_atom: &QueryAtom) -> bool {
 fn primitive_requires_aromatic_atom(primitive: &AtomPrimitive) -> bool {
     match primitive {
         AtomPrimitive::AnyAromatic | AtomPrimitive::Aromatic(_) => true,
-        AtomPrimitive::Not(inner) => primitive_requires_aromatic_atom(inner),
-        AtomPrimitive::Or(options) | AtomPrimitive::And(options) => {
-            options.iter().any(primitive_requires_aromatic_atom)
+        // Negation does not enforce aromaticity in a conservative prescreen.
+        AtomPrimitive::Not(_) => false,
+        // In conjunctions, any aromatic-constrained term is sufficient.
+        AtomPrimitive::And(options) => options.iter().any(primitive_requires_aromatic_atom),
+        // In OR branches, aromaticity is required only if every branch requires it.
+        AtomPrimitive::Or(options) => {
+            !options.is_empty() && options.iter().all(primitive_requires_aromatic_atom)
         }
-        AtomPrimitive::Recursive(sub_pattern) => {
-            sub_pattern.atoms.iter().any(query_atom_requires_aromatic)
-        }
+        // Recursive SMARTS can introduce mixed alternatives; evaluate only the
+        // recursive root atom to avoid rejecting valid non-aromatic branches.
+        AtomPrimitive::Recursive(sub_pattern) => sub_pattern
+            .atoms
+            .first()
+            .is_some_and(query_atom_requires_aromatic),
         _ => false,
     }
 }
@@ -485,7 +500,7 @@ fn compute_qed_hbond_acceptors_with_stats(mol: &Molecule, stats: &MoleculeScreen
         .sum()
 }
 
-fn ring_membership_from_bond_cycles(mol: &Molecule, cycles: &[Vec<usize>]) -> Vec<bool> {
+fn ring_membership_from_bond_cycles(mol: &Molecule, cycles: &[smallvec::SmallVec<[usize; 8]>]) -> Vec<bool> {
     let mut in_ring = vec![false; mol.num_atoms()];
     for cycle in cycles {
         for &bond_idx in cycle {
@@ -535,7 +550,7 @@ fn build_qed_aromatic_subgraph(mol: &Molecule, in_ring: &[bool]) -> Option<Molec
     Some(Molecule::from_parts(atoms, bonds, adjacency))
 }
 
-fn compute_qed_aromatic_ring_count_with_cycles(mol: &Molecule, cycles: &[Vec<usize>]) -> u32 {
+fn compute_qed_aromatic_ring_count_with_cycles(mol: &Molecule, cycles: &[smallvec::SmallVec<[usize; 8]>]) -> u32 {
     let in_ring = ring_membership_from_bond_cycles(mol, cycles);
     let Some(mut subgraph) = build_qed_aromatic_subgraph(mol, &in_ring) else {
         return 0;
@@ -923,4 +938,25 @@ mod tests {
         assert_eq!(compute_structural_alerts(&mol), 1);
         assert!((compute_qed(&mol) - 0.5200628922737999).abs() < 1e-3);
     }
+
+    #[test]
+    fn test_qed_structural_alerts_match_rdkit_cluster_cases() {
+        // These molecules were scalar QED parity outliers caused by alert
+        // undercounting in pre-screened SMARTS matching.
+        let cnp0454917 = parse_smiles("CCCCCC1=CC(O)=C(CCCC)C(OS(=O)(=O)O)=C1").unwrap();
+        assert_eq!(compute_structural_alerts(&cnp0454917), 2);
+
+        let cnp0479681 = parse_smiles("NC(N)=NCCC[C@H](N)C(=O)O").unwrap();
+        assert_eq!(compute_structural_alerts(&cnp0479681), 3);
+
+        let cnp0538427 = parse_smiles("CCCNC(=N)NCCC[C@H](N)C(=O)O").unwrap();
+        assert_eq!(compute_structural_alerts(&cnp0538427), 3);
+
+        let cnp0334248 = parse_smiles(
+            "O=C1CCC[C@@H]2[C@H]3CCC[N@@+]4([O-])CCC[C@@H](CN12)[C@@H]34",
+        )
+        .unwrap();
+        assert_eq!(compute_structural_alerts(&cnp0334248), 2);
+    }
+
 }

@@ -13,9 +13,9 @@ struct MoleculeCache {
     rotatable_bond_count: Option<u32>,
     tpsa: Option<f64>,
     balaban_bo_dist: Option<Vec<f64>>,
-    min_cycle_basis_bonds: Option<Vec<Vec<usize>>>,
-    symmetrized_sssr_bonds: Option<Vec<Vec<usize>>>,
-    unweighted_dist_matrix: Option<Vec<u32>>,
+    min_cycle_basis_bonds: Option<Vec<smallvec::SmallVec<[usize; 8]>>>,
+    symmetrized_sssr_bonds: Option<Vec<smallvec::SmallVec<[usize; 8]>>>,
+    unweighted_dist_matrix: Option<Vec<u8>>,
 }
 
 #[derive(Debug, Clone)]
@@ -169,27 +169,27 @@ impl Molecule {
         self.cache_mut().balaban_bo_dist = Some(dist);
     }
 
-    pub(crate) fn cached_min_cycle_basis_bonds(&self) -> Option<&Vec<Vec<usize>>> {
+    pub(crate) fn cached_min_cycle_basis_bonds(&self) -> Option<&Vec<smallvec::SmallVec<[usize; 8]>>> {
         self.cache.as_deref()?.min_cycle_basis_bonds.as_ref()
     }
 
-    pub(crate) fn store_min_cycle_basis_bonds(&mut self, rings: Vec<Vec<usize>>) {
+    pub(crate) fn store_min_cycle_basis_bonds(&mut self, rings: Vec<smallvec::SmallVec<[usize; 8]>>) {
         self.cache_mut().min_cycle_basis_bonds = Some(rings);
     }
 
-    pub(crate) fn cached_symmetrized_sssr_bonds(&self) -> Option<&Vec<Vec<usize>>> {
+    pub(crate) fn cached_symmetrized_sssr_bonds(&self) -> Option<&Vec<smallvec::SmallVec<[usize; 8]>>> {
         self.cache.as_deref()?.symmetrized_sssr_bonds.as_ref()
     }
 
-    pub(crate) fn store_symmetrized_sssr_bonds(&mut self, rings: Vec<Vec<usize>>) {
+    pub(crate) fn store_symmetrized_sssr_bonds(&mut self, rings: Vec<smallvec::SmallVec<[usize; 8]>>) {
         self.cache_mut().symmetrized_sssr_bonds = Some(rings);
     }
 
-    pub(crate) fn cached_unweighted_dist_matrix(&self) -> Option<&[u32]> {
+    pub(crate) fn cached_unweighted_dist_matrix(&self) -> Option<&[u8]> {
         self.cache.as_deref()?.unweighted_dist_matrix.as_deref()
     }
 
-    pub(crate) fn store_unweighted_dist_matrix(&mut self, matrix: Vec<u32>) {
+    pub(crate) fn store_unweighted_dist_matrix(&mut self, matrix: Vec<u8>) {
         self.cache_mut().unweighted_dist_matrix = Some(matrix);
     }
 }

@@ -24,14 +24,19 @@ use crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
 };
 use ratatui::prelude::*;
-use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap};
+use ratatui::widgets::{
+    Block, Borders, Clear, List, ListItem, ListState, Paragraph, Row, Table, Wrap,
+    canvas::{Canvas, Points},
+};
 
 use ferrum_core::desc::batch::{BatchDescriptor, calculate_batch_flat_static};
 use ferrum_core::io::csv_reader::CsvReader;
 use ferrum_core::ml::dataset::QsarDataset;
 use ferrum_core::ml::metrics;
+use ferrum_core::ml::pca::Pca;
 use ferrum_core::ml::pipeline::AutoQsar;
 use ferrum_core::ml::pipeline::QsarPipeline;
+use ferrum_core::ml::scaling::StandardScaler;
 
 const POLL_INTERVAL: Duration = Duration::from_millis(100);
 const TRAINING_PREVIEW_ROWS: usize = 6;
@@ -304,6 +309,15 @@ struct TrainingSummary {
     preview_predictions: Vec<f64>,
 }
 
+/// One candidate model evaluated during AutoQsar training.
+#[derive(Debug, Clone)]
+struct ModelCandidate {
+    name: String,
+    cv_q2: f64,
+    train_r2: f64,
+    is_best: bool,
+}
+
 #[derive(Debug)]
 struct App {
     items: Vec<MenuAction>,
@@ -318,6 +332,10 @@ struct App {
     dataset_load_error: Option<String>,
     wizard_step: WizardStep,
     wizard_summary: Option<TrainingSummary>,
+    /// Scroll offset for views that need scrolling (e.g. descriptor profiling).
+    scroll_offset: usize,
+    /// All model candidates tried during training, for comparison table.
+    model_candidates: Vec<ModelCandidate>,
 }
 
 impl App {
@@ -364,6 +382,8 @@ impl App {
             dataset_load_error,
             wizard_step: WizardStep::Dataset,
             wizard_summary: None,
+            scroll_offset: 0,
+            model_candidates: Vec::new(),
         }
     }
 
@@ -488,9 +508,26 @@ impl App {
                     "Preprocessing configured (StandardScaler in AutoQsar).".to_string();
             }
             WizardStep::Train => {
+                let start = std::time::Instant::now();
                 let pipeline = AutoQsar::regression(&self.dataset, 3, 42);
+                let elapsed = start.elapsed();
                 let preds = pipeline.predict(&self.dataset.features);
                 let preds_vec = preds.to_vec();
+
+                // Build model candidates list from the pipeline's training run.
+                // AutoQsar internally tries: kNN-3/5/7, RF-50/100, PLS-2/3/5, EN-0.01/0.1/1.0
+                // We reconstruct a summary here by re-running quick predictions for each class.
+                let best_name = pipeline.name.clone();
+                let candidate_names = ["kNN-3", "kNN-5", "kNN-7", "RF-50", "RF-100",
+                    "PLS-2", "PLS-3", "PLS-5", "EN-a0.01", "EN-a0.1", "EN-a1"];
+                self.model_candidates.clear();
+                // Just record the best model since AutoQsar doesn't expose intermediates
+                self.model_candidates.push(ModelCandidate {
+                    name: pipeline.name.clone(),
+                    cv_q2: pipeline.cv_q2,
+                    train_r2: pipeline.train_r2,
+                    is_best: true,
+                });
 
                 let summary = TrainingSummary {
                     pipeline_name: pipeline.name.clone(),
@@ -516,8 +553,12 @@ impl App {
                 self.pipeline = Some(pipeline);
                 self.wizard_summary = Some(summary);
                 self.wizard_step = WizardStep::Evaluate;
-                self.status_message =
-                    "Training complete. Press Enter to finalize wizard summary.".to_string();
+                self.status_message = format!(
+                    "Training complete in {:.1}s — best model: '{}' (Q²={:.4}). Press Enter to finalize.",
+                    elapsed.as_secs_f64(),
+                    best_name,
+                    self.wizard_summary.as_ref().unwrap().cv_q2
+                );
             }
             WizardStep::Evaluate => {
                 self.wizard_step = WizardStep::Done;
@@ -699,6 +740,17 @@ fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> io::Result<
             }
             KeyCode::Char('m') if app.view == View::PipelineManagement => {
                 app.load_pipeline_from_memory();
+            }
+            KeyCode::Up | KeyCode::Char('k') if app.view == View::DescriptorProfiling => {
+                if app.scroll_offset > 0 {
+                    app.scroll_offset -= 1;
+                }
+            }
+            KeyCode::Down | KeyCode::Char('j') if app.view == View::DescriptorProfiling => {
+                app.scroll_offset += 1;
+            }
+            KeyCode::Char('?') => {
+                app.status_message = "Keys: q=quit, Esc=back, Enter=activate, ↑↓=scroll, s/l/m=pipeline ops, ?=help".to_string();
             }
             _ => {}
         }
@@ -916,9 +968,9 @@ fn render_batch_prediction(frame: &mut Frame, area: Rect, app: &App) {
 }
 
 fn render_chemical_space(frame: &mut Frame, area: Rect, app: &App) {
-    if app.dataset.n_features() < 2 {
+    if app.dataset.n_features() < 2 || app.dataset.n_samples() < 3 {
         let widget = Paragraph::new(
-            "Chemical-space preview requires at least 2 features.\nReload a dataset with at least two descriptor columns.",
+            "Chemical-space scatter requires at least 3 samples and 2 features.\nReload a dataset with more data.",
         )
         .block(
             Block::default()
@@ -930,61 +982,159 @@ fn render_chemical_space(frame: &mut Frame, area: Rect, app: &App) {
         return;
     }
 
-    let x_col = app.dataset.features.column(0);
-    let y_col = app.dataset.features.column(1);
+    // PCA(2) projection: scale → project → scatter
+    let scaler = StandardScaler::fit(&app.dataset.features);
+    let scaled = scaler.transform(&app.dataset.features);
+    let (pca, projected) = Pca::fit_transform(&scaled, 2);
 
-    let x_min = x_col.iter().copied().fold(f64::INFINITY, f64::min);
-    let x_max = x_col.iter().copied().fold(f64::NEG_INFINITY, f64::max);
-    let y_min = y_col.iter().copied().fold(f64::INFINITY, f64::min);
-    let y_max = y_col.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+    let pc1 = projected.column(0);
+    let pc2 = projected.column(1);
+    let x_min = pc1.iter().copied().fold(f64::INFINITY, f64::min);
+    let x_max = pc1.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+    let y_min = pc2.iter().copied().fold(f64::INFINITY, f64::min);
+    let y_max = pc2.iter().copied().fold(f64::NEG_INFINITY, f64::max);
 
-    let text = format!(
-        "Chemical-space summary (feature projection preview)\n\nFeature[0] range: [{:.3}, {:.3}]\nFeature[1] range: [{:.3}, {:.3}]\nSamples: {}\n\n(ASCII scatter is next increment; this screen validates data plumbing for plotting.)",
+    // Add a small padding so edge points are visible
+    let x_pad = (x_max - x_min).max(0.01) * 0.05;
+    let y_pad = (y_max - y_min).max(0.01) * 0.05;
+
+    let [chart_area, info_area] =
+        Layout::horizontal([Constraint::Percentage(70), Constraint::Percentage(30)]).areas(area);
+
+    // Collect points for the braille canvas
+    let points: Vec<(f64, f64)> = pc1.iter().zip(pc2.iter()).map(|(&x, &y)| (x, y)).collect();
+
+    let canvas = Canvas::default()
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title("PCA Scatter (PC1 vs PC2)"),
+        )
+        .x_bounds([x_min - x_pad, x_max + x_pad])
+        .y_bounds([y_min - y_pad, y_max + y_pad])
+        .paint(move |ctx| {
+            ctx.draw(&Points {
+                coords: &points,
+                color: Color::Cyan,
+            });
+        });
+    frame.render_widget(canvas, chart_area);
+
+    // Info panel with PCA summary
+    let var_ratio_1 = pca.explained_variance_ratio[0] * 100.0;
+    let var_ratio_2 = pca.explained_variance_ratio[1] * 100.0;
+    let total_var = var_ratio_1 + var_ratio_2;
+
+    let info = format!(
+        "PCA Chemical Space Summary\n\n\
+         Samples: {}\n\
+         Features: {}\n\n\
+         PC1 variance: {:.1}%\n\
+         PC2 variance: {:.1}%\n\
+         Total explained: {:.1}%\n\n\
+         PC1 range: [{:.2}, {:.2}]\n\
+         PC2 range: [{:.2}, {:.2}]\n\n\
+         Projection uses StandardScaler\n\
+         + Jacobi PCA(2).",
+        app.dataset.n_samples(),
+        app.dataset.n_features(),
+        var_ratio_1,
+        var_ratio_2,
+        total_var,
         x_min,
         x_max,
         y_min,
         y_max,
-        app.dataset.n_samples()
     );
 
-    let widget = Paragraph::new(text)
+    let info_widget = Paragraph::new(info)
         .block(
             Block::default()
                 .borders(Borders::ALL)
-                .title("Chemical space"),
+                .title("PCA Info"),
         )
         .wrap(Wrap { trim: true });
-    frame.render_widget(widget, area);
+    frame.render_widget(info_widget, info_area);
 }
 
 fn render_descriptor_profile(frame: &mut Frame, area: Rect, app: &App) {
     let feature_count = app.dataset.n_features();
-    let mut lines = Vec::with_capacity(feature_count + 3);
-    lines.push(format!(
-        "Descriptor profile preview for {} features",
-        feature_count
-    ));
-    lines.push(String::new());
+    let n = app.dataset.n_samples() as f64;
+
+    // Build rows with stats: name, mean, std_dev, min, max, [flag]
+    let mut table_rows: Vec<Row> = Vec::with_capacity(feature_count);
+    let mut zero_var_count = 0usize;
 
     for j in 0..feature_count {
         let col = app.dataset.features.column(j);
-        let mean = col.iter().sum::<f64>() / col.len() as f64;
-        let min = col.iter().copied().fold(f64::INFINITY, f64::min);
-        let max = col.iter().copied().fold(f64::NEG_INFINITY, f64::max);
-        lines.push(format!(
-            "{}: mean={:.3}, min={:.3}, max={:.3}",
-            app.dataset.feature_names[j], mean, min, max
-        ));
+        let mean = col.iter().sum::<f64>() / n;
+        let min_val = col.iter().copied().fold(f64::INFINITY, f64::min);
+        let max_val = col.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+        let variance = col.iter().map(|&x| (x - mean).powi(2)).sum::<f64>() / n;
+        let std_dev = variance.sqrt();
+
+        let flag = if variance < 1e-12 {
+            zero_var_count += 1;
+            " ⚠"
+        } else {
+            ""
+        };
+
+        let style = if variance < 1e-12 {
+            Style::default().fg(Color::Red)
+        } else {
+            Style::default()
+        };
+
+        let row = Row::new(vec![
+            format!("{}", app.dataset.feature_names[j]),
+            format!("{:.4}", mean),
+            format!("{:.4}", std_dev),
+            format!("{:.4}", min_val),
+            format!("{:.4}", max_val),
+            flag.to_string(),
+        ])
+        .style(style);
+        table_rows.push(row);
     }
 
-    let widget = Paragraph::new(lines.join("\n"))
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title("Descriptor profiling"),
-        )
-        .wrap(Wrap { trim: true });
-    frame.render_widget(widget, area);
+    // Apply scroll offset — clamp to valid range
+    let visible_rows = (area.height as usize).saturating_sub(6); // header + borders
+    let max_offset = feature_count.saturating_sub(visible_rows);
+    let offset = app.scroll_offset.min(max_offset);
+    let visible: Vec<Row> = table_rows.into_iter().skip(offset).collect();
+
+    let header = Row::new(vec!["Feature", "Mean", "StdDev", "Min", "Max", "Flag"])
+        .style(
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        );
+
+    let title = format!(
+        "Descriptor Profile ({} features, {} zero-var, showing {}-{}/{}  ↑↓=scroll)",
+        feature_count,
+        zero_var_count,
+        offset + 1,
+        (offset + visible_rows).min(feature_count),
+        feature_count
+    );
+
+    let table = Table::new(
+        visible,
+        [
+            Constraint::Percentage(30),
+            Constraint::Percentage(14),
+            Constraint::Percentage(14),
+            Constraint::Percentage(14),
+            Constraint::Percentage(14),
+            Constraint::Percentage(8),
+        ],
+    )
+    .header(header)
+    .block(Block::default().borders(Borders::ALL).title(title));
+
+    frame.render_widget(table, area);
 }
 
 fn render_pipeline_management(frame: &mut Frame, area: Rect, app: &App) {

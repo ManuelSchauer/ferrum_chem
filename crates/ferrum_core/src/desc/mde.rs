@@ -103,7 +103,7 @@ impl Descriptor for MDE {
         for i in 0..n {
             for j in i + 1..n {
                 let d = dist[i * n + j];
-                if d > 0 && d < u32::MAX {
+                if d > 0 && d < 255 {
                     if let Some(pidx) = pair_index(classes[i], classes[j]) {
                         values[pidx] += 1.0 / (d * d) as f32;
                     }

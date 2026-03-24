@@ -76,7 +76,7 @@ pub fn calculate(mol: &mut Molecule, ctx: &mut crate::desc::context::Calculation
             let mass_j = ATOMIC_MASSES[mol.atoms[j].atomic_number as usize] as f64;
             let d = dist[i * n + j];
 
-            if d != u32::MAX && d > 0 {
+            if d != 255 && d > 0 {
                 g += (mass_i * mass_j) / (d * d) as f64;
             }
         }

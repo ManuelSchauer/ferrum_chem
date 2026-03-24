@@ -5,12 +5,12 @@
 [![Build Status](https://img.shields.io/badge/build-passing-brightgreen)]()
 [![Validation](https://img.shields.io/badge/validation-release--mode%20tracked-brightgreen)]()
 [![RDKit Match](https://img.shields.io/badge/RDKit%20match-100%25%20(1944%2F1944)-brightgreen)]()
-[![500-row scalar](https://img.shields.io/badge/500--row%20scalar-99.78%25-brightgreen)]()
-[![500-row rings](https://img.shields.io/badge/500--row%20rings-100%25-brightgreen)]()
-[![CSV Throughput](https://img.shields.io/badge/CSV%201k-2371%20mol%2Fs-blue)]()
+[![1000-row scalar](https://img.shields.io/badge/1000--row%20scalar-99.8%25-brightgreen)]()
+[![1000-row rings](https://img.shields.io/badge/1000--row%20rings-100%25-brightgreen)]()
+[![CSV Throughput](https://img.shields.io/badge/CSV%201k-2514%20mol%2Fs-blue)]()
 [![Descriptors](https://img.shields.io/badge/descriptors-72%20typed-blue)]()
 [![Dimensions](https://img.shields.io/badge/dimensions-17.7k-purple)]()
-[![Memory](https://img.shields.io/badge/CSV%20RSS-6.48MB%20(Ferrum)%20vs%2070.95MB%20(RDKit)-green)]()
+[![Memory](https://img.shields.io/badge/CSV%20RSS-6.23MB%20(Ferrum)%20vs%2071.36MB%20(RDKit)-green)]()
 [![SDF parser](https://img.shields.io/badge/SDF%20parser-deferred-yellow)]()
 
 FerrumChem is a high-performance molecular descriptor calculation engine designed for machine learning applications in chemistry. Built in Rust for maximum performance and memory efficiency, it parses simple molecules at multi-million-molecule throughput and provides comprehensive QSAR descriptor coverage through a typed Rust API.
@@ -21,33 +21,33 @@ FerrumChem is a high-performance molecular descriptor calculation engine designe
 - **⚡ High-performance descriptors**: 72 typed descriptors, 17,710+ dimensions
 - **💾 31-32x typed-memory reduction**: bit-packed fingerprints (67.4 GB → 2.1 GB for 1M molecules in the memory benchmark)
 - **🔬 100% RDKit accuracy**: Validated against 27 torture molecules × 72 descriptors (1944/1944 exact match)
-- **📈 Current 500-row parity**: Scalar 99.78%, Rings 100.0%, VSA 100.0%, Chi/Kappa 100.0%
-- **📈 Current 1000-row audit**: Scalar 99.75%, Rings 99.95%, VSA 99.97%, Chi/Kappa 100.0%
+- **📈 Current 1000-row parity**: Scalar 99.8%, Rings 100.0%, VSA 100.0%, Chi/Kappa 100.0%
+- **📈 Scalar mismatch scope (1000-row)**: only `Ipc` diverges (`953/1000`), all other scalar descriptors are `1000/1000`
 - **📊 Latest pinned CSV benchmark (57 outputs, single-thread)**:
-  - 1k rows buffered: `2371.49 mol/s`, `6.48 MB` peak RSS
-  - 1k rows stream (`chunk=1`): `2272.22 mol/s`, `8.30 MB` peak RSS
-  - 10k rows buffered: `2101.37 mol/s`, `9.62 MB` peak RSS
-  - 10k rows stream (`chunk=1`): `2107.15 mol/s`, `10.16 MB` peak RSS
+  - 1k rows buffered: `2514.32 mol/s`, `5.94 MB` peak RSS
+  - 1k rows stream (`chunk=1`): `2460.29 mol/s`, `7.70 MB` peak RSS
+  - 10k rows buffered: `2292.07 mol/s`, `9.88 MB` peak RSS
+  - 10k rows stream (`chunk=1`): `2249.53 mol/s`, `10.16 MB` peak RSS
 - **🔧 Parallel processing**: Built-in Rayon support for batch calculations
 - **📊 ML-ready**: Single `Descriptor` trait + direct ndarray integration
 - **🔒 Thread-safe**: All data structures are `Send + Sync`
 - **✅ Type-safe**: Strongly-typed descriptor values (Int, Float, Binary, etc.)
 
-## 🎯 Status: parity stable, TUI available, and single-thread CSV bundle is ~4x RDKit at 1k rows ✅
+## 🎯 Status: parity stable, TUI available, and single-thread CSV bundle is ~4.1x RDKit at 1k rows ✅
 
 FerrumChem still has **100% RDKit match** across the 27-molecule torture set (**1944/1944**) and now also reaches:
 
-- **500-row reference slice**: **Scalar 10976/11000 = 99.78%**, **Ring 2000/2000 = 100.0%**, **VSA 18000/18000 = 100.0%**, **Chi/Kappa 5000/5000 = 100.0%**
-- **1000-row audit**: **Scalar 21945/22000 = 99.75%**, **Ring 3998/4000 = 99.95%**, **VSA 35988/36000 = 99.97%**, **Chi/Kappa 10000/10000 = 100.0%**
-- **Latest 1000-row closures**: `FractionCSP3`, `HallKierAlpha`, and all Chi/Kappa values now match RDKit on **1000/1000** molecules; all `PEOE_VSA` bins remain **1000/1000**
+- **1000-row current reference slice**: **Scalar 21953/22000 = 99.8%**, **Ring 4000/4000 = 100.0%**, **VSA 36000/36000 = 100.0%**, **Chi/Kappa 10000/10000 = 100.0%**
+- **Latest 1000-row closures**: `Qed`, `RotatableBonds`, `FractionCSP3`, `HallKierAlpha`, all Chi/Kappa values, all ring descriptors, and all VSA bins now match RDKit on **1000/1000** molecules
+- **Remaining parity gap in current 1000-row suite**: `Ipc` only (**953/1000**, 95.3%)
 
-The only remaining validated gap on the 500-row RDKit comparison slices is `Ipc`. On the broader 1000-row audit, the remaining non-Ipc misses are dominated by one fused heteroaromatic outlier (`CNP0594395.1`) plus one isolated `RotatableBonds` miss; exact `Ipc` emulation is intentionally deferred for ML use because the current mismatch looks NumPy/Accelerate-specific rather than chemical.
+The only remaining validated parity gap in the current 1000-row RDKit suite is `Ipc` numerical divergence. Non-`Ipc` scalar/ring/VSA/Chi/Kappa descriptors are now fully aligned on that slice; exact `Ipc` emulation remains a deferred item unless strict RDKit bit-level reproducibility becomes a hard requirement.
 
 ✅ **Implemented**:
 - **72 Typed Descriptors** with DescriptorValue enum (Int, Float, IntVec, IntU16Vec, FloatVec, Binary)
 - **100% RDKit Accuracy**: 1944/1944 descriptor comparisons across 27 challenging molecules (metals, charged species, aromatic edge cases)
 - **500/500 on the 500-row RDKit slice**: AromaticAtomCount, AromaticRingCount, AliphaticRings, AromaticRings(RT), SaturatedRings, TotalRings, HBondAcceptor, NumAmideBonds, QED, RotatableBonds, Chi3v, Chi4v, Kappa3
-- **1000/1000 on the 1000-row audit**: FractionCSP3, HallKierAlpha, Chi0/0v/1/1v/2v/3v/4v, Kappa1/2/3, and all PEOE_VSA bins
+- **1000/1000 on the current 1000-row audit (non-Ipc)**: all scalar descriptors except `Ipc`, plus all ring descriptors, all VSA bins, and all Chi/Kappa values
 - **32x Memory Reduction** via bit-packing + type optimization (validated with benchmarks)
 - **Release-mode validation workflow** for parity and focused regression suites
 - **17,710+ Total Dimensions** (17,431 fingerprint bits + 279 continuous)
@@ -67,9 +67,9 @@ The only remaining validated gap on the 500-row RDKit comparison slices is `Ipc`
   - Transition metals: Dative bond detection, extended element tables (Z=1–83)
 
 🚧 **Current roadmap**:
-- **Current descriptor cleanup**: fused heteroaromatic `CNP0594395.1` aromaticity / ring typing / HBA / amide / surface-area cascade
-- **Current descriptor cleanup**: isolated `RotatableBonds` mismatch on `CNP0329403.3`
-- **Deferred exact parity work**: `Ipc` numerical emulation (revisit only if exact RDKit reproduction becomes mandatory)
+- **Current descriptor parity focus**: `Ipc` numerical emulation and stability/performance tradeoff analysis
+- **Recent parity closures**: resolved the fused heteroaromatic/QED alert cascade and isolated `RotatableBonds` mismatch on the 1000-row audit
+- **Deferred exact parity work**: strict `Ipc` emulation remains optional unless exact RDKit reproduction is required
 - **Phase 13**: ✅ Complete — ML pipeline (k-NN, RF, PLS, Elastic Net, ART-2A — all from scratch, no linfa)
 - **Phase 14**: ✅ Active — Terminal UI workflow shell with CSV load, training, profiling, and pipeline save/load
 - **Phase 15**: Infrastructure (SDF parser, canonical SMILES writer, Python bindings, crates.io)
@@ -230,40 +230,38 @@ The table above is for isolated kernels and parser-heavy microbenchmarks. For an
 
 Single-threaded benchmark on Apple Silicon (M-series), using the same 57-output bundle on both sides (21 scalar descriptors + `SlogP_VSA`, `SMR_VSA`, `PEOE_VSA`; `Ipc`, ring groups, and CHI/KAPPA groups excluded from this matched run).
 
-Latest normalized snapshot (1000 iterations, median of repeated runs):
+Latest normalized snapshot (10,000 iterations, median of repeated runs):
 
 | Case | Heavy atoms | FerrumChem | RDKit | Relative result |
 |------|-------------|------------|-------|-----------------|
-| Ethane | 2 | 0.004868 s total, 205,435.49 mol/s | 0.209440 s total, 4,774.64 mol/s | FerrumChem 43.03x faster |
-| Aspirin | 13 | 0.064379 s total, 15,532.97 mol/s | 0.533389 s total, 1,874.80 mol/s | FerrumChem 8.29x faster |
-| Caffeine | 14 | 0.088619 s total, 11,284.21 mol/s | 0.565719 s total, 1,767.66 mol/s | FerrumChem 6.38x faster |
-| Large drug-like amide | 30 | 0.280278 s total, 3,567.89 mol/s | 1.159999 s total, 862.07 mol/s | FerrumChem 4.14x faster |
+| Ethane | 2 | 0.038852 s total, 257,388.66 mol/s | 2.161077 s total, 4,627.32 mol/s | FerrumChem 55.62x faster |
+| Aspirin | 13 | 0.649283 s total, 15,401.60 mol/s | 5.627022 s total, 1,777.14 mol/s | FerrumChem 8.67x faster |
+| Caffeine | 14 | 0.798840 s total, 12,518.15 mol/s | 5.976980 s total, 1,673.09 mol/s | FerrumChem 7.48x faster |
+| Large drug-like amide | 30 | 2.358389 s total, 4,240.18 mol/s | 12.143051 s total, 823.52 mol/s | FerrumChem 5.15x faster |
 
 CSV bundle slice (`coconut_csv_lite-02-2026.csv`, 57 outputs) currently reports both throughput and peak RSS in matched output columns:
 
-- FerrumChem (1k rows, buffered): `2371.49 mol/s`, peak RSS `6.48 MB`
-- FerrumChem (1k rows, stream, `chunk=1`): `2272.22 mol/s`, peak RSS `8.30 MB`
-- RDKit (1k rows): `585.95 mol/s`, peak RSS `70.95 MB`
+- FerrumChem (1k rows, buffered): `2502.38 mol/s`, peak RSS `6.23 MB`
+- FerrumChem (1k rows, stream, `chunk=1`): `2460.29 mol/s`, peak RSS `7.70 MB`
+- RDKit (1k rows): `608.20 mol/s`, peak RSS `71.36 MB`
 
 This is roughly:
-- **4.05x throughput advantage** for Ferrum buffered vs RDKit on the pinned 1k run
-- **10.95x lower peak RSS** for Ferrum buffered vs RDKit
+- **4.11x throughput advantage** for Ferrum buffered vs RDKit on the pinned 1k run
+- **11.45x lower peak RSS** for Ferrum buffered vs RDKit
 
 Larger pinned slices (10k rows):
-- FerrumChem (10k, buffered): `2101.37 mol/s`, peak RSS `9.62 MB`
-- FerrumChem (10k, stream, `chunk=1`): `2107.15 mol/s`, peak RSS `10.16 MB`
+- FerrumChem (10k, buffered): `2292.07 mol/s`, peak RSS `9.88 MB`
+- FerrumChem (10k, stream, `chunk=1`): `2249.53 mol/s`, peak RSS `10.16 MB`
 
 The CSV benchmark output includes `peak_rss_bytes` and `peak_rss_mb` for direct memory-footprint comparisons.
 
 ### Accuracy & Validation
 - **100% RDKit match**: 1944/1944 descriptor comparisons across 27 torture molecules
-- **Current 500-row parity**: scalar 99.78%, ring 100.0%, VSA 100.0%, Chi/Kappa 100.0%
-- **Current 1000-row audit**: scalar 99.75%, ring 99.95%, VSA 99.97%, Chi/Kappa 100.0%
+- **Current 1000-row parity**: scalar 99.8%, ring 100.0%, VSA 100.0%, Chi/Kappa 100.0%
 - **Extended 10k audit (diagnostic)**: scalar 99.3%, ring 99.4%, VSA 99.6%, Chi/Kappa 99.9%
-- **Exact 500/500 descriptors**: AromaticAtomCount, AromaticRingCount, AliphaticRings, AromaticRings(RT), SaturatedRings, TotalRings, HBondAcceptor, NumAmideBonds, QED, RotatableBonds, Chi3v, Chi4v, Kappa3
-- **Exact 1000/1000 descriptors**: FractionCSP3, HallKierAlpha, all Chi/Kappa values, and all PEOE_VSA bins
-- **Remaining 1000-row non-Ipc misses**: one fused heteroaromatic `CNP0594395.1` cascade plus one isolated `RotatableBonds` discrepancy
-- **10k dominant mismatch clusters**: `Ipc` numerical divergence (509 fails) plus aromatic/ring-sensitive cascades feeding `AromaticAtomCount`, `BertzCT`, `LogP`, `LabuteASA`, `QED`, and VSA bins
+- **Exact 1000/1000 descriptors**: all ring descriptors, all VSA bins, all Chi/Kappa values, and all scalar descriptors except `Ipc`
+- **Remaining 1000-row mismatch**: `Ipc` only (47 fails; `953/1000` pass rate)
+- **10k dominant mismatch cluster**: `Ipc` numerical divergence remains the largest contributor
 - **Torture set includes**: Cisplatin (transition metal), nitrobenzene (charged NO₂), Grignard (Mg), cyclopentadienyl anion, sodium acetate, pyrene, isatin, aspirin, caffeine, and more
 - **Molecular weights**: ±0.01 Da
 - **TPSA**: RDKit-exact (50/50 molecules, ±0.01 Ų)
@@ -274,7 +272,7 @@ The CSV benchmark output includes `peak_rss_bytes` and `peak_rss_mb` for direct 
 ### Performance vs Other Tools
 - **Matched descriptor-bundle throughput**: FerrumChem currently leads across all four tracked parity cases in the normalized single-thread benchmark
 - **Largest current performance hotspots**: `find_minimum_cycle_basis_bonds`, `balaban::compute_distance_matrix`, and SMARTS/VF2 primitive feasibility paths
-- **CSV benchmark memory**: currently ~9-11x lower peak RSS than RDKit on pinned 1k bundle runs
+- **CSV benchmark memory**: currently ~11x lower peak RSS than RDKit on pinned 1k bundle runs
 - **Typed fingerprint storage**: ~31x lower memory than dense `Vec<f32>` representations in the in-repo memory benchmark
 - **Native Rust deployment**: No GIL and no Python↔Rust FFI boundary inside Rust-first workflows
 
@@ -325,13 +323,13 @@ ferrum_chem/
 
 **Phase 13**: ✅ Complete — ML pipeline (k-NN, RF, PLS, Elastic Net, ART-2A — all from scratch, no external ML deps)  
 **Current performance push**: deep refactors (descriptor context/workspace reuse, unified distance kernels, SMARTS specialization) with recent wins in aromaticity/SMARTS/IPC/path kernels  
-**Secondary parity backlog**: close the fused heteroaromatic `CNP0594395.1` descriptor cascade and the isolated `CNP0329403.3` rotatable mismatch  
+**Secondary parity backlog**: finalize `Ipc` numerical alignment while preserving current throughput and memory profile  
 **Deferred exact parity work**: `Ipc` numerical emulation (not currently required for ML use)  
 **Phase 14**: ✅ Terminal UI workflow shell (interactive QSAR model training/prediction with CSV/file workflows)  
 **Phase 15**: Infrastructure (SDF parser, canonical SMILES writer, Python bindings, crates.io)  
 **Phase 16**: 3D descriptors (conformers, PMI, shape — special cases only)
 
-**Current Status**: Production-ready typed QSAR library with 72 typed descriptors, 100% torture-set RDKit agreement, stable **500-row parity** (scalar **99.78%**, ring/VSA/Chi-Kappa **100.0%**) and a broader **1000-row audit** at scalar **99.75%**, ring **99.95%**, VSA **99.97%**, Chi/Kappa **100.0%**. Latest pinned single-thread CSV bundle shows Ferrum at **2371 mol/s** and **6.48 MB** peak RSS on 1k rows vs RDKit at **586 mol/s** and **70.95 MB**. ✅
+**Current Status**: Production-ready typed QSAR library with 72 typed descriptors, 100% torture-set RDKit agreement, and current **1000-row parity** at scalar **99.8%** (only `Ipc` divergent), ring **100.0%**, VSA **100.0%**, Chi/Kappa **100.0%**. Latest pinned single-thread CSV bundle shows Ferrum at **2502 mol/s** and **6.23 MB** peak RSS on 1k rows vs RDKit at **608 mol/s** and **71.36 MB**. ✅
 
 ## 🎓 Use Cases
 

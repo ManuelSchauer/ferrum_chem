@@ -58,7 +58,9 @@ impl Descriptor for KappaIndices {
             .sum();
 
         // RDKit counts explicit 3-bond paths and includes ring-closing paths.
-        let p3 = find_all_paths_of_length(mol, 3).len() as f64;
+        let mut p3_count = 0.0;
+        find_all_paths_of_length(mol, 3, |_| p3_count += 1.0);
+        let p3 = p3_count;
 
         // κ₁ = (A + α)(A + α - 1)² / (P1 + α)²
         let denom1 = p1 + alpha;

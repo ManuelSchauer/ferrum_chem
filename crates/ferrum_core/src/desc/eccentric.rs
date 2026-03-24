@@ -73,14 +73,14 @@ pub fn calculate(mol: &mut Molecule, ctx: &mut crate::desc::context::Calculation
     // Calculate eccentricity for each atom
     let mut eccentricities = vec![0u32; n];
     for i in 0..n {
-        let mut max_dist = 0u32;
+        let mut max_dist = 0u8;
         for j in 0..n {
             let d = dist[i * n + j];
-            if d != u32::MAX && d > max_dist {
+            if d != 255 && d > max_dist {
                 max_dist = d;
             }
         }
-        eccentricities[i] = max_dist;
+        eccentricities[i] = max_dist as u32;
     }
 
     // Sum degree × eccentricity

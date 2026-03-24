@@ -96,7 +96,7 @@ fn compute_estates(mol: &mut Molecule, ctx: &mut crate::desc::context::Calculati
                 continue;
             }
             let d = dist[i * n + j];
-            if d == 0 || d == u32::MAX {
+            if d == 0 || d == 255 {
                 continue;
             }
             // ΔI_ij = (I_i - I_j) / (d_ij + 1)^2

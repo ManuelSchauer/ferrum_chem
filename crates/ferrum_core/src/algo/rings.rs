@@ -70,7 +70,7 @@ pub fn find_sssr(mol: &mut Molecule) -> Vec<Vec<AtomIdx>> {
 ///
 /// This does not mutate ring flags and is used by descriptor code that needs
 /// a more RDKit-like small-ring basis than the legacy `find_sssr()` traversal.
-pub fn find_minimum_cycle_basis_bonds(mol: &Molecule) -> Vec<Vec<usize>> {
+pub fn find_minimum_cycle_basis_bonds(mol: &Molecule) -> Vec<smallvec::SmallVec<[usize; 8]>> {
     let n_atoms = mol.num_atoms();
     if n_atoms == 0 {
         return Vec::new();
@@ -101,7 +101,7 @@ pub fn find_minimum_cycle_basis_bonds(mol: &Molecule) -> Vec<Vec<usize>> {
     basis
 }
 
-pub(crate) fn find_minimum_cycle_basis_bonds_cached(mol: &mut Molecule) -> Vec<Vec<usize>> {
+pub(crate) fn find_minimum_cycle_basis_bonds_cached(mol: &mut Molecule) -> Vec<smallvec::SmallVec<[usize; 8]>> {
     if let Some(cached) = mol.cached_min_cycle_basis_bonds() {
         return cached.clone();
     }
@@ -163,7 +163,7 @@ fn cycle_rank_count(mol: &Molecule) -> usize {
 /// rank / minimum cycle basis count. To mirror that behavior, collect every
 /// unique shortest cycle induced by removing a bond and finding all shortest
 /// alternate paths between its endpoints.
-pub fn find_symmetrized_sssr_bonds(mol: &Molecule) -> Vec<Vec<usize>> {
+pub fn find_symmetrized_sssr_bonds(mol: &Molecule) -> Vec<smallvec::SmallVec<[usize; 8]>> {
     if mol.num_atoms() == 0 || mol.num_bonds() == 0 {
         return Vec::new();
     }
@@ -189,7 +189,7 @@ pub fn find_symmetrized_sssr_bonds(mol: &Molecule) -> Vec<Vec<usize>> {
             path.sort_unstable();
             path.dedup();
             if path.len() >= 3 {
-                cycles.push(path);
+                cycles.push(path.into());
             }
         }
     }
@@ -198,11 +198,11 @@ pub fn find_symmetrized_sssr_bonds(mol: &Molecule) -> Vec<Vec<usize>> {
     cycles.dedup();
 
     if cycles.len() == base_count + 1 {
-        let max_len = cycles.iter().map(|cycle| cycle.len()).max().unwrap_or(0);
+        let max_len = cycles.iter().map(|cycle: &smallvec::SmallVec<[usize; 8]>| cycle.len()).max().unwrap_or(0);
         let max_cycles: Vec<usize> = cycles
             .iter()
             .enumerate()
-            .filter_map(|(idx, cycle)| (cycle.len() == max_len).then_some(idx))
+            .filter_map(|(idx, cycle): (usize, &smallvec::SmallVec<[usize; 8]>)| (cycle.len() == max_len).then_some(idx))
             .collect();
 
         if max_cycles.len() == 2 {
@@ -216,7 +216,7 @@ pub fn find_symmetrized_sssr_bonds(mol: &Molecule) -> Vec<Vec<usize>> {
     cycles
 }
 
-pub(crate) fn find_symmetrized_sssr_bonds_cached(mol: &mut Molecule) -> Vec<Vec<usize>> {
+pub(crate) fn find_symmetrized_sssr_bonds_cached(mol: &mut Molecule) -> Vec<smallvec::SmallVec<[usize; 8]>> {
     if let Some(cached) = mol.cached_symmetrized_sssr_bonds() {
         return cached.clone();
     }
@@ -232,7 +232,7 @@ pub(crate) fn ensure_symmetrized_sssr_bonds_cached(mol: &mut Molecule) {
     }
 }
 
-pub(crate) fn cached_symmetrized_sssr_bonds_ref(mol: &Molecule) -> Option<&[Vec<usize>]> {
+pub(crate) fn cached_symmetrized_sssr_bonds_ref(mol: &Molecule) -> Option<&[smallvec::SmallVec<[usize; 8]>]> {
     mol.cached_symmetrized_sssr_bonds().map(|rings| rings.as_slice())
 }
 
@@ -400,7 +400,7 @@ fn minimum_cycle_basis_component(
     mol: &Molecule,
     component_atoms: &[usize],
     component_bonds: &[usize],
-) -> Vec<Vec<usize>> {
+) -> Vec<smallvec::SmallVec<[usize; 8]>> {
     if component_atoms.is_empty() {
         return Vec::new();
     }
@@ -463,7 +463,7 @@ fn minimum_cycle_basis_component(
             }
         }
 
-        basis.push(cycle);
+        basis.push(cycle.into());
     }
 
     basis

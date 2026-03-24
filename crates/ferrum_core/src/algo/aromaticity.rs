@@ -662,18 +662,17 @@ fn canonical_cycle_order_excluding_chord(
     ring: &[AtomIdx],
     chord: (AtomIdx, AtomIdx, usize),
 ) -> Option<Vec<AtomIdx>> {
-    let ring_atoms: HashSet<AtomIdx> = ring.iter().copied().collect();
-    if ring_atoms.len() != ring.len() {
-        return None;
+    for i in 0..ring.len() {
+        for j in i + 1..ring.len() {
+            if ring[i] == ring[j] {
+                return None;
+            }
+        }
     }
 
-    let mut neighbors: HashMap<AtomIdx, Vec<AtomIdx>> = ring_atoms
-        .iter()
-        .copied()
-        .map(|atom_idx| (atom_idx, Vec::with_capacity(2)))
-        .collect();
+    let mut neighbors: Vec<smallvec::SmallVec<[AtomIdx; 2]>> = vec![smallvec::SmallVec::new(); ring.len()];
 
-    for &atom_idx in ring {
+    for (u_idx, &atom_idx) in ring.iter().enumerate() {
         for &bond_idx in &mol.adjacency[atom_idx as usize] {
             let bidx = bond_idx as usize;
             let bond = &mol.bonds[bidx];
@@ -682,7 +681,8 @@ fn canonical_cycle_order_excluding_chord(
             } else {
                 bond.source
             };
-            if !ring_atoms.contains(&other) || atom_idx > other {
+
+            if atom_idx > other {
                 continue;
             }
 
@@ -690,16 +690,15 @@ fn canonical_cycle_order_excluding_chord(
                 continue;
             }
 
-            neighbors.get_mut(&atom_idx)?.push(other);
-            neighbors.get_mut(&other)?.push(atom_idx);
+            if let Some(v_idx) = ring.iter().position(|&x| x == other) {
+                neighbors[u_idx].push(other);
+                neighbors[v_idx].push(atom_idx);
+            }
         }
     }
 
-    for &atom_idx in &ring_atoms {
-        if neighbors
-            .get(&atom_idx)
-            .map_or(true, |nbrs| nbrs.len() != 2)
-        {
+    for nbrs in &neighbors {
+        if nbrs.len() != 2 {
             return None;
         }
     }
@@ -711,7 +710,8 @@ fn canonical_cycle_order_excluding_chord(
     let mut current = start;
 
     loop {
-        let nbrs = neighbors.get(&current)?;
+        let u_idx = ring.iter().position(|&x| x == current)?;
+        let nbrs = &neighbors[u_idx];
         let next = match prev {
             Some(prev_atom) if nbrs[0] == prev_atom => nbrs[1],
             Some(prev_atom) if nbrs[1] == prev_atom => nbrs[0],
@@ -739,19 +739,18 @@ fn canonical_cycle_order_excluding_chord(
 }
 
 fn unique_cycle_chord(mol: &Molecule, ring: &[AtomIdx]) -> Option<(AtomIdx, AtomIdx, usize)> {
-    let ring_atoms: HashSet<AtomIdx> = ring.iter().copied().collect();
-    if ring_atoms.len() != ring.len() {
-        return None;
+    for i in 0..ring.len() {
+        for j in i + 1..ring.len() {
+            if ring[i] == ring[j] {
+                return None;
+            }
+        }
     }
 
-    // Collect induced edges among ring atoms and per-atom degree in that
-    // induced subgraph. A single-chord perimeter has exactly n+1 edges, with
-    // exactly two degree-3 endpoints joined by the unique chord.
     let mut induced_edges: Vec<(AtomIdx, AtomIdx, usize)> = Vec::new();
-    let mut degree: HashMap<AtomIdx, usize> =
-        ring_atoms.iter().copied().map(|atom_idx| (atom_idx, 0usize)).collect();
+    let mut degree = vec![0usize; ring.len()];
 
-    for &atom_idx in ring {
+    for (u_idx, &atom_idx) in ring.iter().enumerate() {
         for &bond_idx in &mol.adjacency[atom_idx as usize] {
             let bond = &mol.bonds[bond_idx as usize];
             let other = if bond.source == atom_idx {
@@ -759,28 +758,31 @@ fn unique_cycle_chord(mol: &Molecule, ring: &[AtomIdx]) -> Option<(AtomIdx, Atom
             } else {
                 bond.source
             };
-            if !ring_atoms.contains(&other) || atom_idx > other {
+            if atom_idx > other {
                 continue;
             }
 
-            induced_edges.push((atom_idx, other, bond_idx as usize));
-            *degree.get_mut(&atom_idx)? += 1;
-            *degree.get_mut(&other)? += 1;
+            if let Some(v_idx) = ring.iter().position(|&x| x == other) {
+                induced_edges.push((atom_idx, other, bond_idx as usize));
+                degree[u_idx] += 1;
+                degree[v_idx] += 1;
+            }
         }
     }
 
-    if induced_edges.len() != ring_atoms.len() + 1 {
+    if induced_edges.len() != ring.len() + 1 {
         return None;
     }
 
-    if degree.values().any(|&d| d != 2 && d != 3) {
+    if degree.iter().any(|&d| d != 2 && d != 3) {
         return None;
     }
 
-    let mut degree3_atoms = degree
+    let mut degree3_atoms: Vec<AtomIdx> = degree
         .iter()
-        .filter_map(|(&atom_idx, &deg)| (deg == 3).then_some(atom_idx))
-        .collect::<Vec<_>>();
+        .enumerate()
+        .filter_map(|(idx, &deg)| (deg == 3).then_some(ring[idx]))
+        .collect();
     if degree3_atoms.len() != 2 {
         return None;
     }
@@ -2030,7 +2032,7 @@ fn fused_diaza_dicarbonyl_bridge_bond(mol: &Molecule, ring: &[AtomIdx]) -> Optio
 
     // Remove the bridge edge and verify the remaining ring perimeter follows an
     // alternating N-C(=X)-N-C(X) interior chain between the two anchors.
-    let path = ring_path_excluding_edge(mol, &ring_set, anchors[0], anchors[1], bridge_bond_idx)?;
+    let path = ring_path_excluding_edge(mol, ring, anchors[0], anchors[1], bridge_bond_idx)?;
     if path.len() != ring.len() {
         return None;
     }
@@ -2070,16 +2072,19 @@ fn fused_diaza_dicarbonyl_bridge_bond(mol: &Molecule, ring: &[AtomIdx]) -> Optio
 
 fn ring_path_excluding_edge(
     mol: &Molecule,
-    ring_set: &HashSet<AtomIdx>,
+    ring: &[AtomIdx],
     start: AtomIdx,
     end: AtomIdx,
     excluded_bond_idx: usize,
 ) -> Option<Vec<AtomIdx>> {
+    // Use molecule-sized prev/seen arrays — rings are small (≤64), so this is
+    // allocation-light vs HashMap/HashSet with SipHash overhead.
+    let n = mol.num_atoms();
+    let mut prev = vec![u16::MAX; n];
+    let mut seen = vec![false; n];
     let mut queue = VecDeque::new();
-    let mut prev: HashMap<AtomIdx, AtomIdx> = HashMap::new();
-    let mut seen: HashSet<AtomIdx> = HashSet::new();
     queue.push_back(start);
-    seen.insert(start);
+    seen[start as usize] = true;
 
     while let Some(atom_idx) = queue.pop_front() {
         if atom_idx == end {
@@ -2096,22 +2101,27 @@ fn ring_path_excluding_edge(
             } else {
                 bond.source
             };
-            if !ring_set.contains(&other) || !seen.insert(other) {
+            if !ring.contains(&other) || seen[other as usize] {
                 continue;
             }
-            prev.insert(other, atom_idx);
+            seen[other as usize] = true;
+            prev[other as usize] = atom_idx;
             queue.push_back(other);
         }
     }
 
-    if !seen.contains(&end) {
+    if !seen[end as usize] {
         return None;
     }
 
     let mut path = vec![end];
     let mut current = end;
     while current != start {
-        current = *prev.get(&current)?;
+        let p = prev[current as usize];
+        if p == u16::MAX {
+            return None;
+        }
+        current = p;
         path.push(current);
     }
     path.reverse();

@@ -66,14 +66,14 @@ const MAX_LAG: usize = 8;
 
 /// Compute ATS values for a given weight function.
 /// Returns [ATS1, ATS2, ..., ATS8] for distances 1..8.
-fn compute_ats(mol: &Molecule, dist: &[u32], weights: &[f64]) -> [f64; MAX_LAG] {
+fn compute_ats(mol: &Molecule, dist: &[u8], weights: &[f64]) -> [f64; MAX_LAG] {
     let n = mol.num_atoms();
     let mut ats = [0.0f64; MAX_LAG];
 
     for i in 0..n {
         for j in (i + 1)..n {
             let d = dist[i * n + j];
-            if d == 0 || d == u32::MAX {
+            if d == 0 || d == 255 {
                 continue;
             }
             let lag = d as usize;
@@ -136,10 +136,10 @@ impl Descriptor for Autocorrelation {
             .map(|i| burden_vdw_volume(mol.atoms[i].atomic_number))
             .collect();
 
-        let ats_mass = compute_ats(mol, &dist, &w_mass);
-        let ats_pol = compute_ats(mol, &dist, &w_pol);
-        let ats_en = compute_ats(mol, &dist, &w_en);
-        let ats_vdw = compute_ats(mol, &dist, &w_vdw);
+        let ats_mass = compute_ats(mol, dist, &w_mass);
+        let ats_pol = compute_ats(mol, dist, &w_pol);
+        let ats_en = compute_ats(mol, dist, &w_en);
+        let ats_vdw = compute_ats(mol, dist, &w_vdw);
 
         for i in 0..MAX_LAG {
             values[i] = ats_mass[i] as f32;

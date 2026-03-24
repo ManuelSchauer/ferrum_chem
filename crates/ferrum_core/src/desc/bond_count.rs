@@ -15,6 +15,9 @@ pub fn compute_bond_count(mol: &Molecule) -> u32 {
 ///
 /// Follows the RDKit `NumRotatableBonds` definition:
 /// - Single, non-ring, non-terminal, non-triple-adjacent bonds only.
+/// - **Terminal-substituent exclusions**: strict mode excludes bonds attached to
+///   quaternary carbon centers matching `C(F)(F)F`, `C(Cl)(Cl)Cl`,
+///   `C(Br)(Br)Br`, and `C([CH3])([CH3])[CH3]`.
 /// - **Strict conjugation exclusions**: amide-, thioamide-, amidine-, and
 ///   carbamate-like `C(=X)-N` bonds are non-rotatable when the conjugated carbon
 ///   has another heavy substituent, while formyl `N-C(=X)H` bonds remain
@@ -62,9 +65,9 @@ pub fn compute_rotatable_bond_count(mol: &Molecule) -> u32 {
             continue;
         }
 
-        // RDKit strict also rejects the bond leaving a tert-butyl-like center:
-        // a non-ring quaternary carbon with three terminal carbon substituents.
-        if is_tert_butyl_like_rotor_blocked(mol, bond_idx, &heavy_degree) {
+        // RDKit strict excludes bonds attached to quaternary carbon centers
+        // carrying three terminal methyl/fluoro/chloro/bromo substituents.
+        if is_strict_terminal_substituent_rotor_blocked(mol, bond_idx, &heavy_degree) {
             continue;
         }
 
@@ -103,7 +106,7 @@ pub(crate) fn compute_rotatable_bond_count_cached(mol: &mut Molecule) -> u32 {
     count
 }
 
-fn is_tert_butyl_like_rotor_blocked(
+fn is_strict_terminal_substituent_rotor_blocked(
     mol: &Molecule,
     bond_idx: usize,
     heavy_degree: &[usize],
@@ -111,11 +114,11 @@ fn is_tert_butyl_like_rotor_blocked(
     let bond = &mol.bonds[bond_idx];
     let a = bond.source as usize;
     let b = bond.target as usize;
-    is_tert_butyl_like_center(mol, a, b, heavy_degree)
-        || is_tert_butyl_like_center(mol, b, a, heavy_degree)
+    is_strict_terminal_substituent_center(mol, a, b, heavy_degree)
+        || is_strict_terminal_substituent_center(mol, b, a, heavy_degree)
 }
 
-fn is_tert_butyl_like_center(
+fn is_strict_terminal_substituent_center(
     mol: &Molecule,
     center_idx: usize,
     bonded_idx: usize,
@@ -130,7 +133,10 @@ fn is_tert_butyl_like_center(
         return false;
     }
 
-    let mut terminal_carbon_neighbors = 0usize;
+    let mut terminal_methyl_neighbors = 0usize;
+    let mut terminal_f_neighbors = 0usize;
+    let mut terminal_cl_neighbors = 0usize;
+    let mut terminal_br_neighbors = 0usize;
     for &bi in &mol.adjacency[center_idx] {
         let bond = &mol.bonds[bi as usize];
         if bond.bond_type != BondType::Single {
@@ -148,16 +154,29 @@ fn is_tert_butyl_like_center(
         }
 
         let other_atom = &mol.atoms[other];
-        if other_atom.atomic_number == 6
-            && !other_atom.is_aromatic()
-            && heavy_degree[other] == 1
-            && other_atom.total_h() == 3
-        {
-            terminal_carbon_neighbors += 1;
+        match other_atom.atomic_number {
+            // RDKit strict excludes C([CH3])([CH3])[CH3] centers.
+            6 if !other_atom.is_aromatic() && heavy_degree[other] == 1 && other_atom.total_h() == 3 => {
+                terminal_methyl_neighbors += 1;
+            }
+            // RDKit strict excludes C(F)(F)F, C(Cl)(Cl)Cl and C(Br)(Br)Br.
+            9 if heavy_degree[other] == 1 => {
+                terminal_f_neighbors += 1;
+            }
+            17 if heavy_degree[other] == 1 => {
+                terminal_cl_neighbors += 1;
+            }
+            35 if heavy_degree[other] == 1 => {
+                terminal_br_neighbors += 1;
+            }
+            _ => {}
         }
     }
 
-    terminal_carbon_neighbors >= 3
+    terminal_methyl_neighbors >= 3
+        || terminal_f_neighbors >= 3
+        || terminal_cl_neighbors >= 3
+        || terminal_br_neighbors >= 3
 }
 
 /// Returns a per-atom boolean: `true` if atom `i` is a neutral, non-aromatic
@@ -670,6 +689,31 @@ mod tests {
 
         let mut mol2 = parse_smiles("CC(C)(C)OC").unwrap();
         assert_eq!(RotatableBondCount.calculate(&mut mol2, &mut crate::desc::context::CalculationContext::new()).as_int(), 0);
+    }
+
+    #[test]
+    fn test_rotatable_bond_count_trihaloalkyl_linkage_excluded() {
+        let mut mol = parse_smiles("ClC(Cl)(Cl)CC").unwrap();
+        assert_eq!(RotatableBondCount.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()).as_int(), 0);
+
+        let mut mol2 = parse_smiles("FC(F)(F)CC").unwrap();
+        assert_eq!(RotatableBondCount.calculate(&mut mol2, &mut crate::desc::context::CalculationContext::new()).as_int(), 0);
+
+        let mut mol3 = parse_smiles("BrC(Br)(Br)CC").unwrap();
+        assert_eq!(RotatableBondCount.calculate(&mut mol3, &mut crate::desc::context::CalculationContext::new()).as_int(), 0);
+
+        // RDKit strict pattern excludes F/Cl/Br but intentionally not I.
+        let mut mol4 = parse_smiles("IC(I)(I)CC").unwrap();
+        assert_eq!(RotatableBondCount.calculate(&mut mol4, &mut crate::desc::context::CalculationContext::new()).as_int(), 1);
+    }
+
+    #[test]
+    fn test_rotatable_bond_count_cnp0329403_matches_rdkit() {
+        let mut mol = parse_smiles(
+            "O=C(N[C@@H](OC[C@@H]1CCCN2CCCC[C@H]12)C(Cl)(Cl)Cl)C1=CC=CC2=CC=CC=C12",
+        )
+        .unwrap();
+        assert_eq!(RotatableBondCount.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()).as_int(), 5);
     }
 
     #[test]
