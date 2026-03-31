@@ -1,6 +1,6 @@
 //! Applicability Domain — k-NN distance AD, leverage AD.
 
-use ndarray::{Array1, Array2};
+use ndarray::{Array1, Array2, Axis};
 use serde::{Deserialize, Serialize};
 
 /// Applicability Domain trait.
@@ -40,11 +40,18 @@ impl KnnDistanceAD {
             let mut dists: Vec<f64> = (0..n)
                 .filter(|&j| j != i)
                 .map(|j| {
-                    let diff = &sample.to_owned() - &features.row(j).to_owned();
-                    diff.dot(&diff).sqrt()
+                    sample
+                        .iter()
+                        .zip(features.row(j).iter())
+                        .map(|(&a, &b)| {
+                            let d = a - b;
+                            d * d
+                        })
+                        .sum::<f64>()
+                        .sqrt()
                 })
                 .collect();
-            dists.sort_by(|a, b| a.partial_cmp(b).unwrap());
+            dists.sort_by(|a, b| a.total_cmp(b));
             let mean_k_dist: f64 = dists.iter().take(k).sum::<f64>() / k as f64;
             distances.push(mean_k_dist);
         }
@@ -69,14 +76,20 @@ impl KnnDistanceAD {
     }
 
     fn mean_knn_distance(&self, sample: &[f64]) -> f64 {
-        let sample_arr = Array1::from(sample.to_vec());
         let mut dists: Vec<f64> = (0..self.train_features.nrows())
             .map(|i| {
-                let diff = &sample_arr - &self.train_features.row(i).to_owned();
-                diff.dot(&diff).sqrt()
+                sample
+                    .iter()
+                    .zip(self.train_features.row(i).iter())
+                    .map(|(&a, &b)| {
+                        let d = a - b;
+                        d * d
+                    })
+                    .sum::<f64>()
+                    .sqrt()
             })
             .collect();
-        dists.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        dists.sort_by(|a, b| a.total_cmp(b));
         dists.iter().take(self.k).sum::<f64>() / self.k as f64
     }
 }
@@ -121,11 +134,7 @@ impl LeverageAD {
         let x_mean = features.mean_axis(ndarray::Axis(0)).unwrap();
 
         // Center features
-        let mut x_centered = features.clone();
-        for mut row in x_centered.rows_mut() {
-            let c = &row.to_owned() - &x_mean;
-            row.assign(&c);
-        }
+        let x_centered = features - &x_mean;
 
         // Compute X'X
         let mut xtx = Array2::<f64>::zeros((p, p));
@@ -137,8 +146,14 @@ impl LeverageAD {
             }
         }
 
-        // Invert X'X (simple Gauss-Jordan for small matrices)
-        let hat_matrix_inv = invert_matrix(&xtx);
+        // Ridge regularization improves numerical stability on collinear descriptors.
+        let ridge = 1e-8;
+        for d in 0..p {
+            xtx[[d, d]] += ridge;
+        }
+
+        // Invert X'X using a regularized pseudoinverse for improved stability.
+        let hat_matrix_inv = pseudoinverse(&xtx);
 
         let threshold = 3.0 * p as f64 / n as f64;
 
@@ -213,8 +228,12 @@ fn invert_matrix(a: &Array2<f64>) -> Array2<f64> {
         }
 
         if max_val < 1e-15 {
-            // Singular matrix — add small regularization
-            aug[[col, col]] += 1e-10;
+            // Additional diagonal stabilization when the pivot is near singular.
+            aug[[col, col]] += 1e-8;
+            max_val = aug[[col, col]].abs();
+            if max_val < 1e-15 {
+                continue;
+            }
         }
 
         // Swap rows
@@ -228,6 +247,9 @@ fn invert_matrix(a: &Array2<f64>) -> Array2<f64> {
 
         // Scale pivot row
         let pivot = aug[[col, col]];
+        if pivot.abs() < 1e-15 {
+            continue;
+        }
         for j in 0..(2 * n) {
             aug[[col, j]] /= pivot;
         }
@@ -251,6 +273,47 @@ fn invert_matrix(a: &Array2<f64>) -> Array2<f64> {
         }
     }
     inv
+}
+
+/// Compute the Moore-Penrose pseudoinverse using a damped normal-equation solve.
+/// This implementation is intentionally regularized to remain stable with collinear QSAR features.
+pub fn pseudoinverse(a: &Array2<f64>) -> Array2<f64> {
+    let (m, n) = a.dim();
+    if m == 0 || n == 0 {
+        return Array2::<f64>::zeros((n, m));
+    }
+
+    if m >= n {
+        let mut ata = Array2::<f64>::zeros((n, n));
+        for i in 0..n {
+            for j in i..n {
+                let dot = a.column(i).dot(&a.column(j));
+                ata[[i, j]] = dot;
+                ata[[j, i]] = dot;
+            }
+        }
+        let ridge = 1e-8;
+        for d in 0..n {
+            ata[[d, d]] += ridge;
+        }
+        let ata_inv = invert_matrix(&ata);
+        ata_inv.dot(&a.t())
+    } else {
+        let mut aat = Array2::<f64>::zeros((m, m));
+        for i in 0..m {
+            for j in i..m {
+                let dot = a.row(i).dot(&a.row(j));
+                aat[[i, j]] = dot;
+                aat[[j, i]] = dot;
+            }
+        }
+        let ridge = 1e-8;
+        for d in 0..m {
+            aat[[d, d]] += ridge;
+        }
+        let aat_inv = invert_matrix(&aat);
+        a.t().dot(&aat_inv)
+    }
 }
 
 #[cfg(test)]
@@ -309,5 +372,21 @@ mod tests {
                 assert!((inv[[i, j]] - expected).abs() < 1e-10);
             }
         }
+    }
+
+    #[test]
+    fn test_pseudoinverse_shapes() {
+        let a = Array2::from_shape_vec((3, 2), vec![1.0, 0.0, 0.0, 1.0, 1.0, 1.0]).unwrap();
+        let pinv = pseudoinverse(&a);
+        assert_eq!(pinv.nrows(), 2);
+        assert_eq!(pinv.ncols(), 3);
+    }
+
+    #[test]
+    fn test_pseudoinverse_rank_deficient_finite() {
+        // Collinear columns.
+        let a = Array2::from_shape_vec((3, 2), vec![1.0, 2.0, 2.0, 4.0, 3.0, 6.0]).unwrap();
+        let pinv = pseudoinverse(&a);
+        assert!(pinv.iter().all(|v| v.is_finite()));
     }
 }

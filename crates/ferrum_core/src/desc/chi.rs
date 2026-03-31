@@ -103,12 +103,25 @@ fn chi_path(mol: &Molecule, deltas: &[f64], length: usize) -> f64 {
 
     // DFS to enumerate all paths of exact length
     let mut sum = 0.0f64;
-    let mut path = Vec::with_capacity(length + 1);
+    let mut visited = vec![false; n];
 
     for start in 0..n {
-        path.clear();
-        path.push(start as AtomIdx);
-        dfs_paths(mol, deltas, &mut path, length, &mut sum);
+        let d0 = deltas[start];
+        if d0 <= 0.0 {
+            continue;
+        }
+        visited[start] = true;
+        dfs_paths_acc(
+            mol,
+            deltas,
+            start as AtomIdx,
+            1,
+            length + 1,
+            d0,
+            &mut visited,
+            &mut sum,
+        );
+        visited[start] = false;
     }
 
     // Each path is found twice (forward + reverse), so divide by 2
@@ -124,7 +137,10 @@ fn chi_path_rdkit_like(mol: &Molecule, deltas: &[f64], length: usize) -> f64 {
             &path[..]
         };
 
-        let prod: f64 = atoms.iter().map(|&idx| deltas[idx as usize]).product();
+        let mut prod = 1.0f64;
+        for &idx in atoms {
+            prod *= deltas[idx as usize];
+        }
         if prod > 0.0 {
             sum += 1.0 / prod.sqrt();
         }
@@ -132,23 +148,21 @@ fn chi_path_rdkit_like(mol: &Molecule, deltas: &[f64], length: usize) -> f64 {
     sum
 }
 
-fn dfs_paths(
+fn dfs_paths_acc(
     mol: &Molecule,
     deltas: &[f64],
-    path: &mut Vec<AtomIdx>,
-    target_len: usize,
+    current: AtomIdx,
+    depth: usize,
+    target_depth: usize,
+    prod: f64,
+    visited: &mut [bool],
     sum: &mut f64,
 ) {
-    if path.len() == target_len + 1 {
-        // Compute product of deltas along the path
-        let prod: f64 = path.iter().map(|&idx| deltas[idx as usize]).product();
-        if prod > 0.0 {
-            *sum += 1.0 / prod.sqrt();
-        }
+    if depth == target_depth {
+        *sum += 1.0 / prod.sqrt();
         return;
     }
 
-    let current = *path.last().unwrap();
     for &bond_idx in &mol.adjacency[current as usize] {
         let bond = &mol.bonds[bond_idx as usize];
         let neighbor = if bond.source == current {
@@ -157,12 +171,26 @@ fn dfs_paths(
             bond.source
         };
 
-        // Avoid revisiting atoms in the current path (simple paths only)
-        if !path.contains(&neighbor) {
-            path.push(neighbor);
-            dfs_paths(mol, deltas, path, target_len, sum);
-            path.pop();
+        let ni = neighbor as usize;
+        if visited[ni] {
+            continue;
         }
+        let d = deltas[ni];
+        if d <= 0.0 {
+            continue;
+        }
+        visited[ni] = true;
+        dfs_paths_acc(
+            mol,
+            deltas,
+            neighbor,
+            depth + 1,
+            target_depth,
+            prod * d,
+            visited,
+            sum,
+        );
+        visited[ni] = false;
     }
 }
 
@@ -201,17 +229,52 @@ fn chi_cluster(mol: &Molecule, deltas: &[f64], order: usize) -> f64 {
             })
             .collect();
 
-        // Generate all combinations of k neighbors
-        let combos = combinations(&neighbor_deltas, k);
-        for combo in combos {
-            let prod: f64 = dc * combo.iter().product::<f64>();
-            if prod > 0.0 {
-                sum += 1.0 / prod.sqrt();
-            }
-        }
+        sum += sum_cluster_combinations(&neighbor_deltas, k, dc);
     }
 
     sum
+}
+
+fn sum_cluster_combinations(neighbor_deltas: &[f64], k: usize, center_delta: f64) -> f64 {
+    if k == 0 || neighbor_deltas.len() < k || center_delta <= 0.0 {
+        return 0.0;
+    }
+
+    fn recurse(
+        vals: &[f64],
+        k: usize,
+        start: usize,
+        picked: usize,
+        prod: f64,
+        acc: &mut f64,
+    ) {
+        if picked == k {
+            *acc += 1.0 / prod.sqrt();
+            return;
+        }
+        let need = k - picked;
+        if vals.len() < need || start > vals.len() - need {
+            return;
+        }
+        let last_start = vals.len() - need;
+        for i in start..=last_start {
+            let d = vals[i];
+            if d <= 0.0 {
+                continue;
+            }
+            recurse(vals, k, i + 1, picked + 1, prod * d, acc);
+        }
+    }
+
+    let mut sum = 0.0;
+    recurse(neighbor_deltas, k, 0, 0, center_delta, &mut sum);
+    sum
+}
+
+#[derive(Clone)]
+struct ArmPath {
+    atoms: Vec<AtomIdx>,
+    prod: f64,
 }
 
 /// Compute path-cluster chi for arbitrary order.
@@ -231,7 +294,6 @@ fn chi_pathcluster_order(mol: &Molecule, deltas: &[f64], order: usize) -> f64 {
 
     let n = mol.num_atoms();
     let mut sum = 0.0;
-    let mut subgraph: Vec<AtomIdx> = Vec::with_capacity(order);
 
     // For each potential branch point B with degree >= 3
     for b in 0..n {
@@ -254,6 +316,10 @@ fn chi_pathcluster_order(mol: &Molecule, deltas: &[f64], order: usize) -> f64 {
 
         let db = deltas[b];
         if db <= 0.0 {
+            continue;
+        }
+        let combos = combinations3(&b_neighbors);
+        if combos.is_empty() {
             continue;
         }
 
@@ -279,7 +345,6 @@ fn chi_pathcluster_order(mol: &Molecule, deltas: &[f64], order: usize) -> f64 {
                 let perms = distinct_permutations(a1, a2, a3);
 
                 // For each combination of 3 neighbors as arm starts
-                let combos = combinations_idx(&b_neighbors, 3);
                 for combo in &combos {
                     let arm_starts = [combo[0], combo[1], combo[2]];
 
@@ -307,104 +372,142 @@ fn extend_arms_chi(
     starts: &[AtomIdx; 3],
     lengths: &[usize; 3],
 ) -> f64 {
-    // Build arm paths via DFS, then combine
-    let mut arm_paths: [Vec<Vec<AtomIdx>>; 3] = [vec![], vec![], vec![]];
+    if d_branch <= 0.0 {
+        return 0.0;
+    }
+
+    let n = mol.num_atoms();
+    // Build arm paths via DFS, then combine.
+    let mut arm_paths: [Vec<ArmPath>; 3] = [vec![], vec![], vec![]];
 
     for arm in 0..3 {
-        let mut path = vec![starts[arm]];
-        let mut excluded: Vec<AtomIdx> = vec![branch];
-        // Exclude other arm starts to prevent overlap
+        let start = starts[arm] as usize;
+        let d_start = deltas[start];
+        if d_start <= 0.0 {
+            return 0.0;
+        }
+
+        let mut visited = vec![false; n];
+        visited[branch as usize] = true;
+        // Exclude other arm starts to prevent overlap.
         for other in 0..3 {
             if other != arm {
-                excluded.push(starts[other]);
+                visited[starts[other] as usize] = true;
             }
         }
-        find_arm_paths(mol, &mut path, lengths[arm], &excluded, &mut arm_paths[arm]);
+        visited[start] = true;
+        let mut path = vec![starts[arm]];
+        find_arm_paths_acc(
+            mol,
+            deltas,
+            lengths[arm],
+            d_start,
+            &mut path,
+            &mut visited,
+            &mut arm_paths[arm],
+        );
     }
 
     let mut sum = 0.0;
+    let mut used = vec![false; n];
 
-    // Combine all valid arm combinations
+    // Combine all valid arm combinations.
     for p0 in &arm_paths[0] {
+        for &a in &p0.atoms {
+            used[a as usize] = true;
+        }
         for p1 in &arm_paths[1] {
-            // Check no overlap between p0 and p1
-            if p0.iter().any(|a| p1.contains(a)) {
+            if p1.atoms.iter().any(|&a| used[a as usize]) {
                 continue;
             }
+            for &a in &p1.atoms {
+                used[a as usize] = true;
+            }
             for p2 in &arm_paths[2] {
-                // Check no overlap with p0 or p1
-                if p2.iter().any(|a| p0.contains(a) || p1.contains(a)) {
+                if p2.atoms.iter().any(|&a| used[a as usize]) {
                     continue;
                 }
-
-                let mut prod = d_branch;
-                for &idx in p0.iter().chain(p1.iter()).chain(p2.iter()) {
-                    prod *= deltas[idx as usize];
-                }
+                let prod = d_branch * p0.prod * p1.prod * p2.prod;
                 if prod > 0.0 {
                     sum += 1.0 / prod.sqrt();
                 }
             }
+            for &a in &p1.atoms {
+                used[a as usize] = false;
+            }
+        }
+        for &a in &p0.atoms {
+            used[a as usize] = false;
         }
     }
 
     sum
 }
 
-/// Find all simple paths of exactly `length` atoms starting from `path[0]`,
-/// avoiding atoms in `excluded`.
-fn find_arm_paths(
+/// Find all simple arm paths of exactly `target_len` atoms.
+fn find_arm_paths_acc(
     mol: &Molecule,
+    deltas: &[f64],
+    target_len: usize,
+    current_prod: f64,
     path: &mut Vec<AtomIdx>,
-    length: usize,
-    excluded: &[AtomIdx],
-    results: &mut Vec<Vec<AtomIdx>>,
+    visited: &mut [bool],
+    results: &mut Vec<ArmPath>,
 ) {
-    if path.len() == length {
-        results.push(path.clone());
+    if path.len() == target_len {
+        results.push(ArmPath {
+            atoms: path.clone(),
+            prod: current_prod,
+        });
         return;
     }
 
-    let current = *path.last().unwrap();
+    let current = *path.last().expect("path non-empty");
     for &bond_idx in &mol.adjacency[current as usize] {
         let bond = &mol.bonds[bond_idx as usize];
-        let nb = if bond.source == current {
+        let next = if bond.source == current {
             bond.target
         } else {
             bond.source
         };
-        if path.contains(&nb) || excluded.contains(&nb) {
+        let ni = next as usize;
+        if visited[ni] {
             continue;
         }
-        path.push(nb);
-        find_arm_paths(mol, path, length, excluded, results);
+        let d = deltas[ni];
+        if d <= 0.0 {
+            continue;
+        }
+        visited[ni] = true;
+        path.push(next);
+        find_arm_paths_acc(
+            mol,
+            deltas,
+            target_len,
+            current_prod * d,
+            path,
+            visited,
+            results,
+        );
         path.pop();
+        visited[ni] = false;
     }
 }
 
-/// Generate combinations of k elements from a slice (by value).
-fn combinations_idx(items: &[AtomIdx], k: usize) -> Vec<Vec<AtomIdx>> {
-    let mut result = Vec::new();
-    let mut combo = Vec::with_capacity(k);
-    fn recurse(
-        items: &[AtomIdx],
-        k: usize,
-        start: usize,
-        combo: &mut Vec<AtomIdx>,
-        result: &mut Vec<Vec<AtomIdx>>,
-    ) {
-        if combo.len() == k {
-            result.push(combo.clone());
-            return;
-        }
-        for i in start..items.len() {
-            combo.push(items[i]);
-            recurse(items, k, i + 1, combo, result);
-            combo.pop();
+/// Generate combinations of 3 elements from a slice.
+fn combinations3(items: &[AtomIdx]) -> Vec<[AtomIdx; 3]> {
+    let mut out = Vec::new();
+    if items.len() < 3 {
+        return out;
+    }
+    for i in 0..(items.len() - 2) {
+        for j in (i + 1)..(items.len() - 1) {
+            for k in (j + 1)..items.len() {
+                out.push([items[i], items[j], items[k]]);
+            }
         }
     }
-    recurse(items, k, 0, &mut combo, &mut result);
-    result
+    out
 }
 
 /// Generate all distinct permutations of three values.
@@ -424,31 +527,6 @@ fn distinct_permutations(a: usize, b: usize, c: usize) -> Vec<[usize; 3]> {
         }
     }
     perms
-}
-
-/// Generate all combinations of `k` elements from `items`.
-fn combinations(items: &[f64], k: usize) -> Vec<Vec<f64>> {
-    let mut result = Vec::new();
-    let mut combo = Vec::with_capacity(k);
-    fn recurse(
-        items: &[f64],
-        k: usize,
-        start: usize,
-        combo: &mut Vec<f64>,
-        result: &mut Vec<Vec<f64>>,
-    ) {
-        if combo.len() == k {
-            result.push(combo.clone());
-            return;
-        }
-        for i in start..items.len() {
-            combo.push(items[i]);
-            recurse(items, k, i + 1, combo, result);
-            combo.pop();
-        }
-    }
-    recurse(items, k, 0, &mut combo, &mut result);
-    result
 }
 
 // ---------------------------------------------------------------------------
@@ -617,8 +695,11 @@ impl Descriptor for ChiIndices {
 
         // ChiPath (8 values)
         let simple_delta = simple_deltas(mol);
+        let mut simple_path_vals = [0.0f64; 8];
         for order in 0..8 {
-            values.push(chi_path(mol, &simple_delta, order) as f32);
+            let v = chi_path(mol, &simple_delta, order);
+            simple_path_vals[order] = v;
+            values.push(v as f32);
         }
 
         // ChiValencePath (8 values)
@@ -632,23 +713,37 @@ impl Descriptor for ChiIndices {
             values.push(value as f32);
         }
 
-        // ChiCluster (2 values)
-        values.push(chi_cluster(mol, &simple_delta, 3) as f32);
-        values.push(chi_cluster(mol, &simple_delta, 4) as f32);
+        // ChiCluster (cache orders 3..7 once)
+        let mut cluster_vals = [0.0f64; 8];
+        for order in 3..=7 {
+            cluster_vals[order] = chi_cluster(mol, &simple_delta, order);
+        }
+        values.push(cluster_vals[3] as f32);
+        values.push(cluster_vals[4] as f32);
+
+        // ChiPathCluster (cache orders 4..7 once)
+        let mut pathcluster_vals = [0.0f64; 8];
+        for order in 4..=7 {
+            pathcluster_vals[order] = chi_pathcluster_order(mol, &simple_delta, order);
+        }
 
         // ChiChain (5 values)
         for i in 0..5 {
             let order = i + 3; // orders 3-7
-            let path = chi_path(mol, &simple_delta, order);
-            let cluster = chi_cluster(mol, &simple_delta, order);
-            let pc = chi_pathcluster_order(mol, &simple_delta, order);
+            let path = simple_path_vals[order];
+            let cluster = cluster_vals[order];
+            let pc = if order >= 4 {
+                pathcluster_vals[order]
+            } else {
+                0.0
+            };
             values.push((path - cluster - pc).max(0.0) as f32);
         }
 
         // ChiPathCluster (3 values)
-        values.push(chi_pathcluster_order(mol, &simple_delta, 4) as f32);
-        values.push(chi_pathcluster_order(mol, &simple_delta, 5) as f32);
-        values.push(chi_pathcluster_order(mol, &simple_delta, 6) as f32);
+        values.push(pathcluster_vals[4] as f32);
+        values.push(pathcluster_vals[5] as f32);
+        values.push(pathcluster_vals[6] as f32);
 
         DescriptorValue::FloatVec(values)
     }

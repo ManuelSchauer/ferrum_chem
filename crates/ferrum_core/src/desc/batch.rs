@@ -1,20 +1,50 @@
 use super::aromatic_ring_count::AromaticRingCount;
-use super::atom_count::{AromaticAtomCount, AtomCount, HeavyAtomCount};
+use super::atom_count::{AromaticAtomCount, AtomCount, ElementCounts, HeavyAtomCount};
+use super::autocorrelation::Autocorrelation;
 use super::balaban::BalabanIndex;
-use super::bond_count::{BondCount, RotatableBondCount};
-use super::extra_counts::{BertzCT, FractionCSP3, HallKierAlpha, NumAmideBonds};
+use super::bcut::BCUT;
+use super::bond_count::{BondCount, BondCountDetailed, RotatableBondCount};
+use super::carbon_types::CarbonTypes;
+use super::chains::{LargestChain, LongestAliphaticChain};
+use super::chi::ChiIndices;
+use super::estate::EStateIndices;
+use super::extra_counts::{
+    AromaticAtomFraction, BertzCT, FragmentComplexity, FractionCSP3, HallKierAlpha, Ipc,
+    NumAmideBonds,
+};
+use super::fingerprint::{ECFP, FCFP};
 use super::formal_charge::FormalCharge;
+use super::functional_groups::{AcidicGroupCount, BasicGroupCount, FunctionalGroupCounts};
+use super::gasteiger_charge::{
+    MaxAbsPartialCharge, MaxPartialCharge, MinAbsPartialCharge, MinPartialCharge,
+};
 use super::hbond::{HBondAcceptor, HBondDonor};
+use super::kappa::KappaIndices;
+use super::lipinski::LipinskiViolations;
 use super::logp::{LogP, MolarRefractivity};
+use super::maccs::MaccsKeys;
+use super::mde::MDE;
 use super::molecular_weight::MolecularWeight;
+use super::path_fingerprints::{AtomPairFingerprint, TopologicalTorsionFingerprint};
+use super::petitjean::PetitjeanIndex;
+use super::pi_system::{LargestPiSystem, PiSystemCounts};
+use super::polarizability::{APol, BPol};
+use super::pubchem::PubChem881;
 use super::qed::Qed;
-use super::simple_counts::HeteroatomCount;
+use super::ring_types::RingTypeCounts;
+use super::simple_counts::{
+    HeteroatomCount, HybridizationRatio, RadicalElectrons, VAdjMa, ValenceElectrons,
+};
+use super::small_ring::SmallRingDescriptor;
 use super::tpsa::Tpsa;
 use super::typed::{Descriptor, DescriptorValue};
 use super::vsa::{
     fill_peoe_vsa_into, fill_slogp_vsa_into, fill_smr_vsa_into, LabuteASA, PeoeVsa, SlogpVSA,
     SmrVSA,
 };
+use super::weighted_path::WeightedPath;
+use super::wiener_numbers::WienerIndex;
+use super::zagreb::ZagrebIndices;
 use crate::error::Result;
 use crate::mol::molecule::Molecule;
 use rayon::prelude::*;
@@ -69,24 +99,138 @@ pub enum BatchDescriptor {
     RotatableBondCount,
     HeavyAtomCount,
     AtomCount,
+    ElementCounts,
     AromaticAtomCount,
     HeteroatomCount,
     AromaticRingCount,
+    BondCount,
+    BondCountDetailed,
+    ValenceElectrons,
+    RadicalElectrons,
+    HybridizationRatio,
+    VAdjMa,
     FormalCharge,
     FractionCSP3,
     BertzCT,
+    Ipc,
+    FragmentComplexity,
     LabuteAsa,
     Qed,
     NumAmideBonds,
     HallKierAlpha,
+    AromaticAtomFraction,
+    LipinskiViolations,
     BalabanIndex,
-    BondCount,
+    WienerIndex,
+    ZagrebIndices,
+    PetitjeanIndex,
+    SmallRingDescriptor,
+    RingTypeCounts,
+    PiSystemCounts,
+    LargestPiSystem,
+    CarbonTypes,
+    ChiIndices,
+    KappaIndices,
+    EStateIndices,
+    Autocorrelation,
+    Bcut,
+    WeightedPath,
+    Mde,
+    FunctionalGroupCounts,
+    AcidicGroupCount,
+    BasicGroupCount,
+    LongestAliphaticChain,
+    LargestChain,
+    MaxPartialCharge,
+    MinPartialCharge,
+    MaxAbsPartialCharge,
+    MinAbsPartialCharge,
+    APol,
+    BPol,
     SlogpVsa,
     SmrVsa,
     PeoeVsa,
+    MaccsKeys,
+    PubChem881,
+    Ecfp4,
+    Fcfp4,
+    AtomPairFingerprint,
+    TopologicalTorsionFingerprint,
 }
 
 impl BatchDescriptor {
+    pub fn all() -> &'static [Self] {
+        const ALL: [BatchDescriptor; 66] = [
+            BatchDescriptor::MolecularWeight,
+            BatchDescriptor::LogP,
+            BatchDescriptor::MolarRefractivity,
+            BatchDescriptor::Tpsa,
+            BatchDescriptor::HBondDonor,
+            BatchDescriptor::HBondAcceptor,
+            BatchDescriptor::RotatableBondCount,
+            BatchDescriptor::HeavyAtomCount,
+            BatchDescriptor::AtomCount,
+            BatchDescriptor::ElementCounts,
+            BatchDescriptor::AromaticAtomCount,
+            BatchDescriptor::HeteroatomCount,
+            BatchDescriptor::AromaticRingCount,
+            BatchDescriptor::BondCount,
+            BatchDescriptor::BondCountDetailed,
+            BatchDescriptor::ValenceElectrons,
+            BatchDescriptor::RadicalElectrons,
+            BatchDescriptor::HybridizationRatio,
+            BatchDescriptor::VAdjMa,
+            BatchDescriptor::FormalCharge,
+            BatchDescriptor::FractionCSP3,
+            BatchDescriptor::BertzCT,
+            BatchDescriptor::Ipc,
+            BatchDescriptor::FragmentComplexity,
+            BatchDescriptor::LabuteAsa,
+            BatchDescriptor::Qed,
+            BatchDescriptor::NumAmideBonds,
+            BatchDescriptor::HallKierAlpha,
+            BatchDescriptor::AromaticAtomFraction,
+            BatchDescriptor::LipinskiViolations,
+            BatchDescriptor::BalabanIndex,
+            BatchDescriptor::WienerIndex,
+            BatchDescriptor::ZagrebIndices,
+            BatchDescriptor::PetitjeanIndex,
+            BatchDescriptor::SmallRingDescriptor,
+            BatchDescriptor::RingTypeCounts,
+            BatchDescriptor::PiSystemCounts,
+            BatchDescriptor::LargestPiSystem,
+            BatchDescriptor::CarbonTypes,
+            BatchDescriptor::ChiIndices,
+            BatchDescriptor::KappaIndices,
+            BatchDescriptor::EStateIndices,
+            BatchDescriptor::Autocorrelation,
+            BatchDescriptor::Bcut,
+            BatchDescriptor::WeightedPath,
+            BatchDescriptor::Mde,
+            BatchDescriptor::FunctionalGroupCounts,
+            BatchDescriptor::AcidicGroupCount,
+            BatchDescriptor::BasicGroupCount,
+            BatchDescriptor::LongestAliphaticChain,
+            BatchDescriptor::LargestChain,
+            BatchDescriptor::MaxPartialCharge,
+            BatchDescriptor::MinPartialCharge,
+            BatchDescriptor::MaxAbsPartialCharge,
+            BatchDescriptor::MinAbsPartialCharge,
+            BatchDescriptor::APol,
+            BatchDescriptor::BPol,
+            BatchDescriptor::SlogpVsa,
+            BatchDescriptor::SmrVsa,
+            BatchDescriptor::PeoeVsa,
+            BatchDescriptor::MaccsKeys,
+            BatchDescriptor::PubChem881,
+            BatchDescriptor::Ecfp4,
+            BatchDescriptor::Fcfp4,
+            BatchDescriptor::AtomPairFingerprint,
+            BatchDescriptor::TopologicalTorsionFingerprint,
+        ];
+        &ALL
+    }
+
     pub fn name(self) -> &'static str {
         match self {
             Self::MolecularWeight => "MolecularWeight",
@@ -98,21 +242,63 @@ impl BatchDescriptor {
             Self::RotatableBondCount => "RotatableBondCount",
             Self::HeavyAtomCount => "HeavyAtomCount",
             Self::AtomCount => "AtomCount",
+            Self::ElementCounts => "ElementCounts",
             Self::AromaticAtomCount => "AromaticAtomCount",
             Self::HeteroatomCount => "HeteroatomCount",
             Self::AromaticRingCount => "AromaticRingCount",
+            Self::BondCount => "BondCount",
+            Self::BondCountDetailed => "BondCountDetailed",
+            Self::ValenceElectrons => "ValenceElectrons",
+            Self::RadicalElectrons => "RadicalElectrons",
+            Self::HybridizationRatio => "HybridizationRatio",
+            Self::VAdjMa => "VAdjMa",
             Self::FormalCharge => "FormalCharge",
             Self::FractionCSP3 => "FractionCSP3",
             Self::BertzCT => "BertzCT",
+            Self::Ipc => "Ipc",
+            Self::FragmentComplexity => "FragmentComplexity",
             Self::LabuteAsa => "LabuteASA",
             Self::Qed => "QED",
             Self::NumAmideBonds => "NumAmideBonds",
             Self::HallKierAlpha => "HallKierAlpha",
+            Self::AromaticAtomFraction => "AromaticAtomFraction",
+            Self::LipinskiViolations => "LipinskiViolations",
             Self::BalabanIndex => "BalabanIndex",
-            Self::BondCount => "BondCount",
+            Self::WienerIndex => "WienerIndex",
+            Self::ZagrebIndices => "ZagrebIndices",
+            Self::PetitjeanIndex => "PetitjeanIndex",
+            Self::SmallRingDescriptor => "SmallRingDescriptor",
+            Self::RingTypeCounts => "RingTypeCounts",
+            Self::PiSystemCounts => "PiSystemCounts",
+            Self::LargestPiSystem => "LargestPiSystem",
+            Self::CarbonTypes => "CarbonTypes",
+            Self::ChiIndices => "ChiIndices",
+            Self::KappaIndices => "KappaIndices",
+            Self::EStateIndices => "EStateIndices",
+            Self::Autocorrelation => "Autocorrelation",
+            Self::Bcut => "BCUT",
+            Self::WeightedPath => "WeightedPath",
+            Self::Mde => "MDE",
+            Self::FunctionalGroupCounts => "FunctionalGroupCounts",
+            Self::AcidicGroupCount => "AcidicGroupCount",
+            Self::BasicGroupCount => "BasicGroupCount",
+            Self::LongestAliphaticChain => "LongestAliphaticChain",
+            Self::LargestChain => "LargestChain",
+            Self::MaxPartialCharge => "MaxPartialCharge",
+            Self::MinPartialCharge => "MinPartialCharge",
+            Self::MaxAbsPartialCharge => "MaxAbsPartialCharge",
+            Self::MinAbsPartialCharge => "MinAbsPartialCharge",
+            Self::APol => "APol",
+            Self::BPol => "BPol",
             Self::SlogpVsa => "SlogP_VSA",
             Self::SmrVsa => "SMR_VSA",
             Self::PeoeVsa => "PEOE_VSA",
+            Self::MaccsKeys => "MaccsKeys",
+            Self::PubChem881 => "PubChem881",
+            Self::Ecfp4 => "ECFP4",
+            Self::Fcfp4 => "FCFP4",
+            Self::AtomPairFingerprint => "AtomPair",
+            Self::TopologicalTorsionFingerprint => "TopologicalTorsion",
         }
     }
 
@@ -127,29 +313,97 @@ impl BatchDescriptor {
             Self::RotatableBondCount => RotatableBondCount.calculate(mol, ctx),
             Self::HeavyAtomCount => HeavyAtomCount.calculate(mol, ctx),
             Self::AtomCount => AtomCount.calculate(mol, ctx),
+            Self::ElementCounts => ElementCounts.calculate(mol, ctx),
             Self::AromaticAtomCount => AromaticAtomCount.calculate(mol, ctx),
             Self::HeteroatomCount => HeteroatomCount.calculate(mol, ctx),
             Self::AromaticRingCount => AromaticRingCount.calculate(mol, ctx),
+            Self::BondCount => BondCount.calculate(mol, ctx),
+            Self::BondCountDetailed => BondCountDetailed.calculate(mol, ctx),
+            Self::ValenceElectrons => ValenceElectrons.calculate(mol, ctx),
+            Self::RadicalElectrons => RadicalElectrons.calculate(mol, ctx),
+            Self::HybridizationRatio => HybridizationRatio.calculate(mol, ctx),
+            Self::VAdjMa => VAdjMa.calculate(mol, ctx),
             Self::FormalCharge => FormalCharge.calculate(mol, ctx),
             Self::FractionCSP3 => FractionCSP3.calculate(mol, ctx),
             Self::BertzCT => BertzCT.calculate(mol, ctx),
+            Self::Ipc => Ipc.calculate(mol, ctx),
+            Self::FragmentComplexity => FragmentComplexity.calculate(mol, ctx),
             Self::LabuteAsa => LabuteASA.calculate(mol, ctx),
             Self::Qed => Qed.calculate(mol, ctx),
             Self::NumAmideBonds => NumAmideBonds.calculate(mol, ctx),
             Self::HallKierAlpha => HallKierAlpha.calculate(mol, ctx),
+            Self::AromaticAtomFraction => AromaticAtomFraction.calculate(mol, ctx),
+            Self::LipinskiViolations => LipinskiViolations.calculate(mol, ctx),
             Self::BalabanIndex => BalabanIndex.calculate(mol, ctx),
-            Self::BondCount => BondCount.calculate(mol, ctx),
+            Self::WienerIndex => WienerIndex.calculate(mol, ctx),
+            Self::ZagrebIndices => ZagrebIndices.calculate(mol, ctx),
+            Self::PetitjeanIndex => PetitjeanIndex.calculate(mol, ctx),
+            Self::SmallRingDescriptor => SmallRingDescriptor.calculate(mol, ctx),
+            Self::RingTypeCounts => RingTypeCounts.calculate(mol, ctx),
+            Self::PiSystemCounts => PiSystemCounts.calculate(mol, ctx),
+            Self::LargestPiSystem => LargestPiSystem.calculate(mol, ctx),
+            Self::CarbonTypes => CarbonTypes.calculate(mol, ctx),
+            Self::ChiIndices => ChiIndices.calculate(mol, ctx),
+            Self::KappaIndices => KappaIndices.calculate(mol, ctx),
+            Self::EStateIndices => EStateIndices.calculate(mol, ctx),
+            Self::Autocorrelation => Autocorrelation.calculate(mol, ctx),
+            Self::Bcut => BCUT.calculate(mol, ctx),
+            Self::WeightedPath => WeightedPath.calculate(mol, ctx),
+            Self::Mde => MDE.calculate(mol, ctx),
+            Self::FunctionalGroupCounts => FunctionalGroupCounts.calculate(mol, ctx),
+            Self::AcidicGroupCount => AcidicGroupCount.calculate(mol, ctx),
+            Self::BasicGroupCount => BasicGroupCount.calculate(mol, ctx),
+            Self::LongestAliphaticChain => LongestAliphaticChain.calculate(mol, ctx),
+            Self::LargestChain => LargestChain.calculate(mol, ctx),
+            Self::MaxPartialCharge => MaxPartialCharge.calculate(mol, ctx),
+            Self::MinPartialCharge => MinPartialCharge.calculate(mol, ctx),
+            Self::MaxAbsPartialCharge => MaxAbsPartialCharge.calculate(mol, ctx),
+            Self::MinAbsPartialCharge => MinAbsPartialCharge.calculate(mol, ctx),
+            Self::APol => APol.calculate(mol, ctx),
+            Self::BPol => BPol.calculate(mol, ctx),
             Self::SlogpVsa => SlogpVSA.calculate(mol, ctx),
             Self::SmrVsa => SmrVSA.calculate(mol, ctx),
             Self::PeoeVsa => PeoeVsa.calculate(mol, ctx),
+            Self::MaccsKeys => MaccsKeys.calculate(mol, ctx),
+            Self::PubChem881 => PubChem881.calculate(mol, ctx),
+            Self::Ecfp4 => ECFP::ecfp4().calculate(mol, ctx),
+            Self::Fcfp4 => FCFP::fcfp4().calculate(mol, ctx),
+            Self::AtomPairFingerprint => {
+                AtomPairFingerprint::default_size().calculate(mol, ctx)
+            }
+            Self::TopologicalTorsionFingerprint => {
+                TopologicalTorsionFingerprint::default_size().calculate(mol, ctx)
+            }
         }
     }
 
     pub fn feature_len(self) -> usize {
         match self {
+            Self::ElementCounts => 12,
+            Self::BondCountDetailed => 5,
+            Self::SmallRingDescriptor => 11,
+            Self::RingTypeCounts => 3,
+            Self::PiSystemCounts => 2,
+            Self::CarbonTypes => 9,
+            Self::ChiIndices => 26,
+            Self::KappaIndices => 3,
+            Self::EStateIndices => 47,
+            Self::Autocorrelation => 32,
+            Self::Bcut => 8,
+            Self::WeightedPath => 10,
+            Self::Mde => 15,
+            Self::ZagrebIndices => 2,
+            Self::PetitjeanIndex => 3,
+            Self::FunctionalGroupCounts => 16,
             Self::SlogpVsa => 12,
             Self::SmrVsa => 10,
             Self::PeoeVsa => 14,
+            Self::MaccsKeys => 166,
+            Self::PubChem881 => 881,
+            Self::Ecfp4
+            | Self::Fcfp4
+            | Self::AtomPairFingerprint
+            | Self::TopologicalTorsionFingerprint => 2048,
             _ => 1,
         }
     }
@@ -313,6 +567,59 @@ pub fn calculate_batch_flat_static(
     FlatDescriptorMatrix { rows, cols, data }
 }
 
+/// Calculates static-dispatch descriptors and allows cooperative cancellation between rows.
+pub fn calculate_batch_flat_static_cancellable<F>(
+    molecules: &mut [Molecule],
+    descriptors: &[BatchDescriptor],
+    should_cancel: &F,
+) -> std::result::Result<FlatDescriptorMatrix, ()>
+where
+    F: Fn() -> bool + Sync,
+{
+    if should_cancel() {
+        return Err(());
+    }
+
+    let rows = molecules.len();
+    if rows == 0 || descriptors.is_empty() {
+        return Ok(FlatDescriptorMatrix {
+            rows,
+            cols: 0,
+            data: Vec::new(),
+        });
+    }
+
+    let cols = infer_cols_static(descriptors);
+    if cols == 0 {
+        return Ok(FlatDescriptorMatrix {
+            rows,
+            cols,
+            data: Vec::new(),
+        });
+    }
+
+    let mut data = vec![0.0f32; rows * cols];
+    data.par_chunks_mut(cols)
+        .zip(molecules.par_iter_mut())
+        .try_for_each_init(crate::desc::context::CalculationContext::new, |ctx, (row, mol)| {
+            if should_cancel() {
+                return Err(());
+            }
+            ctx.reset_for_new_molecule();
+            fill_row_static(row, mol, descriptors, ctx);
+            if should_cancel() {
+                return Err(());
+            }
+            Ok(())
+        })?;
+
+    if should_cancel() {
+        return Err(());
+    }
+
+    Ok(FlatDescriptorMatrix { rows, cols, data })
+}
+
 /// Compatibility API: calculates descriptors in parallel and returns row-major vectors.
 pub fn calculate_batch(
     molecules: &mut [Molecule],
@@ -473,6 +780,79 @@ mod tests {
 
         assert_eq!(matrix.shape(), (2, 2));
         assert_eq!(matrix.data.len(), 4);
+    }
+
+    #[test]
+    fn test_calculate_batch_flat_static_cancellable_honors_cancel_flag() {
+        let mut molecules = vec![parse_smiles("C").unwrap(); 128];
+        let descriptors = [BatchDescriptor::MolecularWeight];
+        let canceled = std::sync::atomic::AtomicBool::new(true);
+
+        let result = calculate_batch_flat_static_cancellable(
+            &mut molecules,
+            &descriptors,
+            &|| canceled.load(std::sync::atomic::Ordering::Relaxed),
+        );
+
+        assert!(result.is_err(), "Expected cancellation to stop batch calculation");
+    }
+
+    #[test]
+    fn test_static_feature_len_matches_runtime_value_len_on_torture_set() {
+        let torture_smiles = [
+            "c1ccc2ccccc2c1",
+            "c1ccc2cccc2c1",
+            "c1ccc2[nH]ccc2c1",
+            "c1ccc2ncccc2c1",
+            "c1ccc2cnccc2c1",
+            "c1nc2c(n1)nc[nH]2",
+            "C1=CC=CC=CC=C1",
+            "[cH-]1cccc1",
+            "c1cc[nH]c1",
+            "c1ccoc1",
+            "c1ccsc1",
+            "CC[NH3+]",
+            "C[N+](C)(C)C",
+            "[O-]C(=O)C",
+            "O=[N+](O)c1ccccc1",
+            "CC(C)(C)C",
+            "C12C3C4C1C5C4C3C25",
+            "[13CH3]C([2H])([2H])[2H]",
+            "C[C@H](O)C(=O)O",
+            "C[C@@H](N)C(=O)O",
+            "F/C=C/F",
+            "F/C=C\\F",
+            "C1CCCCC1",
+            "CCCCC",
+            "c1ccc2c(c1)ccc3ccccc23",
+            "[NH4+].[Cl-]",
+            "c1cccc2c1cccc2",
+            "[O-][N+](=O)c1ccccc1",
+            "c1[nH+]cccn1",
+            "C[NH+](C)C",
+        ];
+        let mut molecules = torture_smiles
+            .iter()
+            .map(|s| parse_smiles(s).expect("valid torture SMILES"))
+            .collect::<Vec<_>>();
+        assert!(!molecules.is_empty(), "torture_set.csv produced no molecules");
+
+        let descriptors = BatchDescriptor::all().to_vec();
+        let static_cols = descriptors.iter().map(|d| d.feature_len()).sum::<usize>();
+        let mut probe = molecules[0].clone();
+        let mut ctx = crate::desc::context::CalculationContext::new();
+        let runtime_cols = descriptors
+            .iter()
+            .map(|d| d.calculate(&mut probe, &mut ctx).len())
+            .sum::<usize>();
+        assert_eq!(
+            static_cols, runtime_cols,
+            "BatchDescriptor::feature_len sum must match runtime descriptor value lengths"
+        );
+
+        let matrix = calculate_batch_flat_static(&mut molecules, &descriptors);
+        assert_eq!(matrix.cols, static_cols);
+        assert_eq!(matrix.data.len(), matrix.rows * matrix.cols);
     }
 
     #[test]

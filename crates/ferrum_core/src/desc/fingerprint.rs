@@ -13,191 +13,245 @@
 //! J. Chem. Inf. Model. 50(5), 742-754.
 
 use super::typed::{Descriptor, DescriptorValue};
+use crate::algo::iso::visit_matches;
+use crate::io::smarts::parse_smarts;
+use crate::mol::elements::ATOMIC_MASSES;
 use crate::mol::molecule::Molecule;
 use crate::types::BondType;
 use bitvec::prelude::*;
-use std::collections::hash_map::DefaultHasher;
-use std::hash::{Hash, Hasher};
+use once_cell::sync::Lazy;
+use std::collections::HashSet;
 
-/// Compute a hash from a sequence of u64 values.
-fn combine_hash(values: &[u64]) -> u64 {
-    let mut hasher = DefaultHasher::new();
-    for v in values {
-        v.hash(&mut hasher);
+fn rdkit_hash_combine(seed: &mut u32, value: u32) {
+    *seed ^= value
+        .wrapping_add(0x9e37_79b9)
+        .wrapping_add(seed.wrapping_shl(6))
+        .wrapping_add(seed.wrapping_shr(2));
+}
+
+fn rdkit_hash_u32_slice(values: &[u32]) -> u32 {
+    let mut seed = 0u32;
+    for &value in values {
+        rdkit_hash_combine(&mut seed, value);
     }
-    hasher.finish()
+    seed
 }
 
-/// Compute initial atom invariant hash (ECFP-style).
-///
-/// Uses: atomic_number, degree, total_h, formal_charge, is_aromatic, is_in_ring
-fn atom_invariant_ecfp(mol: &Molecule, atom_idx: usize) -> u64 {
-    let atom = &mol.atoms[atom_idx];
-    let degree = mol.get_degree(atom_idx as u16) as u64;
-    combine_hash(&[
-        atom.atomic_number as u64,
-        degree,
-        atom.total_h() as u64,
-        (atom.formal_charge as i64 + 128) as u64, // shift to avoid negative hash issues
-        atom.is_aromatic() as u64,
-        atom.is_in_ring() as u64,
-    ])
+fn rdkit_hash_pair_i32_u32(first: i32, second: u32) -> u32 {
+    let mut seed = 0u32;
+    rdkit_hash_combine(&mut seed, first as u32);
+    rdkit_hash_combine(&mut seed, second);
+    seed
 }
 
-/// Pharmacophoric feature flags for FCFP.
-///
-/// Each atom is classified by functional role rather than atomic identity:
-/// - HBond Donor: N-H, O-H
-/// - HBond Acceptor: N, O (with lone pairs)
-/// - Positive Ionizable: basic amines
-/// - Negative Ionizable: carboxylic acids, etc.
-/// - Aromatic: aromatic atoms
-/// - Hydrophobic: non-polar carbons, halogens (Cl, Br, I, but not F)
-fn atom_invariant_fcfp(mol: &Molecule, atom_idx: usize) -> u64 {
-    let atom = &mol.atoms[atom_idx];
-    let an = atom.atomic_number;
-    let total_h = atom.total_h();
-    let charge = atom.formal_charge;
+#[derive(Clone, Eq, PartialEq, Hash, Ord, PartialOrd)]
+struct BondNeighborhood(Vec<u64>);
 
-    // HBond Donor: N or O with at least one H
-    let is_donor = (an == 7 || an == 8) && total_h > 0;
+impl BondNeighborhood {
+    fn new(word_count: usize) -> Self {
+        Self(vec![0u64; word_count])
+    }
 
-    // HBond Acceptor: N or O (standard definition)
-    let is_acceptor = an == 7 || an == 8;
+    #[inline]
+    fn set_bit(&mut self, bit_idx: usize) {
+        let word = bit_idx / 64;
+        let bit = bit_idx % 64;
+        self.0[word] |= 1u64 << bit;
+    }
 
-    // Positive Ionizable: N with positive charge, or basic amine (N with H, not amide-like)
-    let is_pos_ionizable =
-        (an == 7 && charge > 0) || (an == 7 && total_h > 0 && !atom.is_aromatic());
+    #[inline]
+    fn union_with(&mut self, other: &Self) {
+        for (slot, rhs) in self.0.iter_mut().zip(other.0.iter()) {
+            *slot |= *rhs;
+        }
+    }
+}
 
-    // Negative Ionizable: O with negative charge, or acidic O-H
-    let is_neg_ionizable = (an == 8 && charge < 0) || (an == 8 && total_h > 0);
-
-    // Aromatic
-    let is_aromatic = atom.is_aromatic();
-
-    // Hydrophobic: C with no heteroatom neighbors, or Cl/Br/I
-    let is_hydrophobic = if an == 6 {
-        // Carbon: hydrophobic if all heavy neighbors are C
-        mol.adjacency[atom_idx].iter().all(|&bond_idx| {
-            let bond = &mol.bonds[bond_idx as usize];
-            let neighbor = if bond.source as usize == atom_idx {
-                bond.target as usize
-            } else {
-                bond.source as usize
-            };
-            mol.atoms[neighbor].atomic_number == 6
-        })
+fn atom_mass(atom: &crate::mol::atom::Atom) -> f32 {
+    if atom.isotope > 0 {
+        atom.isotope as f32
     } else {
-        // Cl, Br, I (but not F - too electronegative)
-        an == 17 || an == 35 || an == 53
-    };
-
-    // Hash pharmacophoric features (not atomic identity)
-    combine_hash(&[
-        is_donor as u64,
-        is_acceptor as u64,
-        is_pos_ionizable as u64,
-        is_neg_ionizable as u64,
-        is_aromatic as u64,
-        is_hydrophobic as u64,
-    ])
+        ATOMIC_MASSES[atom.atomic_number as usize]
+    }
 }
 
-/// Encode bond type as a u64 for hashing.
-fn bond_type_hash(bt: BondType, is_aromatic: bool) -> u64 {
-    if is_aromatic {
-        return 4; // aromatic bond
+/// Default RDKit-like connectivity invariants for Morgan fingerprints.
+///
+/// Components:
+/// - atomic number
+/// - total degree (explicit degree + total hydrogens)
+/// - total hydrogen count
+/// - formal charge
+/// - delta mass (isotope-aware)
+/// - optional ring membership flag
+fn morgan_connectivity_invariants(mol: &Molecule, include_ring_membership: bool) -> Vec<u32> {
+    let mut invars = vec![0u32; mol.num_atoms()];
+    for atom_idx in 0..mol.num_atoms() {
+        let atom = &mol.atoms[atom_idx];
+        let total_h = atom.total_h() as u32;
+        let total_degree = mol.get_degree(atom_idx as u16) as u32 + total_h;
+        let base_mass = ATOMIC_MASSES[atom.atomic_number as usize];
+        let delta_mass = (atom_mass(atom) - base_mass) as i32;
+
+        let mut components = [0u32; 6];
+        let mut len = 0usize;
+        components[len] = atom.atomic_number as u32;
+        len += 1;
+        components[len] = total_degree;
+        len += 1;
+        components[len] = total_h;
+        len += 1;
+        components[len] = (atom.formal_charge as i32) as u32;
+        len += 1;
+        components[len] = delta_mass as u32;
+        len += 1;
+        if include_ring_membership && atom.is_in_ring() {
+            components[len] = 1;
+            len += 1;
+        }
+        invars[atom_idx] = rdkit_hash_u32_slice(&components[..len]);
     }
-    match bt {
+    invars
+}
+
+const FCFP_FEATURE_SMARTS: [&str; 6] = [
+    "[$([N;!H0;v3,v4&+1]),$([O,S;H1;+0]),n&H1&+0]",
+    "[$([O,S;H1;v2;!$(*-*=[O,N,P,S])]),$([O,S;H0;v2]),$([O,S;-]),$([N;v3;!$(N-*=[O,N,P,S])]),n&H0&+0,$([o,s;+0;!$([o,s]:n);!$([o,s]:c:n)])]",
+    "[a]",
+    "[F,Cl,Br,I]",
+    "[#7;+,$([N;H2&+0][$([C,a]);!$([C,a](=O))]),$([N;H1&+0]([$([C,a]);!$([C,a](=O))])[$([C,a]);!$([C,a](=O))]),$([N;H0&+0]([C;!$(C(=O))])([C;!$(C(=O))])[C;!$(C(=O))])]",
+    "[$([C,S](=[O,S,P])-[O;H1,-1])]",
+];
+
+static FCFP_FEATURE_PATTERNS: Lazy<Vec<crate::io::smarts::QueryGraph>> = Lazy::new(|| {
+    FCFP_FEATURE_SMARTS
+        .iter()
+        .map(|smarts| parse_smarts(smarts).expect("valid RDKit FCFP SMARTS pattern"))
+        .collect()
+});
+
+/// RDKit-like Gobbi/Poppinger feature invariants used by FCFP.
+fn morgan_feature_invariants(mol: &Molecule) -> Vec<u32> {
+    let mut invars = vec![0u32; mol.num_atoms()];
+    for (feature_idx, pattern) in FCFP_FEATURE_PATTERNS.iter().enumerate() {
+        let mask = 1u32 << feature_idx;
+        visit_matches(mol, pattern, |mapping| {
+            if let Some(&target_atom) = mapping.first() {
+                invars[target_atom as usize] |= mask;
+            }
+            true
+        });
+    }
+    invars
+}
+
+fn morgan_bond_invariant(bond: &crate::mol::bond::Bond) -> i32 {
+    match bond.bond_type {
         BondType::Single => 1,
         BondType::Double => 2,
         BondType::Triple => 3,
-        BondType::Aromatic => 4,
-        BondType::Dative => 5,
+        BondType::Aromatic => 12,
+        BondType::Dative => 17,
         BondType::Unknown => 0,
     }
 }
 
-/// Core Morgan fingerprint computation with pluggable atom invariants.
-///
-/// Returns a set of unique feature hashes collected across all radii.
-/// The `init_fn` determines ECFP vs FCFP behavior.
-fn morgan_features_with<F>(mol: &Molecule, radius: u32, init_fn: F) -> Vec<u64>
-where
-    F: Fn(&Molecule, usize) -> u64,
-{
-    let n = mol.num_atoms();
-    if n == 0 {
+fn morgan_features_from_invariants(mol: &Molecule, radius: u32, atom_invariants: Vec<u32>) -> Vec<u64> {
+    let n_atoms = mol.num_atoms();
+    if n_atoms == 0 {
         return vec![];
     }
 
-    // Initialize with atom invariants (radius 0)
-    let mut current_hashes: Vec<u64> = (0..n).map(|i| init_fn(mol, i)).collect();
+    let include_redundant_environments = false;
+    let mut features = Vec::with_capacity((radius as usize + 1) * n_atoms);
+    let mut current_invariants = atom_invariants;
+    let mut next_layer_invariants = vec![0u32; n_atoms];
+    let bond_invariants: Vec<i32> = mol.bonds.iter().map(morgan_bond_invariant).collect();
+    let mut dead_atoms = vec![false; n_atoms];
 
-    // Collect features: radius 0 features
-    let mut all_features: Vec<u64> = Vec::with_capacity(n * (radius as usize + 1));
-    // Tag radius-0 hashes to distinguish from higher radii
-    for &h in &current_hashes {
-        all_features.push(combine_hash(&[0, h]));
-    }
+    // Layer-0 environments.
+    features.extend(current_invariants.iter().map(|&v| v as u64));
 
-    // Iterative expansion
-    for r in 1..=radius {
-        let mut new_hashes = vec![0u64; n];
+    let neighborhood_word_count = (mol.num_bonds() + 63) / 64;
+    let mut atom_neighborhoods = vec![BondNeighborhood::new(neighborhood_word_count); n_atoms];
+    let mut round_atom_neighborhoods = atom_neighborhoods.clone();
+    let mut seen_neighborhoods = HashSet::with_capacity((radius as usize + 1) * n_atoms);
 
-        for atom_idx in 0..n {
-            // Collect (bond_hash, neighbor_hash) pairs and sort for order independence
-            let mut neighbor_info: Vec<(u64, u64)> = Vec::new();
+    for layer in 0..radius {
+        let mut all_neighborhoods_this_round: Vec<(BondNeighborhood, u32, usize)> =
+            Vec::with_capacity(n_atoms);
 
-            for &bond_idx in &mol.adjacency[atom_idx] {
-                let bond = &mol.bonds[bond_idx as usize];
-                let neighbor = if bond.source as usize == atom_idx {
+        for atom_idx in 0..n_atoms {
+            if dead_atoms[atom_idx] {
+                continue;
+            }
+            if mol.get_degree(atom_idx as u16) == 0 {
+                dead_atoms[atom_idx] = true;
+                continue;
+            }
+
+            let mut neighborhood_invariants: Vec<(i32, u32)> =
+                Vec::with_capacity(mol.adjacency[atom_idx].len());
+
+            for &bond_idx_u16 in &mol.adjacency[atom_idx] {
+                let bond_idx = bond_idx_u16 as usize;
+                let bond = &mol.bonds[bond_idx];
+                let neighbor_idx = if bond.source as usize == atom_idx {
                     bond.target as usize
                 } else {
                     bond.source as usize
                 };
 
-                let bh = bond_type_hash(bond.bond_type, bond.is_aromatic());
-                neighbor_info.push((bh, current_hashes[neighbor]));
+                round_atom_neighborhoods[atom_idx].set_bit(bond_idx);
+                round_atom_neighborhoods[atom_idx].union_with(&atom_neighborhoods[neighbor_idx]);
+                neighborhood_invariants.push((bond_invariants[bond_idx], current_invariants[neighbor_idx]));
             }
 
-            // Sort for canonical ordering (bond type first, then neighbor hash)
-            neighbor_info.sort();
+            neighborhood_invariants.sort_unstable();
 
-            // Build hash: [radius, current_hash, bond1, neigh1, bond2, neigh2, ...]
-            let mut hash_input: Vec<u64> = Vec::with_capacity(2 + neighbor_info.len() * 2);
-            hash_input.push(r as u64);
-            hash_input.push(current_hashes[atom_idx]);
-            for (bh, nh) in &neighbor_info {
-                hash_input.push(*bh);
-                hash_input.push(*nh);
+            let mut invariant = layer;
+            rdkit_hash_combine(&mut invariant, current_invariants[atom_idx]);
+            for (bond_inv, neighbor_inv) in neighborhood_invariants {
+                let pair_hash = rdkit_hash_pair_i32_u32(bond_inv, neighbor_inv);
+                rdkit_hash_combine(&mut invariant, pair_hash);
             }
 
-            new_hashes[atom_idx] = combine_hash(&hash_input);
+            next_layer_invariants[atom_idx] = invariant;
+            all_neighborhoods_this_round.push((
+                round_atom_neighborhoods[atom_idx].clone(),
+                invariant,
+                atom_idx,
+            ));
         }
 
-        // Collect features at this radius
-        for &h in &new_hashes {
-            all_features.push(h);
+        all_neighborhoods_this_round.sort_unstable();
+        for (neighborhood, invariant, atom_idx) in all_neighborhoods_this_round {
+            if include_redundant_environments || !seen_neighborhoods.contains(&neighborhood) {
+                features.push(invariant as u64);
+                seen_neighborhoods.insert(neighborhood);
+            } else {
+                dead_atoms[atom_idx] = true;
+            }
         }
 
-        current_hashes = new_hashes;
+        current_invariants.copy_from_slice(&next_layer_invariants);
+        next_layer_invariants.fill(0);
+        atom_neighborhoods = round_atom_neighborhoods.clone();
     }
 
-    // Deduplicate features (same environment at different atoms = one bit)
-    all_features.sort();
-    all_features.dedup();
-    all_features
+    features
 }
 
 /// ECFP features: Morgan with atomic invariants.
 fn morgan_features(mol: &Molecule, radius: u32) -> Vec<u64> {
-    morgan_features_with(mol, radius, atom_invariant_ecfp)
+    let atom_invariants = morgan_connectivity_invariants(mol, true);
+    morgan_features_from_invariants(mol, radius, atom_invariants)
 }
 
 /// FCFP features: Morgan with pharmacophoric invariants.
 fn fcfp_features(mol: &Molecule, radius: u32) -> Vec<u64> {
-    morgan_features_with(mol, radius, atom_invariant_fcfp)
+    let atom_invariants = morgan_feature_invariants(mol);
+    morgan_features_from_invariants(mol, radius, atom_invariants)
 }
 
 /// Compute Tanimoto similarity between two BitVec fingerprints.
@@ -453,12 +507,13 @@ mod tests {
 
     #[test]
     fn test_benzene_symmetry() {
-        let mut mol = parse_smiles("c1ccccc1").unwrap();
+        let mol = parse_smiles("c1ccccc1").unwrap();
         let features = morgan_features(&mol, 2);
+        let unique: std::collections::HashSet<u64> = features.iter().copied().collect();
         assert!(
-            features.len() <= 10,
-            "Benzene has high symmetry, got {} features",
-            features.len()
+            unique.len() <= 10,
+            "Benzene should have a small unique feature set, got {}",
+            unique.len()
         );
     }
 

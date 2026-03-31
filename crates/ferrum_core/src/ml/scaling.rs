@@ -2,7 +2,7 @@
 //!
 //! Both store fitted parameters for consistent inference-time transforms.
 
-use ndarray::{Array1, Array2, Axis};
+use ndarray::{Array1, Array2, Axis, Zip};
 use serde::{Deserialize, Serialize};
 
 /// Z-score normalisation: x' = (x − μ) / σ
@@ -17,11 +17,17 @@ impl StandardScaler {
     pub fn fit(data: &Array2<f64>) -> Self {
         let mean = data.mean_axis(Axis(0)).unwrap();
         let n = data.nrows() as f64;
-        let mut std = Array1::<f64>::zeros(data.ncols());
-        for i in 0..data.nrows() {
-            let diff = &data.row(i).to_owned() - &mean;
-            std = std + &(&diff * &diff);
+        let mut sq_sum = Array1::<f64>::zeros(data.ncols());
+        for row in data.rows() {
+            Zip::from(&mut sq_sum)
+                .and(&mean)
+                .and(row)
+                .for_each(|acc, &m, &x| {
+                    let diff = x - m;
+                    *acc += diff * diff;
+                });
         }
+        let mut std = sq_sum;
         std.mapv_inplace(|v| (v / n).sqrt().max(1e-12));
         Self { mean, std }
     }
@@ -29,11 +35,30 @@ impl StandardScaler {
     /// Transform data using fitted params.
     pub fn transform(&self, data: &Array2<f64>) -> Array2<f64> {
         let mut result = data.clone();
-        for mut row in result.rows_mut() {
-            let scaled = (&row.to_owned() - &self.mean) / &self.std;
-            row.assign(&scaled);
-        }
+        Zip::from(result.rows_mut()).for_each(|mut row| {
+            Zip::from(&mut row)
+                .and(&self.mean)
+                .and(&self.std)
+                .for_each(|x, &m, &s| *x = (*x - m) / s);
+        });
         result
+    }
+
+    /// Transform a single sample using fitted params.
+    pub fn transform_one(&self, sample: &[f64]) -> Vec<f64> {
+        assert_eq!(
+            sample.len(),
+            self.mean.len(),
+            "Sample length ({}) must match scaler feature count ({})",
+            sample.len(),
+            self.mean.len()
+        );
+        sample
+            .iter()
+            .zip(self.mean.iter())
+            .zip(self.std.iter())
+            .map(|((&x, &m), &s)| (x - m) / s)
+            .collect()
     }
 
     /// Fit and transform in one step.
@@ -46,10 +71,12 @@ impl StandardScaler {
     /// Inverse transform: x = x' * σ + μ
     pub fn inverse_transform(&self, data: &Array2<f64>) -> Array2<f64> {
         let mut result = data.clone();
-        for mut row in result.rows_mut() {
-            let orig = &row.to_owned() * &self.std + &self.mean;
-            row.assign(&orig);
-        }
+        Zip::from(result.rows_mut()).for_each(|mut row| {
+            Zip::from(&mut row)
+                .and(&self.std)
+                .and(&self.mean)
+                .for_each(|x, &s, &m| *x = *x * s + m);
+        });
         result
     }
 }
@@ -88,11 +115,30 @@ impl MinMaxScaler {
     /// Transform data to [0, 1].
     pub fn transform(&self, data: &Array2<f64>) -> Array2<f64> {
         let mut result = data.clone();
-        for mut row in result.rows_mut() {
-            let scaled = (&row.to_owned() - &self.min) / &self.range;
-            row.assign(&scaled);
-        }
+        Zip::from(result.rows_mut()).for_each(|mut row| {
+            Zip::from(&mut row)
+                .and(&self.min)
+                .and(&self.range)
+                .for_each(|x, &min, &range| *x = (*x - min) / range);
+        });
         result
+    }
+
+    /// Transform a single sample to [0, 1].
+    pub fn transform_one(&self, sample: &[f64]) -> Vec<f64> {
+        assert_eq!(
+            sample.len(),
+            self.min.len(),
+            "Sample length ({}) must match scaler feature count ({})",
+            sample.len(),
+            self.min.len()
+        );
+        sample
+            .iter()
+            .zip(self.min.iter())
+            .zip(self.range.iter())
+            .map(|((&x, &min), &range)| (x - min) / range)
+            .collect()
     }
 
     /// Fit and transform in one step.
@@ -105,10 +151,12 @@ impl MinMaxScaler {
     /// Inverse transform: x = x' * range + min
     pub fn inverse_transform(&self, data: &Array2<f64>) -> Array2<f64> {
         let mut result = data.clone();
-        for mut row in result.rows_mut() {
-            let orig = &row.to_owned() * &self.range + &self.min;
-            row.assign(&orig);
-        }
+        Zip::from(result.rows_mut()).for_each(|mut row| {
+            Zip::from(&mut row)
+                .and(&self.range)
+                .and(&self.min)
+                .for_each(|x, &range, &min| *x = *x * range + min);
+        });
         result
     }
 }
@@ -179,5 +227,36 @@ mod tests {
         assert!(t1.iter().all(|v| v.is_finite()));
         let (_, t2) = MinMaxScaler::fit_transform(&data);
         assert!(t2.iter().all(|v| v.is_finite()));
+    }
+
+    #[test]
+    fn test_transform_one_matches_batch_standard() {
+        let data =
+            Array2::from_shape_vec((3, 2), vec![1.0, 10.0, 2.0, 20.0, 3.0, 30.0]).unwrap();
+        let scaler = StandardScaler::fit(&data);
+        let sample = [2.5, 25.0];
+        let one = scaler.transform_one(&sample);
+        let batch = scaler
+            .transform(&Array2::from_shape_vec((1, 2), sample.to_vec()).unwrap())
+            .row(0)
+            .to_vec();
+        for (a, b) in one.iter().zip(batch.iter()) {
+            assert!((a - b).abs() < 1e-12);
+        }
+    }
+
+    #[test]
+    fn test_transform_one_matches_batch_minmax() {
+        let data = Array2::from_shape_vec((3, 2), vec![1.0, -5.0, 5.0, 0.0, 3.0, 5.0]).unwrap();
+        let scaler = MinMaxScaler::fit(&data);
+        let sample = [2.5, 1.0];
+        let one = scaler.transform_one(&sample);
+        let batch = scaler
+            .transform(&Array2::from_shape_vec((1, 2), sample.to_vec()).unwrap())
+            .row(0)
+            .to_vec();
+        for (a, b) in one.iter().zip(batch.iter()) {
+            assert!((a - b).abs() < 1e-12);
+        }
     }
 }

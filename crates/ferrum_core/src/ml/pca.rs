@@ -19,56 +19,112 @@ pub struct Pca {
 impl Pca {
     /// Fit PCA, keeping `n_components` principal components.
     pub fn fit(data: &Array2<f64>, n_components: usize) -> Self {
-        let n = data.nrows() as f64;
-        let p = data.ncols();
-        let nc = n_components.min(p);
+        let n_samples = data.nrows();
+        let n_features = data.ncols();
+        let nc = n_components.min(n_features);
+        let mean = data
+            .mean_axis(Axis(0))
+            .unwrap_or_else(|| Array1::zeros(n_features));
 
-        // Center data
-        let mean = data.mean_axis(Axis(0)).unwrap();
-        let mut centered = data.clone();
-        for mut row in centered.rows_mut() {
-            let c = &row.to_owned() - &mean;
-            row.assign(&c);
+        if n_samples == 0 || n_features == 0 || nc == 0 {
+            return Self {
+                mean,
+                components: Array2::<f64>::zeros((nc, n_features)),
+                explained_variance: Array1::<f64>::zeros(nc),
+                explained_variance_ratio: Array1::<f64>::zeros(nc),
+            };
         }
 
-        // Covariance matrix (p × p)
-        let mut cov = Array2::<f64>::zeros((p, p));
-        for i in 0..p {
-            for j in i..p {
-                let mut s = 0.0;
-                for k in 0..data.nrows() {
-                    s += centered[[k, i]] * centered[[k, j]];
+        // Center data once and reuse in both covariance paths.
+        let centered = data - &mean;
+        let n = n_samples as f64;
+
+        // When p >> n, eigendecompose the n×n Gram matrix and map eigenvectors
+        // back to feature space. This avoids the enormous p×p covariance + Jacobi cost.
+        let use_dual = n_features > n_samples;
+        let (mut eigenvalues, eigenvectors) = if use_dual {
+            let mut gram = Array2::<f64>::zeros((n_samples, n_samples));
+            for i in 0..n_samples {
+                for j in i..n_samples {
+                    let mut s = 0.0;
+                    for k in 0..n_features {
+                        s += centered[[i, k]] * centered[[j, k]];
+                    }
+                    s /= n;
+                    gram[[i, j]] = s;
+                    gram[[j, i]] = s;
                 }
-                s /= n;
-                cov[[i, j]] = s;
-                cov[[j, i]] = s;
+            }
+            jacobi_eigen(&gram)
+        } else {
+            let mut cov = Array2::<f64>::zeros((n_features, n_features));
+            for i in 0..n_features {
+                for j in i..n_features {
+                    let mut s = 0.0;
+                    for k in 0..n_samples {
+                        s += centered[[k, i]] * centered[[k, j]];
+                    }
+                    s /= n;
+                    cov[[i, j]] = s;
+                    cov[[j, i]] = s;
+                }
+            }
+            jacobi_eigen(&cov)
+        };
+
+        for value in &mut eigenvalues {
+            if !value.is_finite() {
+                *value = 0.0;
             }
         }
 
-        // Jacobi eigendecomposition
-        let (eigenvalues, eigenvectors) = jacobi_eigen(&cov);
+        // Sort eigenvalues descending.
+        let mut indices: Vec<usize> = (0..eigenvalues.len()).collect();
+        indices.sort_by(|&a, &b| eigenvalues[b].total_cmp(&eigenvalues[a]));
 
-        // Sort eigenvalues descending
-        let mut indices: Vec<usize> = (0..p).collect();
-        indices.sort_by(|&a, &b| eigenvalues[b].partial_cmp(&eigenvalues[a]).unwrap());
-
-        let total_var: f64 = eigenvalues.iter().sum();
+        let total_var: f64 = eigenvalues.iter().map(|&v| v.max(0.0)).sum();
         let total_var = if total_var.abs() < 1e-15 {
             1.0
         } else {
             total_var
         };
 
-        let mut components = Array2::<f64>::zeros((nc, p));
+        let mut components = Array2::<f64>::zeros((nc, n_features));
         let mut explained_variance = Array1::<f64>::zeros(nc);
         let mut explained_variance_ratio = Array1::<f64>::zeros(nc);
 
-        for (i, &idx) in indices.iter().take(nc).enumerate() {
-            for j in 0..p {
-                components[[i, j]] = eigenvectors[[j, idx]];
+        for i in 0..nc {
+            let Some(&idx) = indices.get(i) else {
+                break;
+            };
+            let lambda = eigenvalues[idx].max(0.0);
+            explained_variance[i] = lambda;
+            explained_variance_ratio[i] = lambda / total_var;
+
+            if lambda <= 1e-15 {
+                continue;
             }
-            explained_variance[i] = eigenvalues[idx].max(0.0);
-            explained_variance_ratio[i] = eigenvalues[idx].max(0.0) / total_var;
+
+            if use_dual {
+                // v = Xᵀu / sqrt(n * λ)
+                let u = eigenvectors.column(idx).to_owned();
+                let mut component = centered.t().dot(&u);
+                let denom = (n * lambda).sqrt();
+                if denom > 1e-15 {
+                    component.mapv_inplace(|x| x / denom);
+                }
+
+                // Normalize to unit norm for numerical stability.
+                let norm = component.iter().map(|x| x * x).sum::<f64>().sqrt();
+                if norm > 1e-15 {
+                    component.mapv_inplace(|x| x / norm);
+                }
+                components.row_mut(i).assign(&component.view());
+            } else {
+                for j in 0..n_features {
+                    components[[i, j]] = eigenvectors[[j, idx]];
+                }
+            }
         }
 
         Self {
@@ -97,6 +153,29 @@ impl Pca {
             }
         }
         result
+    }
+
+    /// Transform a single sample into PCA space.
+    pub fn transform_one(&self, sample: &[f64]) -> Vec<f64> {
+        assert_eq!(
+            sample.len(),
+            self.mean.len(),
+            "Sample length ({}) must match PCA feature count ({})",
+            sample.len(),
+            self.mean.len()
+        );
+        let nc = self.components.nrows();
+        let mut out = vec![0.0; nc];
+        for (j, out_j) in out.iter_mut().enumerate() {
+            let dot: f64 = sample
+                .iter()
+                .zip(self.mean.iter())
+                .zip(self.components.row(j).iter())
+                .map(|((&x, &m), &c)| (x - m) * c)
+                .sum();
+            *out_j = dot;
+        }
+        out
     }
 
     /// Fit and transform in one step.
@@ -136,6 +215,12 @@ impl Pca {
 /// Returns (eigenvalues, eigenvectors) where eigenvectors are column-wise.
 fn jacobi_eigen(a: &Array2<f64>) -> (Vec<f64>, Array2<f64>) {
     let n = a.nrows();
+    if n == 0 {
+        return (Vec::new(), Array2::<f64>::zeros((0, 0)));
+    }
+    if n == 1 {
+        return (vec![a[[0, 0]]], Array2::<f64>::eye(1));
+    }
     let mut d = a.clone(); // working matrix
     let mut v = Array2::<f64>::eye(n); // eigenvector accumulator
 
@@ -176,25 +261,23 @@ fn jacobi_eigen(a: &Array2<f64>) -> (Vec<f64>, Array2<f64>) {
         let c = theta.cos();
         let s = theta.sin();
 
-        // Apply Givens rotation
-        let mut new_d = d.clone();
-        new_d[[p, p]] = c * c * dpp + 2.0 * s * c * dpq + s * s * dqq;
-        new_d[[q, q]] = s * s * dpp - 2.0 * s * c * dpq + c * c * dqq;
-        new_d[[p, q]] = 0.0;
-        new_d[[q, p]] = 0.0;
-
+        // Apply Givens rotation in-place.
         for i in 0..n {
             if i != p && i != q {
                 let dip = d[[i, p]];
                 let diq = d[[i, q]];
-                new_d[[i, p]] = c * dip + s * diq;
-                new_d[[p, i]] = new_d[[i, p]];
-                new_d[[i, q]] = -s * dip + c * diq;
-                new_d[[q, i]] = new_d[[i, q]];
+                let new_ip = c * dip + s * diq;
+                let new_iq = -s * dip + c * diq;
+                d[[i, p]] = new_ip;
+                d[[p, i]] = new_ip;
+                d[[i, q]] = new_iq;
+                d[[q, i]] = new_iq;
             }
         }
-
-        d = new_d;
+        d[[p, p]] = c * c * dpp + 2.0 * s * c * dpq + s * s * dqq;
+        d[[q, q]] = s * s * dpp - 2.0 * s * c * dpq + c * c * dqq;
+        d[[p, q]] = 0.0;
+        d[[q, p]] = 0.0;
 
         // Update eigenvectors
         for i in 0..n {
@@ -288,5 +371,43 @@ mod tests {
         assert!((sorted[0] - 1.0).abs() < 1e-10);
         assert!((sorted[1] - 2.0).abs() < 1e-10);
         assert!((sorted[2] - 3.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_pca_high_dimensional_small_sample() {
+        let rows = 30usize;
+        let cols = 5395usize;
+        let mut data = Vec::with_capacity(rows * cols);
+        for i in 0..rows {
+            for j in 0..cols {
+                let v = ((i as f64 + 1.0) * (j as f64 + 1.0)).sin()
+                    + ((i * 17 + j * 7) as f64).cos() * 0.1;
+                data.push(v);
+            }
+        }
+
+        let data = Array2::from_shape_vec((rows, cols), data).unwrap();
+        let (pca, transformed) = Pca::fit_transform(&data, 2);
+
+        assert_eq!(pca.n_components(), 2);
+        assert_eq!(pca.components.ncols(), cols);
+        assert_eq!(transformed.nrows(), rows);
+        assert_eq!(transformed.ncols(), 2);
+        assert!(pca.explained_variance_ratio.iter().all(|v| v.is_finite()));
+    }
+
+    #[test]
+    fn test_transform_one_matches_batch() {
+        let data = Array2::from_shape_vec((4, 3), vec![1.0, 2.0, 3.0, 2.0, 3.0, 5.0, 3.0, 5.0, 8.0, 4.0, 6.0, 10.0]).unwrap();
+        let pca = Pca::fit(&data, 2);
+        let sample = vec![2.5, 4.0, 6.5];
+        let one = pca.transform_one(&sample);
+        let batch = pca
+            .transform(&Array2::from_shape_vec((1, 3), sample).unwrap())
+            .row(0)
+            .to_vec();
+        for (a, b) in one.iter().zip(batch.iter()) {
+            assert!((a - b).abs() < 1e-10);
+        }
     }
 }

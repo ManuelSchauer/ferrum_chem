@@ -7,6 +7,7 @@ use ndarray::{Array1, Array2};
 use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
 use rand::{Rng, SeedableRng};
+use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
 // ---------------------------------------------------------------------------
@@ -94,45 +95,135 @@ impl DecisionTreeBuilder {
         feature_indices.truncate(n_try);
 
         let mut best_score = f64::INFINITY;
-        let mut best_feature = 0;
+        let mut best_feature = 0usize;
         let mut best_threshold = 0.0;
-        let mut best_left = Vec::new();
-        let mut best_right = Vec::new();
+        let mut found_split = false;
 
         for &feat_idx in &feature_indices {
-            // Collect unique values for this feature
-            let mut values: Vec<f64> = indices.iter().map(|&i| features[[i, feat_idx]]).collect();
-            values.sort_by(|a, b| a.partial_cmp(b).unwrap());
-            values.dedup();
-
-            if values.len() <= 1 {
+            // Sort candidate rows once by this feature.
+            let mut sorted_indices = indices.to_vec();
+            sorted_indices.sort_by(|&a, &b| features[[a, feat_idx]].total_cmp(&features[[b, feat_idx]]));
+            if sorted_indices.len() <= 1 {
                 continue;
             }
 
-            // Try midpoints as thresholds
-            for w in values.windows(2) {
-                let threshold = (w[0] + w[1]) / 2.0;
-                let (left, right): (Vec<usize>, Vec<usize>) = indices
+            if self.is_classifier {
+                let total_count = sorted_indices.len();
+                let mut left_count = 0usize;
+                let mut right_count = total_count;
+                let mut left_pos = 0usize;
+                let mut right_pos = sorted_indices
                     .iter()
-                    .partition(|&&i| features[[i, feat_idx]] <= threshold);
+                    .filter(|&&idx| targets[idx] >= 0.5)
+                    .count();
 
-                if left.is_empty() || right.is_empty() {
-                    continue;
+                for split_idx in 0..(total_count - 1) {
+                    let idx = sorted_indices[split_idx];
+                    let current_val = features[[idx, feat_idx]];
+                    let next_val = features[[sorted_indices[split_idx + 1], feat_idx]];
+
+                    left_count += 1;
+                    right_count -= 1;
+                    if targets[idx] >= 0.5 {
+                        left_pos += 1;
+                        right_pos -= 1;
+                    }
+
+                    if !current_val.is_finite()
+                        || !next_val.is_finite()
+                        || current_val >= next_val
+                        || left_count == 0
+                        || right_count == 0
+                    {
+                        continue;
+                    }
+
+                    let left_n = left_count as f64;
+                    let right_n = right_count as f64;
+                    let n_total = (left_count + right_count) as f64;
+
+                    let p_left = left_pos as f64 / left_n;
+                    let p_right = right_pos as f64 / right_n;
+                    let gini_left = 2.0 * p_left * (1.0 - p_left);
+                    let gini_right = 2.0 * p_right * (1.0 - p_right);
+                    let score = (left_n * gini_left + right_n * gini_right) / n_total;
+
+                    if score < best_score {
+                        best_score = score;
+                        best_feature = feat_idx;
+                        best_threshold = current_val + (next_val - current_val) * 0.5;
+                        found_split = true;
+                    }
+                }
+            } else {
+                let total_count = sorted_indices.len();
+                let mut left_count = 0usize;
+                let mut right_count = total_count;
+                let mut left_sum = 0.0f64;
+                let mut left_sum_sq = 0.0f64;
+                let mut right_sum = 0.0f64;
+                let mut right_sum_sq = 0.0f64;
+                for &idx in &sorted_indices {
+                    let t = targets[idx];
+                    right_sum += t;
+                    right_sum_sq += t * t;
                 }
 
-                let score = if self.is_classifier {
-                    self.gini_impurity(targets, &left, &right)
-                } else {
-                    self.mse_impurity(targets, &left, &right)
-                };
+                for split_idx in 0..(total_count - 1) {
+                    let idx = sorted_indices[split_idx];
+                    let current_val = features[[idx, feat_idx]];
+                    let next_val = features[[sorted_indices[split_idx + 1], feat_idx]];
+                    let t = targets[idx];
 
-                if score < best_score {
-                    best_score = score;
-                    best_feature = feat_idx;
-                    best_threshold = threshold;
-                    best_left = left;
-                    best_right = right;
+                    left_count += 1;
+                    right_count -= 1;
+                    left_sum += t;
+                    left_sum_sq += t * t;
+                    right_sum -= t;
+                    right_sum_sq -= t * t;
+
+                    if !current_val.is_finite()
+                        || !next_val.is_finite()
+                        || current_val >= next_val
+                        || left_count == 0
+                        || right_count == 0
+                    {
+                        continue;
+                    }
+
+                    let left_n = left_count as f64;
+                    let right_n = right_count as f64;
+                    let n_total = (left_count + right_count) as f64;
+
+                    let left_mean = left_sum / left_n;
+                    let right_mean = right_sum / right_n;
+                    let left_var = (left_sum_sq / left_n - left_mean * left_mean).max(0.0);
+                    let right_var = (right_sum_sq / right_n - right_mean * right_mean).max(0.0);
+                    let score = (left_n * left_var + right_n * right_var) / n_total;
+
+                    if score < best_score {
+                        best_score = score;
+                        best_feature = feat_idx;
+                        best_threshold = current_val + (next_val - current_val) * 0.5;
+                        found_split = true;
+                    }
                 }
+            }
+        }
+
+        if !found_split {
+            return TreeNode::Leaf {
+                value: self.leaf_value(targets, indices),
+            };
+        }
+
+        let mut best_left = Vec::with_capacity(indices.len());
+        let mut best_right = Vec::with_capacity(indices.len());
+        for &idx in indices {
+            if features[[idx, best_feature]] <= best_threshold {
+                best_left.push(idx);
+            } else {
+                best_right.push(idx);
             }
         }
 
@@ -165,41 +256,6 @@ impl DecisionTreeBuilder {
         }
     }
 
-    fn mse_impurity(&self, targets: &[f64], left: &[usize], right: &[usize]) -> f64 {
-        let n = (left.len() + right.len()) as f64;
-        let mse_left = self.variance(targets, left);
-        let mse_right = self.variance(targets, right);
-        (left.len() as f64 * mse_left + right.len() as f64 * mse_right) / n
-    }
-
-    fn gini_impurity(&self, targets: &[f64], left: &[usize], right: &[usize]) -> f64 {
-        let n = (left.len() + right.len()) as f64;
-        let gini_left = self.gini(targets, left);
-        let gini_right = self.gini(targets, right);
-        (left.len() as f64 * gini_left + right.len() as f64 * gini_right) / n
-    }
-
-    fn variance(&self, targets: &[f64], indices: &[usize]) -> f64 {
-        if indices.is_empty() {
-            return 0.0;
-        }
-        let n = indices.len() as f64;
-        let mean: f64 = indices.iter().map(|&i| targets[i]).sum::<f64>() / n;
-        indices
-            .iter()
-            .map(|&i| (targets[i] - mean).powi(2))
-            .sum::<f64>()
-            / n
-    }
-
-    fn gini(&self, targets: &[f64], indices: &[usize]) -> f64 {
-        if indices.is_empty() {
-            return 0.0;
-        }
-        let n = indices.len() as f64;
-        let p = indices.iter().filter(|&&i| targets[i] >= 0.5).count() as f64 / n;
-        2.0 * p * (1.0 - p)
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -233,10 +289,6 @@ impl RandomForestRegressor {
         let max_features = ((n_features as f64 * max_features_fraction).round() as usize).max(1);
         let target_slice: Vec<f64> = targets.to_vec();
 
-        let mut rng = StdRng::seed_from_u64(seed);
-        let mut trees = Vec::with_capacity(n_estimators);
-        let mut feature_counts = vec![0u64; n_features];
-
         let builder = DecisionTreeBuilder {
             max_depth,
             min_samples_split,
@@ -244,12 +296,18 @@ impl RandomForestRegressor {
             is_classifier: false,
         };
 
-        for _ in 0..n_estimators {
-            // Bootstrap sample
-            let indices: Vec<usize> = (0..n).map(|_| rng.gen_range(0..n)).collect();
-            let tree = builder.build(features, &target_slice, &indices, 0, &mut rng);
-            count_feature_usage(&tree, &mut feature_counts);
-            trees.push(tree);
+        let trees = (0..n_estimators)
+            .into_par_iter()
+            .map(|tree_idx| {
+                let mut rng = StdRng::seed_from_u64(derive_tree_seed(seed, tree_idx));
+                // Bootstrap sample
+                let indices: Vec<usize> = (0..n).map(|_| rng.gen_range(0..n)).collect();
+                builder.build(features, &target_slice, &indices, 0, &mut rng)
+            })
+            .collect::<Vec<_>>();
+        let mut feature_counts = vec![0u64; n_features];
+        for tree in &trees {
+            count_feature_usage(tree, &mut feature_counts);
         }
 
         // Normalize feature importances
@@ -278,11 +336,19 @@ impl RandomForestRegressor {
 
     /// Predict for multiple samples.
     pub fn predict(&self, features: &Array2<f64>) -> Array1<f64> {
-        Array1::from_vec(
-            (0..features.nrows())
-                .map(|i| self.predict_one(features.row(i).as_slice().unwrap()))
-                .collect(),
-        )
+        let values = (0..features.nrows())
+            .into_par_iter()
+            .map(|i| {
+                let row = features.row(i);
+                if let Some(slice) = row.as_slice() {
+                    self.predict_one(slice)
+                } else {
+                    let owned = row.to_vec();
+                    self.predict_one(&owned)
+                }
+            })
+            .collect::<Vec<_>>();
+        Array1::from_vec(values)
     }
 }
 
@@ -317,10 +383,6 @@ impl RandomForestClassifier {
         let max_features = ((n_features as f64 * max_features_fraction).round() as usize).max(1);
         let target_slice: Vec<f64> = targets.to_vec();
 
-        let mut rng = StdRng::seed_from_u64(seed);
-        let mut trees = Vec::with_capacity(n_estimators);
-        let mut feature_counts = vec![0u64; n_features];
-
         let builder = DecisionTreeBuilder {
             max_depth,
             min_samples_split,
@@ -328,11 +390,17 @@ impl RandomForestClassifier {
             is_classifier: true,
         };
 
-        for _ in 0..n_estimators {
-            let indices: Vec<usize> = (0..n).map(|_| rng.gen_range(0..n)).collect();
-            let tree = builder.build(features, &target_slice, &indices, 0, &mut rng);
-            count_feature_usage(&tree, &mut feature_counts);
-            trees.push(tree);
+        let trees = (0..n_estimators)
+            .into_par_iter()
+            .map(|tree_idx| {
+                let mut rng = StdRng::seed_from_u64(derive_tree_seed(seed, tree_idx));
+                let indices: Vec<usize> = (0..n).map(|_| rng.gen_range(0..n)).collect();
+                builder.build(features, &target_slice, &indices, 0, &mut rng)
+            })
+            .collect::<Vec<_>>();
+        let mut feature_counts = vec![0u64; n_features];
+        for tree in &trees {
+            count_feature_usage(tree, &mut feature_counts);
         }
 
         let total: f64 = feature_counts.iter().sum::<u64>() as f64;
@@ -369,12 +437,27 @@ impl RandomForestClassifier {
 
     /// Predict for multiple samples.
     pub fn predict(&self, features: &Array2<f64>) -> Array1<f64> {
-        Array1::from_vec(
-            (0..features.nrows())
-                .map(|i| self.predict_one(features.row(i).as_slice().unwrap()))
-                .collect(),
-        )
+        let values = (0..features.nrows())
+            .into_par_iter()
+            .map(|i| {
+                let row = features.row(i);
+                if let Some(slice) = row.as_slice() {
+                    self.predict_one(slice)
+                } else {
+                    let owned = row.to_vec();
+                    self.predict_one(&owned)
+                }
+            })
+            .collect::<Vec<_>>();
+        Array1::from_vec(values)
     }
+}
+
+fn derive_tree_seed(base_seed: u64, tree_idx: usize) -> u64 {
+    let mut z = base_seed ^ ((tree_idx as u64).wrapping_add(0x9E37_79B9_7F4A_7C15));
+    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    z ^ (z >> 31)
 }
 
 /// Count how many times each feature is used in splits (proxy for importance).

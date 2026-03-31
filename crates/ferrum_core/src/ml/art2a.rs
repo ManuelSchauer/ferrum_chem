@@ -151,9 +151,8 @@ impl Art2a {
 
 /// L2-normalize a vector.
 fn l2_normalize(v: &[f64]) -> Array1<f64> {
-    let arr = Array1::from(v.to_vec());
-    let norm = arr.dot(&arr).sqrt().max(1e-15);
-    arr.mapv(|x| x / norm)
+    let norm = v.iter().map(|x| x * x).sum::<f64>().sqrt().max(1e-15);
+    Array1::from_iter(v.iter().map(|x| x / norm))
 }
 
 #[cfg(test)]

@@ -65,7 +65,10 @@ fn main() {
                 ];
 
                 for desc in &descriptors {
-                    let value = desc.calculate(&mut mol, &mut ferrum_core::desc::context::CalculationContext::new());
+                    let value = desc.calculate(
+                        &mut mol,
+                        &mut ferrum_core::desc::context::CalculationContext::new(),
+                    );
 
                     print!("  {:20} ", desc.name());
                     match &value {

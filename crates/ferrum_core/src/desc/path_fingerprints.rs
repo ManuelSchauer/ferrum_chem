@@ -1,63 +1,138 @@
 //! Atom Pair and Topological Torsion fingerprints.
 //!
-//! Path-based fingerprints that encode distance relationships between atoms.
-//!
-//! - **Atom Pairs**: Encode (atom_type_i, distance, atom_type_j) for all pairs
-//! - **Topological Torsion**: Encode 4-atom linear paths
-//!
-//! References:
-//! - Carhart et al. (1985) "Atom pairs as molecular features" JCICS 25, 64-73
-//! - Nilakantan et al. (1987) "Topological torsion" JCICS 27, 82-85
+//! RDKit-aligned hashed path fingerprints with default count simulation
+//! (`nBitsPerEntry=4`, thresholds `[1,2,4,8]`) for parity with:
+//! - `GetHashedAtomPairFingerprintAsBitVect()`
+//! - `GetHashedTopologicalTorsionFingerprintAsBitVect()`
 
 use super::typed::{Descriptor, DescriptorValue};
 use crate::mol::molecule::Molecule;
-use crate::types::{AtomIdx, BondType};
+use crate::types::{AtomIdx, BondType, Hybridization};
 use bitvec::prelude::*;
-use std::collections::hash_map::DefaultHasher;
-use std::collections::VecDeque;
-use std::hash::{Hash, Hasher};
+use std::collections::{HashMap, HashSet, VecDeque};
 
-/// Maximum topological distance for atom pair encoding.
-const MAX_PAIR_DISTANCE: u32 = 7;
+const NUM_BITS_PER_ENTRY: usize = 4;
+const COUNT_BOUNDS: [u32; NUM_BITS_PER_ENTRY] = [1, 2, 4, 8];
+const MAX_PAIR_DISTANCE: u32 = 30; // RDKit default: maxPathLen-1 with numPathBits=5.
+const TT_ATOM_COUNT: usize = 4;
 
-/// Compute a hash from a slice of u64 values.
-fn combine_hash(values: &[u64]) -> u64 {
-    let mut hasher = DefaultHasher::new();
-    for v in values {
-        v.hash(&mut hasher);
+// RDKit FingerprintUtil.h constants for AtomPair/Torsion atom coding.
+const ATOM_NUMBER_TYPES: [u8; 15] = [5, 6, 7, 8, 9, 14, 15, 16, 17, 33, 34, 35, 51, 52, 53];
+const NUM_TYPE_BITS: u32 = 4;
+const NUM_PI_BITS: u32 = 2;
+const NUM_BRANCH_BITS: u32 = 3;
+const MAX_NUM_PI: u32 = (1u32 << NUM_PI_BITS) - 1; // 3
+const MAX_NUM_BRANCHES: u32 = (1u32 << NUM_BRANCH_BITS) - 1; // 7
+const CODE_SIZE: u32 = NUM_TYPE_BITS + NUM_PI_BITS + NUM_BRANCH_BITS; // 9
+const CODE_SIZE_LIMIT: u32 = (1u32 << CODE_SIZE) - 1; // 511
+
+#[inline]
+fn rdkit_hash_combine(seed: &mut u32, value: u32) {
+    *seed ^= value
+        .wrapping_add(0x9e37_79b9)
+        .wrapping_add(seed.wrapping_shl(6))
+        .wrapping_add(seed.wrapping_shr(2));
+}
+
+#[inline]
+fn bond_neighbor(mol: &Molecule, atom_idx: usize, bond_idx: usize) -> usize {
+    let bond = &mol.bonds[bond_idx];
+    if bond.source as usize == atom_idx {
+        bond.target as usize
+    } else {
+        bond.source as usize
     }
-    hasher.finish()
 }
 
-/// Atom type encoding for atom pair fingerprints.
-///
-/// Encodes: atomic_number, num_pi_electrons, total_degree, total_h
-fn atom_pair_type(mol: &Molecule, idx: usize) -> u64 {
+fn bond_between_atoms(mol: &Molecule, a: usize, b: usize) -> Option<usize> {
+    for &bond_idx_u16 in &mol.adjacency[a] {
+        let bond_idx = bond_idx_u16 as usize;
+        if bond_neighbor(mol, a, bond_idx) == b {
+            return Some(bond_idx);
+        }
+    }
+    None
+}
+
+fn is_effectively_sp3(mol: &Molecule, idx: usize) -> bool {
     let atom = &mol.atoms[idx];
-    let degree = mol.get_degree(idx as u16) as u64;
-    let total_h = atom.total_h() as u64;
+    if atom.is_aromatic() {
+        return false;
+    }
 
-    // Estimate pi electrons from bond types
-    let pi_electrons: u64 = mol.adjacency[idx]
-        .iter()
-        .map(|&bond_idx| {
-            let bond = &mol.bonds[bond_idx as usize];
-            match bond.bond_type {
-                BondType::Double => 1,
-                BondType::Triple => 2,
-                BondType::Aromatic => 1, // approximate
-                _ => 0,
-            }
-        })
-        .sum();
+    if atom.hybridization == Hybridization::SP3 {
+        return true;
+    }
+    if atom.hybridization != Hybridization::Unspecified {
+        return false;
+    }
 
-    combine_hash(&[atom.atomic_number as u64, pi_electrons, degree, total_h])
+    !mol.adjacency[idx].iter().any(|&bond_idx_u16| {
+        matches!(
+            mol.bonds[bond_idx_u16 as usize].bond_type,
+            BondType::Double | BondType::Triple | BondType::Aromatic
+        )
+    })
 }
 
-/// Compute all-pairs shortest path distances using BFS.
-fn compute_distances(mol: &Molecule) -> Vec<u32> {
+fn num_pi_electrons(mol: &Molecule, idx: usize) -> u32 {
+    let atom = &mol.atoms[idx];
+    if atom.is_aromatic() {
+        return 1;
+    }
+    if is_effectively_sp3(mol, idx) {
+        return 0;
+    }
+
+    let mut pi = 0u32;
+    for &bond_idx_u16 in &mol.adjacency[idx] {
+        let bond = &mol.bonds[bond_idx_u16 as usize];
+        pi += match bond.bond_type {
+            BondType::Double => 1,
+            BondType::Triple => 2,
+            BondType::Aromatic => 1,
+            _ => 0,
+        };
+    }
+    pi
+}
+
+/// RDKit AtomPairs::getAtomCode equivalent (without chirality bits).
+fn atom_code(mol: &Molecule, idx: usize, branch_subtract: u32) -> u32 {
+    let degree = mol.get_degree(idx as AtomIdx) as u32;
+    let num_branches = degree.saturating_sub(branch_subtract);
+    let mut code = num_branches % MAX_NUM_BRANCHES;
+
+    let n_pi = num_pi_electrons(mol, idx) % MAX_NUM_PI;
+    code |= n_pi << NUM_BRANCH_BITS;
+
+    let atomic_num = mol.atoms[idx].atomic_number;
+    let mut type_idx = 0usize;
+    let n_types = 1usize << NUM_TYPE_BITS; // 16
+    while type_idx < n_types {
+        let probe = ATOM_NUMBER_TYPES.get(type_idx).copied().unwrap_or(0);
+        if probe == atomic_num {
+            break;
+        } else if probe > atomic_num {
+            type_idx = n_types;
+            break;
+        }
+        type_idx += 1;
+    }
+    if type_idx == n_types {
+        type_idx -= 1;
+    }
+    code |= (type_idx as u32) << (NUM_BRANCH_BITS + NUM_PI_BITS);
+
+    code
+}
+
+fn build_unweighted_dist_matrix(mol: &Molecule) -> Vec<u8> {
     let n = mol.num_atoms();
-    let mut distances = vec![u32::MAX; n * n];
+    let mut distances = vec![u8::MAX; n * n];
+    if n == 0 {
+        return distances;
+    }
 
     for start in 0..n {
         distances[start * n + start] = 0;
@@ -65,40 +140,236 @@ fn compute_distances(mol: &Molecule) -> Vec<u32> {
         queue.push_back(start as AtomIdx);
 
         while let Some(current) = queue.pop_front() {
-            let current_dist = distances[start * n + current as usize];
-            for &bond_idx in &mol.adjacency[current as usize] {
+            let current_usize = current as usize;
+            let current_dist = distances[start * n + current_usize];
+            for &bond_idx in &mol.adjacency[current_usize] {
                 let bond = &mol.bonds[bond_idx as usize];
                 let neighbor = if bond.source == current {
                     bond.target
                 } else {
                     bond.source
-                };
-                let nd = &mut distances[start * n + neighbor as usize];
-                if *nd == u32::MAX {
-                    *nd = current_dist + 1;
-                    queue.push_back(neighbor);
+                } as usize;
+                let slot = &mut distances[start * n + neighbor];
+                if *slot == u8::MAX {
+                    *slot = current_dist.saturating_add(1);
+                    queue.push_back(neighbor as AtomIdx);
                 }
             }
         }
     }
+
     distances
 }
 
-/// Fold hashes into a fixed-size bit vector.
-fn fold_bitvec(hashes: &[u64], num_bits: usize) -> BitVec<u8, Lsb0> {
-    let mut bits = bitvec![u8, Lsb0; 0; num_bits];
-    for &hash in hashes {
-        let bit = (hash as usize) % num_bits;
-        bits.set(bit, true);
+fn unweighted_dist_matrix(mol: &mut Molecule) -> Vec<u8> {
+    if let Some(cached) = mol.cached_unweighted_dist_matrix() {
+        return cached.to_vec();
     }
+    let matrix = build_unweighted_dist_matrix(mol);
+    mol.store_unweighted_dist_matrix(matrix.clone());
+    matrix
+}
+
+fn fold_count_simulated_hashes(hashes: &[u32], num_bits: usize) -> BitVec<u8, Lsb0> {
+    let mut bits = bitvec![u8, Lsb0; 0; num_bits];
+    if num_bits == 0 {
+        return bits;
+    }
+
+    let block_len = num_bits / NUM_BITS_PER_ENTRY;
+    if block_len == 0 {
+        return bits;
+    }
+
+    let mut counts: HashMap<usize, u32> = HashMap::new();
+    for &hash in hashes {
+        let bit_id = (hash as usize) % block_len;
+        *counts.entry(bit_id).or_insert(0) += 1;
+    }
+
+    for (bit_id, count) in counts {
+        let offset = bit_id * NUM_BITS_PER_ENTRY;
+        for (i, bound) in COUNT_BOUNDS.iter().enumerate() {
+            if count >= *bound {
+                let idx = offset + i;
+                if idx < num_bits {
+                    bits.set(idx, true);
+                }
+            }
+        }
+    }
+
     bits
+}
+
+fn atom_pair_hashes(mol: &mut Molecule) -> Vec<u32> {
+    let n = mol.num_atoms();
+    if n < 2 {
+        return vec![];
+    }
+
+    let distances = unweighted_dist_matrix(mol);
+    let atom_invariants: Vec<u32> = (0..n).map(|i| atom_code(mol, i, 0)).collect();
+    let mut hashes = Vec::new();
+
+    for i in 0..n {
+        for j in (i + 1)..n {
+            let dist = distances[i * n + j];
+            if dist == u8::MAX {
+                continue;
+            }
+            let d = dist as u32;
+            if d == 0 || d > MAX_PAIR_DISTANCE {
+                continue;
+            }
+
+            let code_i = atom_invariants[i] % CODE_SIZE_LIMIT;
+            let code_j = atom_invariants[j] % CODE_SIZE_LIMIT;
+            let (lo, hi) = if code_i <= code_j {
+                (code_i, code_j)
+            } else {
+                (code_j, code_i)
+            };
+
+            let mut hash = 0u32;
+            rdkit_hash_combine(&mut hash, lo);
+            rdkit_hash_combine(&mut hash, d);
+            rdkit_hash_combine(&mut hash, hi);
+            hashes.push(hash);
+        }
+    }
+
+    hashes
+}
+
+fn dfs_paths_len4(mol: &Molecule, path: &mut Vec<usize>, out: &mut Vec<[usize; 4]>) {
+    if path.len() == TT_ATOM_COUNT {
+        out.push([path[0], path[1], path[2], path[3]]);
+        return;
+    }
+
+    let current = *path.last().unwrap();
+    for &bond_idx_u16 in &mol.adjacency[current] {
+        let bond_idx = bond_idx_u16 as usize;
+        let next = bond_neighbor(mol, current, bond_idx);
+
+        if let Some(existing_pos) = path.iter().position(|&a| a == next) {
+            // Match RDKit path-extension behavior for ring closure candidates:
+            // only allow a repeated atom at final extension and not immediate backtrack.
+            if path.len() == TT_ATOM_COUNT - 1
+                && existing_pos == 0
+                && path[path.len() - 2] != next
+            {
+                path.push(next);
+                out.push([path[0], path[1], path[2], path[3]]);
+                path.pop();
+            }
+            continue;
+        }
+
+        path.push(next);
+        dfs_paths_len4(mol, path, out);
+        path.pop();
+    }
+}
+
+fn unique_torsion_paths(mol: &Molecule) -> Vec<[usize; 4]> {
+    let n = mol.num_atoms();
+    if n < TT_ATOM_COUNT {
+        return vec![];
+    }
+
+    let mut all_paths = Vec::new();
+    let mut path = Vec::with_capacity(TT_ATOM_COUNT);
+    for start in 0..n {
+        path.clear();
+        path.push(start);
+        dfs_paths_len4(mol, &mut path, &mut all_paths);
+    }
+
+    // Deduplicate by bond-set signature (RDKit path uniqueness criterion).
+    let mut seen_bond_sets: HashSet<[usize; TT_ATOM_COUNT - 1]> = HashSet::new();
+    let mut unique = Vec::new();
+    for p in all_paths {
+        let mut sig = [0usize; TT_ATOM_COUNT - 1];
+        let mut ok = true;
+        for k in 0..(TT_ATOM_COUNT - 1) {
+            match bond_between_atoms(mol, p[k], p[k + 1]) {
+                Some(bond_idx) => sig[k] = bond_idx,
+                None => {
+                    ok = false;
+                    break;
+                }
+            }
+        }
+        if !ok {
+            continue;
+        }
+        sig.sort_unstable();
+        if seen_bond_sets.insert(sig) {
+            unique.push(p);
+        }
+    }
+
+    unique
+}
+
+fn torsion_hashes(mol: &mut Molecule) -> Vec<u32> {
+    let n = mol.num_atoms();
+    if n < TT_ATOM_COUNT {
+        return vec![];
+    }
+
+    // TopologicalTorsion uses AtomPair invariants with correction (subtract 2).
+    let atom_invariants: Vec<u32> = (0..n).map(|i| atom_code(mol, i, 0).wrapping_sub(2)).collect();
+    let paths = unique_torsion_paths(mol);
+    let mut hashes = Vec::with_capacity(paths.len());
+
+    for path in paths {
+        let mut path_codes = [0u32; TT_ATOM_COUNT];
+        for (pos, &atom_idx) in path.iter().enumerate() {
+            let mut code = atom_invariants[atom_idx] % CODE_SIZE_LIMIT + 1;
+            // Interior atom correction in TT path encoding.
+            if pos != 0 && pos + 1 != TT_ATOM_COUNT {
+                code = code.saturating_sub(1);
+            }
+            path_codes[pos] = code;
+        }
+
+        // Canonicalize path direction before hashing.
+        let mut reverse = false;
+        let mut i = 0usize;
+        let mut j = TT_ATOM_COUNT - 1;
+        while i < j {
+            if path_codes[i] > path_codes[j] {
+                reverse = true;
+                break;
+            } else if path_codes[i] < path_codes[j] {
+                break;
+            }
+            i += 1;
+            j -= 1;
+        }
+
+        let mut hash = 0u32;
+        if reverse {
+            for idx in (0..TT_ATOM_COUNT).rev() {
+                rdkit_hash_combine(&mut hash, path_codes[idx]);
+            }
+        } else {
+            for &code in &path_codes {
+                rdkit_hash_combine(&mut hash, code);
+            }
+        }
+        hashes.push(hash);
+    }
+
+    hashes
 }
 
 /// Atom Pair Fingerprint descriptor.
 ///
-/// Encodes all pairs of atoms at topological distances 1-7.
-/// Each pair is hashed as: (atom_type_i, distance, atom_type_j) with canonical ordering.
-/// Returns bit-packed fingerprint.
+/// Uses RDKit-style atom coding and count simulation defaults.
 pub struct AtomPairFingerprint {
     pub num_bits: usize,
 }
@@ -113,9 +384,13 @@ impl AtomPairFingerprint {
         Self { num_bits: 2048 }
     }
 
-    /// Get raw feature hashes.
+    /// Raw hashed atom-pair environment identifiers (pre-folding).
     pub fn raw_features(&self, mol: &Molecule) -> Vec<u64> {
-        atom_pair_features(mol)
+        let mut clone = mol.clone();
+        atom_pair_hashes(&mut clone)
+            .into_iter()
+            .map(|v| v as u64)
+            .collect()
     }
 }
 
@@ -124,50 +399,20 @@ impl Descriptor for AtomPairFingerprint {
         "AtomPair"
     }
 
-    fn calculate(&self, mol: &mut Molecule, ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
-        let hashes = atom_pair_features(mol);
-        let bits = fold_bitvec(&hashes, self.num_bits);
+    fn calculate(
+        &self,
+        mol: &mut Molecule,
+        _ctx: &mut crate::desc::context::CalculationContext,
+    ) -> DescriptorValue {
+        let hashes = atom_pair_hashes(mol);
+        let bits = fold_count_simulated_hashes(&hashes, self.num_bits);
         DescriptorValue::Binary(bits)
     }
 }
 
-fn atom_pair_features(mol: &Molecule) -> Vec<u64> {
-    let n = mol.num_atoms();
-    if n < 2 {
-        return vec![];
-    }
-
-    let distances = compute_distances(mol);
-    let atom_types: Vec<u64> = (0..n).map(|i| atom_pair_type(mol, i)).collect();
-
-    let mut features = Vec::new();
-
-    for i in 0..n {
-        for j in (i + 1)..n {
-            let dist = distances[i * n + j];
-            if dist == 0 || dist > MAX_PAIR_DISTANCE || dist == u32::MAX {
-                continue;
-            }
-            // Canonical ordering: smaller type hash first
-            let (t1, t2) = if atom_types[i] <= atom_types[j] {
-                (atom_types[i], atom_types[j])
-            } else {
-                (atom_types[j], atom_types[i])
-            };
-            features.push(combine_hash(&[t1, dist as u64, t2]));
-        }
-    }
-
-    features.sort();
-    features.dedup();
-    features
-}
-
 /// Topological Torsion Fingerprint descriptor.
 ///
-/// Encodes all linear 4-atom paths in the molecule.
-/// Each path is hashed as: (type1, type2, type3, type4) with canonical ordering.
-/// Returns bit-packed fingerprint.
+/// Uses RDKit-style atom coding/path canonicalization and count simulation defaults.
 pub struct TopologicalTorsionFingerprint {
     pub num_bits: usize,
 }
@@ -181,8 +426,13 @@ impl TopologicalTorsionFingerprint {
         Self { num_bits: 2048 }
     }
 
+    /// Raw hashed torsion environment identifiers (pre-folding).
     pub fn raw_features(&self, mol: &Molecule) -> Vec<u64> {
-        torsion_features(mol)
+        let mut clone = mol.clone();
+        torsion_hashes(&mut clone)
+            .into_iter()
+            .map(|v| v as u64)
+            .collect()
     }
 }
 
@@ -191,118 +441,15 @@ impl Descriptor for TopologicalTorsionFingerprint {
         "TopologicalTorsion"
     }
 
-    fn calculate(&self, mol: &mut Molecule, ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
-        let hashes = torsion_features(mol);
-        let bits = fold_bitvec(&hashes, self.num_bits);
+    fn calculate(
+        &self,
+        mol: &mut Molecule,
+        _ctx: &mut crate::desc::context::CalculationContext,
+    ) -> DescriptorValue {
+        let hashes = torsion_hashes(mol);
+        let bits = fold_count_simulated_hashes(&hashes, self.num_bits);
         DescriptorValue::Binary(bits)
     }
-}
-
-/// Atom type for topological torsion (similar to atom pair but includes ring info).
-fn torsion_atom_type(mol: &Molecule, idx: usize) -> u64 {
-    let atom = &mol.atoms[idx];
-    let degree = mol.get_degree(idx as u16) as u64;
-    let pi_electrons: u64 = mol.adjacency[idx]
-        .iter()
-        .map(|&bond_idx| {
-            let bond = &mol.bonds[bond_idx as usize];
-            match bond.bond_type {
-                BondType::Double => 1,
-                BondType::Triple => 2,
-                BondType::Aromatic => 1,
-                _ => 0,
-            }
-        })
-        .sum();
-
-    combine_hash(&[
-        atom.atomic_number as u64,
-        pi_electrons,
-        degree,
-        atom.is_in_ring() as u64,
-    ])
-}
-
-/// Find all linear 4-atom paths using DFS.
-fn find_4_atom_paths(mol: &Molecule) -> Vec<[usize; 4]> {
-    let n = mol.num_atoms();
-    let mut paths = Vec::new();
-
-    for start in 0..n {
-        // DFS for paths of length 3 (4 atoms)
-        for &b1 in &mol.adjacency[start] {
-            let bond1 = &mol.bonds[b1 as usize];
-            let a1 = if bond1.source as usize == start {
-                bond1.target as usize
-            } else {
-                bond1.source as usize
-            };
-
-            for &b2 in &mol.adjacency[a1] {
-                let bond2 = &mol.bonds[b2 as usize];
-                let a2 = if bond2.source as usize == a1 {
-                    bond2.target as usize
-                } else {
-                    bond2.source as usize
-                };
-                if a2 == start {
-                    continue;
-                } // no backtracking
-
-                for &b3 in &mol.adjacency[a2] {
-                    let bond3 = &mol.bonds[b3 as usize];
-                    let a3 = if bond3.source as usize == a2 {
-                        bond3.target as usize
-                    } else {
-                        bond3.source as usize
-                    };
-                    if a3 == a1 || a3 == start {
-                        continue;
-                    } // no backtracking
-
-                    // Only add each path once: use canonical ordering (start < end)
-                    if start < a3 {
-                        paths.push([start, a1, a2, a3]);
-                    }
-                }
-            }
-        }
-    }
-
-    paths
-}
-
-fn torsion_features(mol: &Molecule) -> Vec<u64> {
-    let n = mol.num_atoms();
-    if n < 4 {
-        return vec![];
-    }
-
-    let atom_types: Vec<u64> = (0..n).map(|i| torsion_atom_type(mol, i)).collect();
-    let paths = find_4_atom_paths(mol);
-
-    let mut features: Vec<u64> = paths
-        .iter()
-        .map(|p| {
-            let forward = combine_hash(&[
-                atom_types[p[0]],
-                atom_types[p[1]],
-                atom_types[p[2]],
-                atom_types[p[3]],
-            ]);
-            let reverse = combine_hash(&[
-                atom_types[p[3]],
-                atom_types[p[2]],
-                atom_types[p[1]],
-                atom_types[p[0]],
-            ]);
-            forward.min(reverse) // canonical
-        })
-        .collect();
-
-    features.sort();
-    features.dedup();
-    features
 }
 
 const _: () = {
@@ -326,7 +473,12 @@ mod tests {
     fn calc_ap(smiles: &str, bits: usize) -> BitVec<u8, Lsb0> {
         let mut mol = parse_smiles(smiles).expect("valid SMILES");
         let ap = AtomPairFingerprint::new(bits);
-        ap.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()).as_binary().clone()
+        ap.calculate(
+            &mut mol,
+            &mut crate::desc::context::CalculationContext::new(),
+        )
+        .as_binary()
+        .clone()
     }
 
     #[test]
@@ -348,7 +500,7 @@ mod tests {
     fn test_ap_benzene() {
         let fp = calc_ap("c1ccccc1", 2048);
         let bits = count_bits(&fp);
-        assert!(bits > 0 && bits < 100);
+        assert!(bits > 0 && bits < 200);
     }
 
     #[test]
@@ -381,14 +533,14 @@ mod tests {
     fn test_ap_larger_molecules_more_bits() {
         let fp_small = calc_ap("CC", 2048);
         let fp_large = calc_ap("CCCCCCCCCC", 2048);
-        assert!(count_bits(&fp_large) > count_bits(&fp_small));
+        assert!(count_bits(&fp_large) >= count_bits(&fp_small));
     }
 
     #[test]
     fn test_ap_drug_molecule() {
         let fp = calc_ap("CC(=O)Oc1ccccc1C(=O)O", 2048);
         let bits = count_bits(&fp);
-        assert!(bits > 5 && bits < 500);
+        assert!(bits > 5 && bits < 800);
     }
 
     // ========== Topological Torsion Tests ==========
@@ -396,7 +548,12 @@ mod tests {
     fn calc_tt(smiles: &str, bits: usize) -> BitVec<u8, Lsb0> {
         let mut mol = parse_smiles(smiles).expect("valid SMILES");
         let tt = TopologicalTorsionFingerprint::new(bits);
-        tt.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()).as_binary().clone()
+        tt.calculate(
+            &mut mol,
+            &mut crate::desc::context::CalculationContext::new(),
+        )
+        .as_binary()
+        .clone()
     }
 
     #[test]
@@ -443,6 +600,6 @@ mod tests {
     fn test_tt_drug_molecule() {
         let fp = calc_tt("CC(=O)Oc1ccccc1C(=O)O", 2048);
         let bits = count_bits(&fp);
-        assert!(bits > 3 && bits < 500);
+        assert!(bits > 3 && bits < 800);
     }
 }

@@ -2,7 +2,7 @@
 //!
 //! Handles collinearity in the mega-vector of descriptors.
 
-use ndarray::{Array1, Array2, Axis};
+use ndarray::{Array1, Array2, Axis, Zip};
 use serde::{Deserialize, Serialize};
 
 /// PLS Regression model (PLS1 — single y variable).
@@ -49,10 +49,12 @@ impl PlsRegression {
         }
 
         let mut x = features.clone();
-        for mut row in x.rows_mut() {
-            let centered = (&row.to_owned() - &x_mean) / &x_std;
-            row.assign(&centered);
-        }
+        Zip::from(x.rows_mut()).for_each(|mut row| {
+            Zip::from(&mut row)
+                .and(&x_mean)
+                .and(&x_std)
+                .for_each(|xv, &m, &s| *xv = (*xv - m) / s);
+        });
 
         // Center y
         let y_mean = targets.mean().unwrap();
@@ -66,25 +68,16 @@ impl PlsRegression {
         for a in 0..nc {
             // NIPALS iteration
             // w = X'y / ||X'y||
-            let mut w = Array1::<f64>::zeros(p);
-            for j in 0..p {
-                w[j] = x.column(j).dot(&y);
-            }
+            let mut w = x.t().dot(&y);
             let w_norm = w.dot(&w).sqrt().max(1e-15);
             w.mapv_inplace(|v| v / w_norm);
 
             // t = Xw
-            let mut t = Array1::<f64>::zeros(n);
-            for i in 0..n {
-                t[i] = x.row(i).dot(&w);
-            }
+            let t = x.dot(&w);
 
             // p_loading = X't / (t't)
             let tt = t.dot(&t).max(1e-15);
-            let mut p_loading = Array1::<f64>::zeros(p);
-            for j in 0..p {
-                p_loading[j] = x.column(j).dot(&t) / tt;
-            }
+            let p_loading = x.t().dot(&t) / tt;
 
             // q = y't / (t't)
             let q = y.dot(&t) / tt;

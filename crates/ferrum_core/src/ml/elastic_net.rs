@@ -3,7 +3,7 @@
 //! Automatic feature selection via L1 regularization.
 //! α controls overall regularization strength, l1_ratio controls L1/L2 mix.
 
-use ndarray::{Array1, Array2, Axis};
+use ndarray::{Array1, Array2, Axis, Zip};
 use serde::{Deserialize, Serialize};
 
 /// Elastic Net regression model.
@@ -63,10 +63,12 @@ impl ElasticNet {
         }
 
         let mut x = features.clone();
-        for mut row in x.rows_mut() {
-            let centered = (&row.to_owned() - &x_mean) / &x_std;
-            row.assign(&centered);
-        }
+        Zip::from(x.rows_mut()).for_each(|mut row| {
+            Zip::from(&mut row)
+                .and(&x_mean)
+                .and(&x_std)
+                .for_each(|xv, &m, &s| *xv = (*xv - m) / s);
+        });
 
         let y_mean = targets.mean().unwrap();
         let y: Array1<f64> = targets.mapv(|v| v - y_mean);
@@ -92,9 +94,10 @@ impl ElasticNet {
 
                 // Partial residual (add back contribution of feature j)
                 if old_beta != 0.0 {
-                    for i in 0..features.nrows() {
-                        residual[i] += x[[i, j]] * old_beta;
-                    }
+                    let col_j = x.column(j);
+                    Zip::from(&mut residual)
+                        .and(col_j)
+                        .for_each(|r, &xij| *r += xij * old_beta);
                 }
 
                 // Compute the simple least squares update
@@ -107,9 +110,10 @@ impl ElasticNet {
 
                 // Update residual
                 if new_beta != 0.0 {
-                    for i in 0..features.nrows() {
-                        residual[i] -= x[[i, j]] * new_beta;
-                    }
+                    let col_j = x.column(j);
+                    Zip::from(&mut residual)
+                        .and(col_j)
+                        .for_each(|r, &xij| *r -= xij * new_beta);
                 }
 
                 max_change = max_change.max((new_beta - old_beta).abs());

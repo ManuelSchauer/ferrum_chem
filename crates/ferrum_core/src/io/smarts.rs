@@ -848,12 +848,12 @@ impl SmartsParser {
     /// Parse bracket expression with support for logical operators (,=OR ;=AND !=NOT)
     fn parse_bracket_expression(&mut self) -> std::result::Result<Vec<AtomPrimitive>, String> {
         // SMARTS bracket atom precedence (highest to lowest):
-        // 1. Implicit AND (juxtaposition): [OH] = O AND H1
+        // 1. Implicit/`&` AND: [OH], [O&H1] = O AND H1
         // 2. Comma (OR): [O,S] = O OR S
         // 3. Semicolon (low-precedence AND): [O,S;H1] = (O OR S) AND H1
         //
         // Strategy: collect `;`-separated AND terms.
-        // Each AND term is a `,`-separated OR of implicit-AND groups.
+        // Each AND term is a `,`-separated OR of implicit/`&`-AND groups.
         let mut semi_groups: Vec<AtomPrimitive> = Vec::new();
 
         loop {
@@ -862,7 +862,7 @@ impl SmartsParser {
             semi_groups.push(or_prim);
 
             match self.peek() {
-                Some(';') | Some('&') => {
+                Some(';') => {
                     self.pos += 1;
                     continue;
                 }
@@ -903,14 +903,19 @@ impl SmartsParser {
         }
     }
 
-    /// Parse a sequence of implicitly ANDed primitives (highest precedence).
-    /// Stops at `,`, `;`, `&`, `]`, or end of input.
+    /// Parse a sequence of implicitly/`&` ANDed primitives (highest precedence).
+    /// Stops at `,`, `;`, `]`, or end of input.
     fn parse_implicit_and_group(&mut self) -> std::result::Result<AtomPrimitive, String> {
         let mut prims: Vec<AtomPrimitive> = Vec::new();
 
         loop {
             match self.peek() {
-                Some(']') | Some(',') | Some(';') | Some('&') | None => break,
+                Some(']') | Some(',') | Some(';') | None => break,
+                Some('&') => {
+                    // Explicit high-precedence atom AND separator
+                    self.pos += 1;
+                    continue;
+                }
                 _ => {
                     let p = self.parse_single_primitive()?;
                     prims.push(p);

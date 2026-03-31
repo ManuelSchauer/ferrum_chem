@@ -3,6 +3,7 @@
 //! Combines: scaler → optional PCA → model → applicability domain → prediction.
 
 use ndarray::{Array1, Array2};
+use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use crate::ml::ad::{ApplicabilityDomain, KnnDistanceAD};
@@ -82,10 +83,16 @@ impl QsarPipeline {
 
     /// Preprocess a single sample through scaler and optional PCA.
     fn preprocess_one(&self, sample: &[f64]) -> Vec<f64> {
-        let n = sample.len();
-        let row = Array2::from_shape_vec((1, n), sample.to_vec()).unwrap();
-        let processed = self.preprocess(&row);
-        processed.row(0).to_vec()
+        let scaled = match &self.scaler {
+            ScalerType::Standard(s) => s.transform_one(sample),
+            ScalerType::MinMax(s) => s.transform_one(sample),
+            ScalerType::None => sample.to_vec(),
+        };
+
+        match &self.pca {
+            Some(pca) => pca.transform_one(&scaled),
+            None => scaled,
+        }
     }
 
     /// Preprocess a matrix through scaler and optional PCA.
@@ -319,27 +326,33 @@ fn cv_regression_q2<F>(
     build_model: F,
 ) -> f64
 where
-    F: Fn(&Array2<f64>, &Array1<f64>) -> ModelType,
+    F: Fn(&Array2<f64>, &Array1<f64>) -> ModelType + Sync + Send,
 {
     let n = features.nrows();
     let splits = cv::k_fold(n, n_folds, seed);
+    let fold_preds = splits
+        .folds
+        .par_iter()
+        .map(|(train_idx, test_idx)| {
+            let train_x = select_rows(features, train_idx);
+            let train_y = select_elements(targets, train_idx);
+            let test_x = select_rows(features, test_idx);
+
+            let model = build_model(&train_x, &train_y);
+            let preds = match &model {
+                ModelType::KnnRegressor(m) => m.predict(&test_x),
+                ModelType::RandomForestRegressor(m) => m.predict(&test_x),
+                ModelType::PlsRegression(m) => m.predict(&test_x),
+                ModelType::ElasticNet(m) => m.predict(&test_x),
+                _ => Array1::zeros(test_idx.len()),
+            };
+            (test_idx.clone(), preds.to_vec())
+        })
+        .collect::<Vec<_>>();
+
     let mut all_preds = vec![0.0f64; n];
-
-    for (train_idx, test_idx) in &splits.folds {
-        let train_x = select_rows(features, train_idx);
-        let train_y = select_elements(targets, train_idx);
-        let test_x = select_rows(features, test_idx);
-
-        let model = build_model(&train_x, &train_y);
-        let preds = match &model {
-            ModelType::KnnRegressor(m) => m.predict(&test_x),
-            ModelType::RandomForestRegressor(m) => m.predict(&test_x),
-            ModelType::PlsRegression(m) => m.predict(&test_x),
-            ModelType::ElasticNet(m) => m.predict(&test_x),
-            _ => Array1::zeros(test_idx.len()),
-        };
-
-        for (i, &idx) in test_idx.iter().enumerate() {
+    for (test_idx, preds) in fold_preds {
+        for (i, idx) in test_idx.into_iter().enumerate() {
             all_preds[idx] = preds[i];
         }
     }
@@ -447,5 +460,44 @@ mod tests {
         let pred = pipeline.predict(&ds.features);
         let r2 = metrics::r_squared(ds.targets.as_slice().unwrap(), pred.as_slice().unwrap());
         assert!(r2 > 0.5, "AutoQsar R² = {r2} on linear data");
+    }
+
+    #[test]
+    fn test_preprocess_one_matches_batch_with_pca() {
+        let ds = make_regression_dataset();
+        let scaler = StandardScaler::fit(&ds.features);
+        let scaled = scaler.transform(&ds.features);
+        let pca = Pca::fit(&scaled, 1);
+        let projected = pca.transform(&scaled);
+        let model = KnnRegressor::fit(
+            projected,
+            ds.targets.clone(),
+            3,
+            DistanceMetric::Euclidean,
+        );
+
+        let pipeline = QsarPipeline {
+            name: "test-pca-one".into(),
+            task: TaskType::Regression,
+            scaler: ScalerType::Standard(scaler),
+            pca: Some(pca),
+            model: ModelType::KnnRegressor(model),
+            ad: None,
+            feature_names: ds.feature_names.clone(),
+            train_r2: 0.0,
+            cv_q2: 0.0,
+        };
+
+        let sample = ds.features.row(0).to_vec();
+        let one = pipeline.preprocess_one(&sample);
+        let batch = pipeline
+            .preprocess(&Array2::from_shape_vec((1, sample.len()), sample).unwrap())
+            .row(0)
+            .to_vec();
+
+        assert_eq!(one.len(), batch.len());
+        for (a, b) in one.iter().zip(batch.iter()) {
+            assert!((a - b).abs() < 1e-10);
+        }
     }
 }

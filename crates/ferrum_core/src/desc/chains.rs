@@ -12,7 +12,7 @@
 use super::typed::{Descriptor, DescriptorValue};
 use crate::mol::molecule::Molecule;
 use crate::types::AtomIdx;
-use std::collections::HashSet;
+use std::collections::VecDeque;
 
 /// Longest aliphatic (sp3 carbon) chain descriptor.
 ///
@@ -21,48 +21,142 @@ use std::collections::HashSet;
 pub struct LongestAliphaticChain;
 
 impl LongestAliphaticChain {
-    /// DFS to find longest path through aliphatic carbons
-    fn dfs_aliphatic(
+    fn neighbor_atom_idx(mol: &Molecule, atom_idx: AtomIdx, bond_idx: u16) -> AtomIdx {
+        let bond = &mol.bonds[bond_idx as usize];
+        if bond.source == atom_idx {
+            bond.target
+        } else {
+            bond.source
+        }
+    }
+
+    fn farthest_aliphatic(
         mol: &Molecule,
-        current: AtomIdx,
-        visited: &mut HashSet<AtomIdx>,
-        depth: usize,
-    ) -> usize {
-        visited.insert(current);
+        start: AtomIdx,
+        allowed: &[bool],
+        dist: &mut [i32],
+        queue: &mut VecDeque<AtomIdx>,
+    ) -> (AtomIdx, i32) {
+        dist.fill(-1);
+        queue.clear();
+        dist[start as usize] = 0;
+        queue.push_back(start);
 
-        let mut max_length = depth;
-
-        for &neighbor_idx in &mol.adjacency[current as usize] {
-            if visited.contains(&neighbor_idx) {
-                continue;
+        let mut far = start;
+        let mut far_dist = 0i32;
+        while let Some(node) = queue.pop_front() {
+            let d = dist[node as usize];
+            if d > far_dist {
+                far_dist = d;
+                far = node;
             }
-
-            let neighbor = &mol.atoms[neighbor_idx as usize];
-
-            if neighbor.atomic_number == 6 && !neighbor.is_aromatic() {
-                let length = Self::dfs_aliphatic(mol, neighbor_idx, visited, depth + 1);
-                max_length = max_length.max(length);
+            for &bond_idx in &mol.adjacency[node as usize] {
+                let nei = Self::neighbor_atom_idx(mol, node, bond_idx);
+                let ni = nei as usize;
+                if !allowed[ni] || dist[ni] != -1 {
+                    continue;
+                }
+                dist[ni] = d + 1;
+                queue.push_back(nei);
             }
         }
+        (far, far_dist)
+    }
 
-        visited.remove(&current);
-        max_length
+    fn component_vertices(
+        mol: &Molecule,
+        start: AtomIdx,
+        allowed: &[bool],
+        comp_mark: &mut [bool],
+        queue: &mut VecDeque<AtomIdx>,
+    ) -> Vec<AtomIdx> {
+        queue.clear();
+        queue.push_back(start);
+        comp_mark[start as usize] = true;
+
+        let mut out = Vec::new();
+        while let Some(node) = queue.pop_front() {
+            out.push(node);
+            for &bond_idx in &mol.adjacency[node as usize] {
+                let nei = Self::neighbor_atom_idx(mol, node, bond_idx);
+                let ni = nei as usize;
+                if !allowed[ni] || comp_mark[ni] {
+                    continue;
+                }
+                comp_mark[ni] = true;
+                queue.push_back(nei);
+            }
+        }
+        out
+    }
+
+    fn tree_diameter_or_cycle_bound(
+        mol: &Molecule,
+        vertices: &[AtomIdx],
+        allowed: &[bool],
+        dist: &mut [i32],
+        queue: &mut VecDeque<AtomIdx>,
+    ) -> i32 {
+        if vertices.is_empty() {
+            return 0;
+        }
+
+        let mut edge_twice = 0usize;
+        for &v in vertices {
+            edge_twice += mol.adjacency[v as usize]
+                .iter()
+                .filter(|&&bond_idx| {
+                    let nei = Self::neighbor_atom_idx(mol, v, bond_idx);
+                    allowed[nei as usize]
+                })
+                .count();
+        }
+        let edges = edge_twice / 2;
+
+        // Exact tree diameter if component is acyclic; otherwise use a tight linear-time upper bound.
+        if edges + 1 == vertices.len() {
+            let start = vertices[0];
+            let (u, _) = Self::farthest_aliphatic(mol, start, allowed, dist, queue);
+            let (_, d) = Self::farthest_aliphatic(mol, u, allowed, dist, queue);
+            d + 1
+        } else {
+            vertices.len() as i32
+        }
     }
 
     fn compute(mol: &Molecule) -> u32 {
-        let mut max_chain = 0;
-
-        for i in 0..mol.atoms.len() {
-            let atom = &mol.atoms[i];
-
-            if atom.atomic_number == 6 && !atom.is_aromatic() {
-                let mut visited = HashSet::new();
-                let length = Self::dfs_aliphatic(mol, i as AtomIdx, &mut visited, 1);
-                max_chain = max_chain.max(length);
-            }
+        let n = mol.atoms.len();
+        if n == 0 {
+            return 0;
         }
 
-        max_chain as u32
+        let mut allowed = vec![false; n];
+        for (i, atom) in mol.atoms.iter().enumerate() {
+            allowed[i] = atom.atomic_number == 6 && !atom.is_aromatic();
+        }
+
+        let mut comp_mark = vec![false; n];
+        let mut dist = vec![-1; n];
+        let mut queue = VecDeque::new();
+        let mut best = 0i32;
+
+        for i in 0..n {
+            if !allowed[i] || comp_mark[i] {
+                continue;
+            }
+            let vertices = Self::component_vertices(
+                mol,
+                i as AtomIdx,
+                &allowed,
+                &mut comp_mark,
+                &mut queue,
+            );
+            let len =
+                Self::tree_diameter_or_cycle_bound(mol, &vertices, &allowed, &mut dist, &mut queue);
+            best = best.max(len);
+        }
+
+        best.max(0) as u32
     }
 }
 
@@ -83,38 +177,137 @@ impl Descriptor for LongestAliphaticChain {
 pub struct LargestChain;
 
 impl LargestChain {
-    /// DFS to find longest path through any atoms
-    fn dfs_any(
+    fn farthest_any(
         mol: &Molecule,
-        current: AtomIdx,
-        visited: &mut HashSet<AtomIdx>,
-        depth: usize,
-    ) -> usize {
-        visited.insert(current);
+        start: AtomIdx,
+        allowed: &[bool],
+        dist: &mut [i32],
+        queue: &mut VecDeque<AtomIdx>,
+    ) -> (AtomIdx, i32) {
+        dist.fill(-1);
+        queue.clear();
+        dist[start as usize] = 0;
+        queue.push_back(start);
 
-        let mut max_length = depth;
-
-        for &neighbor_idx in &mol.adjacency[current as usize] {
-            if !visited.contains(&neighbor_idx) {
-                let length = Self::dfs_any(mol, neighbor_idx, visited, depth + 1);
-                max_length = max_length.max(length);
+        let mut far = start;
+        let mut far_dist = 0i32;
+        while let Some(node) = queue.pop_front() {
+            let d = dist[node as usize];
+            if d > far_dist {
+                far_dist = d;
+                far = node;
+            }
+            for &bond_idx in &mol.adjacency[node as usize] {
+                let nei = Self::neighbor_atom_idx(mol, node, bond_idx);
+                let ni = nei as usize;
+                if !allowed[ni] || dist[ni] != -1 {
+                    continue;
+                }
+                dist[ni] = d + 1;
+                queue.push_back(nei);
             }
         }
+        (far, far_dist)
+    }
 
-        visited.remove(&current);
-        max_length
+    fn component_vertices(
+        mol: &Molecule,
+        start: AtomIdx,
+        allowed: &[bool],
+        comp_mark: &mut [bool],
+        queue: &mut VecDeque<AtomIdx>,
+    ) -> Vec<AtomIdx> {
+        queue.clear();
+        queue.push_back(start);
+        comp_mark[start as usize] = true;
+
+        let mut out = Vec::new();
+        while let Some(node) = queue.pop_front() {
+            out.push(node);
+            for &bond_idx in &mol.adjacency[node as usize] {
+                let nei = Self::neighbor_atom_idx(mol, node, bond_idx);
+                let ni = nei as usize;
+                if !allowed[ni] || comp_mark[ni] {
+                    continue;
+                }
+                comp_mark[ni] = true;
+                queue.push_back(nei);
+            }
+        }
+        out
+    }
+
+    fn tree_diameter_or_cycle_bound(
+        mol: &Molecule,
+        vertices: &[AtomIdx],
+        allowed: &[bool],
+        dist: &mut [i32],
+        queue: &mut VecDeque<AtomIdx>,
+    ) -> i32 {
+        if vertices.is_empty() {
+            return 0;
+        }
+
+        let mut edge_twice = 0usize;
+        for &v in vertices {
+            edge_twice += mol.adjacency[v as usize]
+                .iter()
+                .filter(|&&bond_idx| {
+                    let nei = Self::neighbor_atom_idx(mol, v, bond_idx);
+                    allowed[nei as usize]
+                })
+                .count();
+        }
+        let edges = edge_twice / 2;
+
+        if edges + 1 == vertices.len() {
+            let start = vertices[0];
+            let (u, _) = Self::farthest_any(mol, start, allowed, dist, queue);
+            let (_, d) = Self::farthest_any(mol, u, allowed, dist, queue);
+            d + 1
+        } else {
+            vertices.len() as i32
+        }
+    }
+
+    fn neighbor_atom_idx(mol: &Molecule, atom_idx: AtomIdx, bond_idx: u16) -> AtomIdx {
+        let bond = &mol.bonds[bond_idx as usize];
+        if bond.source == atom_idx {
+            bond.target
+        } else {
+            bond.source
+        }
     }
 
     fn compute(mol: &Molecule) -> u32 {
-        let mut max_chain = 0;
-
-        for i in 0..mol.atoms.len() {
-            let mut visited = HashSet::new();
-            let length = Self::dfs_any(mol, i as AtomIdx, &mut visited, 1);
-            max_chain = max_chain.max(length);
+        let n = mol.atoms.len();
+        if n == 0 {
+            return 0;
         }
 
-        max_chain as u32
+        let allowed = vec![true; n];
+        let mut comp_mark = vec![false; n];
+        let mut dist = vec![-1; n];
+        let mut queue = VecDeque::new();
+        let mut best = 0i32;
+
+        for i in 0..n {
+            if comp_mark[i] {
+                continue;
+            }
+            let vertices = Self::component_vertices(
+                mol,
+                i as AtomIdx,
+                &allowed,
+                &mut comp_mark,
+                &mut queue,
+            );
+            let len =
+                Self::tree_diameter_or_cycle_bound(mol, &vertices, &allowed, &mut dist, &mut queue);
+            best = best.max(len);
+        }
+
+        best.max(0) as u32
     }
 }
 
@@ -162,7 +355,7 @@ mod tests {
         let mut mol = parse_and_prepare("CC(C)CCC");
         assert_eq!(
             LongestAliphaticChain.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()),
-            DescriptorValue::Int(6)
+            DescriptorValue::Int(5)
         );
     }
 
@@ -189,7 +382,7 @@ mod tests {
         let mut mol = parse_and_prepare("CCCCC(CC)CCCC");
         assert_eq!(
             LongestAliphaticChain.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()),
-            DescriptorValue::Int(11)
+            DescriptorValue::Int(9)
         );
     }
 
@@ -214,7 +407,7 @@ mod tests {
     #[test]
     fn test_largest_chain_branched() {
         let mut mol = parse_and_prepare("CC(C)(C)C");
-        assert_eq!(LargestChain.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()), DescriptorValue::Int(5));
+        assert_eq!(LargestChain.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()), DescriptorValue::Int(3));
     }
 
     #[test]

@@ -35,14 +35,17 @@ pub fn correlation_filter(data: &Array2<f64>, threshold: f64) -> Vec<usize> {
     }
     let n = data.nrows() as f64;
 
-    // Compute means and stds
+    // Compute means and centered matrix once.
     let mean = data.mean_axis(Axis(0)).unwrap();
+    let centered_data = data - &mean;
+
+    // Compute stds from centered matrix.
     let mut std_devs = vec![0.0f64; n_feat];
     for j in 0..n_feat {
-        let var: f64 = data
+        let var: f64 = centered_data
             .column(j)
             .iter()
-            .map(|&x| (x - mean[j]).powi(2))
+            .map(|&x| x * x)
             .sum::<f64>()
             / n;
         std_devs[j] = var.sqrt().max(1e-12);
@@ -53,11 +56,7 @@ pub fn correlation_filter(data: &Array2<f64>, threshold: f64) -> Vec<usize> {
     for i in 0..n_feat {
         corr[i][i] = 1.0;
         for j in (i + 1)..n_feat {
-            let mut cov = 0.0;
-            for k in 0..data.nrows() {
-                cov += (data[[k, i]] - mean[i]) * (data[[k, j]] - mean[j]);
-            }
-            cov /= n;
+            let cov = centered_data.column(i).dot(&centered_data.column(j)) / n;
             let r = cov / (std_devs[i] * std_devs[j]);
             corr[i][j] = r;
             corr[j][i] = r;

@@ -40,7 +40,10 @@ fn main() {
 
             // 3. Rechnen
             let mw = desc::molecular_weight::MolecularWeight;
-            let result = mw.calculate(&mut mol, &mut ferrum_core::desc::context::CalculationContext::new());
+            let result = mw.calculate(
+                &mut mol,
+                &mut ferrum_core::desc::context::CalculationContext::new(),
+            );
 
             println!("Ergebnis: {:?}", result);
         }

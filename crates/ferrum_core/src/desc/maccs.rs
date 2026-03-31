@@ -9,26 +9,193 @@
 //! Note: This is the public MACCS keys set with 166 keys (numbered 1-166).
 //! Key 0 is reserved and always returns 0.
 
+use super::aromatic_ring_count::AromaticRingCount;
 use super::typed::{Descriptor, DescriptorValue};
-use crate::algo::iso::find_all_matches;
-use crate::io::smarts::{QueryGraph, parse_smarts};
+use crate::algo::iso::{has_at_least_matches, has_substruct_match};
+use crate::io::smarts::{AtomPrimitive, QueryAtom, QueryGraph, parse_smarts};
 use crate::mol::molecule::Molecule;
 use bitvec::prelude::*;
 use once_cell::sync::Lazy;
+use smallvec::SmallVec;
 
-/// Pre-parsed MACCS keys patterns for fast fingerprint calculation.
-static PARSED_KEYS: Lazy<Vec<Option<QueryGraph>>> = Lazy::new(|| {
+#[derive(Clone)]
+struct QueryScreen {
+    min_atoms: usize,
+    min_bonds: usize,
+    required_elements: SmallVec<[(u8, u16); 8]>,
+    requires_aromatic_atom: bool,
+}
+
+#[derive(Clone)]
+struct ScreenedQuery {
+    query: QueryGraph,
+    screen: QueryScreen,
+}
+
+#[derive(Clone, Copy)]
+struct MoleculeScreenStats {
+    num_atoms: usize,
+    num_bonds: usize,
+    element_counts: [u16; 119],
+    aromatic_atom_count: u16,
+}
+
+impl MoleculeScreenStats {
+    fn from_molecule(mol: &Molecule) -> Self {
+        let mut element_counts = [0u16; 119];
+        let mut aromatic_atom_count = 0u16;
+        for atom in &mol.atoms {
+            let idx = atom.atomic_number as usize;
+            if idx < element_counts.len() {
+                element_counts[idx] = element_counts[idx].saturating_add(1);
+            }
+            if atom.is_aromatic() {
+                aromatic_atom_count = aromatic_atom_count.saturating_add(1);
+            }
+        }
+        Self {
+            num_atoms: mol.num_atoms(),
+            num_bonds: mol.num_bonds(),
+            element_counts,
+            aromatic_atom_count,
+        }
+    }
+
+    fn passes(&self, screen: &QueryScreen) -> bool {
+        if screen.min_atoms > self.num_atoms || screen.min_bonds > self.num_bonds {
+            return false;
+        }
+        if screen.requires_aromatic_atom && self.aromatic_atom_count == 0 {
+            return false;
+        }
+        screen
+            .required_elements
+            .iter()
+            .all(|&(element, count)| self.element_counts[element as usize] >= count)
+    }
+}
+
+fn build_query_screen(query: &QueryGraph) -> QueryScreen {
+    let mut required = [0u16; 119];
+    let mut requires_aromatic_atom = false;
+    for atom in &query.atoms {
+        if let Some(element) = fixed_atomic_number(atom) {
+            let idx = element as usize;
+            if idx < required.len() {
+                required[idx] = required[idx].saturating_add(1);
+            }
+        }
+        requires_aromatic_atom |= query_atom_requires_aromatic(atom);
+    }
+    let required_elements = required
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, &count)| (count > 0).then_some((idx as u8, count)))
+        .collect();
+    QueryScreen {
+        min_atoms: query.atoms.len(),
+        min_bonds: query.bonds.len(),
+        required_elements,
+        requires_aromatic_atom,
+    }
+}
+
+fn fixed_atomic_number(query_atom: &QueryAtom) -> Option<u8> {
+    let mut fixed = None;
+    for primitive in &query_atom.primitives {
+        let Some(element) = fixed_atomic_number_primitive(primitive) else {
+            continue;
+        };
+        if let Some(prev) = fixed {
+            if prev != element {
+                return None;
+            }
+        } else {
+            fixed = Some(element);
+        }
+    }
+    fixed
+}
+
+fn fixed_atomic_number_primitive(primitive: &AtomPrimitive) -> Option<u8> {
+    match primitive {
+        AtomPrimitive::Element(z) | AtomPrimitive::Aromatic(z) | AtomPrimitive::Aliphatic(z) => {
+            Some(*z)
+        }
+        AtomPrimitive::And(items) => {
+            let mut fixed = None;
+            for item in items {
+                let Some(element) = fixed_atomic_number_primitive(item) else {
+                    continue;
+                };
+                if let Some(prev) = fixed {
+                    if prev != element {
+                        return None;
+                    }
+                } else {
+                    fixed = Some(element);
+                }
+            }
+            fixed
+        }
+        AtomPrimitive::Or(options) => {
+            let mut elements = options.iter().filter_map(fixed_atomic_number_primitive);
+            let first = elements.next()?;
+            if elements.all(|element| element == first) {
+                Some(first)
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
+}
+
+fn query_atom_requires_aromatic(query_atom: &QueryAtom) -> bool {
+    query_atom.primitives.iter().any(primitive_requires_aromatic_atom)
+}
+
+fn primitive_requires_aromatic_atom(primitive: &AtomPrimitive) -> bool {
+    match primitive {
+        AtomPrimitive::AnyAromatic | AtomPrimitive::Aromatic(_) => true,
+        AtomPrimitive::Not(_) => false,
+        AtomPrimitive::And(options) => options.iter().any(primitive_requires_aromatic_atom),
+        AtomPrimitive::Or(options) => {
+            !options.is_empty() && options.iter().all(primitive_requires_aromatic_atom)
+        }
+        AtomPrimitive::Recursive(sub_pattern) => sub_pattern
+            .atoms
+            .first()
+            .is_some_and(query_atom_requires_aromatic),
+        _ => false,
+    }
+}
+
+/// Pre-parsed + screened MACCS keys patterns for fast fingerprint calculation.
+static SCREENED_KEYS: Lazy<Vec<Option<ScreenedQuery>>> = Lazy::new(|| {
     MACCS_KEYS
         .iter()
         .map(|key| {
             if key.smarts.is_empty() {
                 None // Special keys that need custom logic
             } else {
-                parse_smarts(key.smarts).ok()
+                parse_smarts(key.smarts).ok().map(|query| {
+                    let screen = build_query_screen(&query);
+                    ScreenedQuery { query, screen }
+                })
             }
         })
         .collect()
 });
+
+fn required_match_count(key_number: usize) -> Option<usize> {
+    match key_number {
+        118 | 120 | 127 | 130 | 131 | 136 | 138 | 142 | 145 | 149 | 159 => Some(1),
+        141 | 146 => Some(2),
+        140 => Some(3),
+        _ => None,
+    }
+}
 
 /// MACCS key definition.
 struct MaccsKey {
@@ -48,41 +215,26 @@ impl Descriptor for MaccsKeys {
         "MaccsKeys"
     }
 
-    fn calculate(&self, mol: &mut Molecule, ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
+    fn calculate(
+        &self,
+        mol: &mut Molecule,
+        ctx: &mut crate::desc::context::CalculationContext,
+    ) -> DescriptorValue {
         let mut bits = bitvec![u8, Lsb0; 0; 166];
-
-        let count_keys = [
-            (118, 1),
-            (120, 1),
-            (127, 1),
-            (130, 1),
-            (131, 1),
-            (136, 1),
-            (138, 1),
-            (140, 3),
-            (141, 2),
-            (142, 1),
-            (145, 1),
-            (146, 2),
-            (149, 1),
-            (159, 1),
-        ];
-        let count_map: std::collections::HashMap<usize, usize> =
-            count_keys.iter().cloned().collect();
+        let stats = MoleculeScreenStats::from_molecule(mol);
 
         for (i, key_def) in MACCS_KEYS.iter().enumerate() {
             let key_number = key_def.number;
-            let required_count = count_map.get(&key_number).copied().unwrap_or(0);
-
-            let key_present = if let Some(Some(query)) = PARSED_KEYS.get(i) {
-                let matches = find_all_matches(mol, query);
-                if required_count == 0 {
-                    !matches.is_empty()
+            let key_present = if let Some(Some(screened)) = SCREENED_KEYS.get(i) {
+                if !stats.passes(&screened.screen) {
+                    false
+                } else if let Some(required_count) = required_match_count(key_number) {
+                    has_at_least_matches(mol, &screened.query, required_count + 1)
                 } else {
-                    matches.len() > required_count
+                    has_substruct_match(mol, &screened.query)
                 }
             } else {
-                calculate_special_key(mol, key_number)
+                calculate_special_key(mol, key_number, ctx)
             };
 
             if key_present {
@@ -95,24 +247,17 @@ impl Descriptor for MaccsKeys {
 }
 
 /// Calculate special keys that don't use SMARTS patterns or need custom logic.
-fn calculate_special_key(mol: &Molecule, key_number: usize) -> bool {
+fn calculate_special_key(
+    mol: &mut Molecule,
+    key_number: usize,
+    ctx: &mut crate::desc::context::CalculationContext,
+) -> bool {
     match key_number {
         // Key 1: ISOTOPE - Not implemented (requires isotope information in Atom struct)
         1 => false,
 
         // Key 125: Aromatic Ring > 1
-        125 => {
-            let mut mol_clone = mol.clone();
-            let rings = crate::algo::rings::find_sssr(&mut mol_clone);
-            let n_arom = rings
-                .iter()
-                .filter(|ring| {
-                    ring.iter()
-                        .all(|&idx| mol_clone.atoms[idx as usize].is_aromatic())
-                })
-                .count();
-            n_arom > 1
-        }
+        125 => AromaticRingCount.calculate(mol, ctx).as_int() > 1,
 
         // Key 166: Fragments > 1
         166 => crate::algo::components::num_fragments(mol) > 1,
@@ -1010,7 +1155,7 @@ mod tests {
 
     #[test]
     fn test_pattern_parsing() {
-        let parsed_count = PARSED_KEYS.iter().filter(|p| p.is_some()).count();
+        let parsed_count = SCREENED_KEYS.iter().filter(|p| p.is_some()).count();
         assert!(
             parsed_count >= 150,
             "Too many patterns failed to parse: only {} succeeded",
@@ -1095,6 +1240,29 @@ mod tests {
         assert!(fp[160], "Key 161: N");
         assert!(fp[161], "Key 162: Aromatic");
         assert!(fp[164], "Key 165: Ring");
+    }
+
+    #[test]
+    fn test_maccs_threshold_keys() {
+        let fp = calc_maccs("CCO");
+        assert!(
+            !fp[145],
+            "Key 146 (1-based): O count > 2 should be false for ethanol"
+        );
+        assert!(
+            !fp[139],
+            "Key 140 (1-based): O count > 3 should be false for ethanol"
+        );
+
+        let fp = calc_maccs("OCC(O)CO");
+        assert!(
+            fp[145],
+            "Key 146 (1-based): O count > 2 should be true for glycerol"
+        );
+        assert!(
+            !fp[139],
+            "Key 140 (1-based): O count > 3 should be false for glycerol"
+        );
     }
 }
 

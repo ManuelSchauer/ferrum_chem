@@ -53,23 +53,20 @@ pub fn leave_one_out(n_samples: usize) -> KFoldSplits {
 
 /// Y-randomization validation.
 ///
-/// Shuffles target values and returns shuffled datasets for each permutation.
+/// Shuffles target values and returns shuffled target vectors for each permutation.
 /// If the model performs well on shuffled data, the original model is likely overfit.
-pub fn y_randomization(data: &QsarDataset, n_permutations: usize, seed: u64) -> Vec<QsarDataset> {
+pub fn y_randomization(
+    data: &QsarDataset,
+    n_permutations: usize,
+    seed: u64,
+) -> Vec<ndarray::Array1<f64>> {
     let mut rng = StdRng::seed_from_u64(seed);
     let mut results = Vec::with_capacity(n_permutations);
 
     for _ in 0..n_permutations {
         let mut shuffled_targets: Vec<f64> = data.targets.to_vec();
         shuffled_targets.shuffle(&mut rng);
-
-        let ds = QsarDataset {
-            features: data.features.clone(),
-            targets: ndarray::Array1::from(shuffled_targets),
-            feature_names: data.feature_names.clone(),
-            identifiers: data.identifiers.clone(),
-        };
-        results.push(ds);
+        results.push(ndarray::Array1::from(shuffled_targets));
     }
 
     results
@@ -129,17 +126,14 @@ mod tests {
         let shuffled = y_randomization(&ds, 5, 42);
         assert_eq!(shuffled.len(), 5);
 
-        // Features should be identical
+        // Each permutation should preserve target length.
         for s in &shuffled {
-            assert_eq!(s.features, ds.features);
+            assert_eq!(s.len(), ds.targets.len());
         }
 
         // At least one shuffled dataset should have different target order
         let original: Vec<f64> = ds.targets.to_vec();
-        let any_different = shuffled.iter().any(|s| {
-            let shuffled_t: Vec<f64> = s.targets.to_vec();
-            shuffled_t != original
-        });
+        let any_different = shuffled.iter().any(|s| s.to_vec() != original);
         assert!(any_different, "Y-randomization should shuffle targets");
     }
 }

@@ -4,6 +4,7 @@ use crate::io::smarts::{
 };
 use crate::mol::molecule::Molecule;
 use smallvec::SmallVec;
+use std::borrow::Cow;
 
 /// Substructure matching using VF2 algorithm.
 ///
@@ -17,7 +18,15 @@ use smallvec::SmallVec;
 /// assert!(has_substruct_match(&molecule, &pattern));
 /// ```
 pub fn has_substruct_match(target: &Molecule, pattern: &QueryGraph) -> bool {
-    find_first_match(target, pattern).is_some()
+    has_substruct_match_with_ring_ctx(target, pattern, None)
+}
+
+pub(crate) fn has_substruct_match_with_ring_ctx(
+    target: &Molecule,
+    pattern: &QueryGraph,
+    ring_ctx: Option<&SmartsRingContext>,
+) -> bool {
+    find_first_match_with_ring_ctx(target, pattern, ring_ctx).is_some()
 }
 
 /// Finds the first substructure match and returns the atom mapping.
@@ -25,6 +34,14 @@ pub fn has_substruct_match(target: &Molecule, pattern: &QueryGraph) -> bool {
 /// Returns a vector where index i is the pattern atom index,
 /// and the value is the corresponding target atom index.
 pub fn find_first_match(target: &Molecule, pattern: &QueryGraph) -> Option<Vec<u16>> {
+    find_first_match_with_ring_ctx(target, pattern, None)
+}
+
+fn find_first_match_with_ring_ctx(
+    target: &Molecule,
+    pattern: &QueryGraph,
+    ring_ctx: Option<&SmartsRingContext>,
+) -> Option<Vec<u16>> {
     // Empty pattern matches everything
     if pattern.atoms.is_empty() {
         return Some(vec![]);
@@ -40,14 +57,14 @@ pub fn find_first_match(target: &Molecule, pattern: &QueryGraph) -> Option<Vec<u
 
     if let Some(fast_path) = detect_fast_path(pattern) {
         let mut first = None;
-        visit_fast_path_matches(target, pattern, fast_path, |mapping| {
+        visit_fast_path_matches(target, pattern, fast_path, ring_ctx, |mapping| {
             first = Some(mapping.to_vec());
             false
         });
         return first;
     }
 
-    let mut state = MatchState::new(target, pattern, MatchMode::FirstMatch);
+    let mut state = MatchState::new(target, pattern, MatchMode::FirstMatch, ring_ctx);
     if !state.overall_possible {
         return None;
     }
@@ -74,14 +91,14 @@ pub fn count_matches(target: &Molecule, pattern: &QueryGraph) -> usize {
 
     if let Some(fast_path) = detect_fast_path(pattern) {
         let mut count = 0usize;
-        visit_fast_path_matches(target, pattern, fast_path, |_| {
+        visit_fast_path_matches(target, pattern, fast_path, None, |_| {
             count += 1;
             true
         });
         return count;
     }
 
-    let mut state = MatchState::new(target, pattern, MatchMode::Enumerate);
+    let mut state = MatchState::new(target, pattern, MatchMode::Enumerate, None);
     if !state.overall_possible {
         return 0;
     }
@@ -117,6 +134,17 @@ pub fn visit_matches<F>(target: &Molecule, pattern: &QueryGraph, mut visit: F)
 where
     F: FnMut(&[u16]) -> bool,
 {
+    visit_matches_with_ring_ctx(target, pattern, None, &mut visit);
+}
+
+pub(crate) fn visit_matches_with_ring_ctx<F>(
+    target: &Molecule,
+    pattern: &QueryGraph,
+    ring_ctx: Option<&SmartsRingContext>,
+    mut visit: F,
+) where
+    F: FnMut(&[u16]) -> bool,
+{
     if pattern.atoms.is_empty() {
         let _ = visit(&[]);
         return;
@@ -130,11 +158,11 @@ where
     }
 
     if let Some(fast_path) = detect_fast_path(pattern) {
-        visit_fast_path_matches(target, pattern, fast_path, visit);
+        visit_fast_path_matches(target, pattern, fast_path, ring_ctx, visit);
         return;
     }
 
-    let mut state = MatchState::new(target, pattern, MatchMode::FirstMatch);
+    let mut state = MatchState::new(target, pattern, MatchMode::FirstMatch, ring_ctx);
     if !state.overall_possible {
         return;
     }
@@ -159,7 +187,7 @@ pub fn find_all_matches(target: &Molecule, pattern: &QueryGraph) -> Vec<Vec<u16>
 
     if let Some(fast_path) = detect_fast_path(pattern) {
         let mut matches = Vec::new();
-        visit_fast_path_matches(target, pattern, fast_path, |mapping| {
+        visit_fast_path_matches(target, pattern, fast_path, None, |mapping| {
             matches.push(mapping.to_vec());
             true
         });
@@ -167,7 +195,7 @@ pub fn find_all_matches(target: &Molecule, pattern: &QueryGraph) -> Vec<Vec<u16>
     }
 
     let mut matches = Vec::new();
-    let mut state = MatchState::new(target, pattern, MatchMode::Enumerate);
+    let mut state = MatchState::new(target, pattern, MatchMode::Enumerate, None);
     if !state.overall_possible {
         return matches;
     }
@@ -208,12 +236,17 @@ fn visit_fast_path_matches<F>(
     target: &Molecule,
     pattern: &QueryGraph,
     fast_path: FastPathKind,
+    ring_ctx: Option<&SmartsRingContext>,
     mut visit: F,
 ) where
     F: FnMut(&[u16]) -> bool,
 {
-    let ring_ctx = if query_graph_needs_ring_context(pattern) {
-        Some(SmartsRingContext::for_molecule(target))
+    let ring_ctx_owned = if query_graph_needs_ring_context(pattern) {
+        if let Some(ctx) = ring_ctx {
+            Some(Cow::Borrowed(ctx))
+        } else {
+            Some(Cow::Owned(SmartsRingContext::for_molecule(target)))
+        }
     } else {
         None
     };
@@ -229,7 +262,7 @@ fn visit_fast_path_matches<F>(
                     query_atom,
                     target,
                     mapping[0],
-                    ring_ctx.as_ref(),
+                    ring_ctx_owned.as_deref(),
                     Some(&recursive_cache),
                 ) && !visit(&mapping)
                 {
@@ -262,7 +295,7 @@ fn visit_fast_path_matches<F>(
                         query_source,
                         target,
                         target_src,
-                        ring_ctx.as_ref(),
+                        ring_ctx_owned.as_deref(),
                         Some(&recursive_cache),
                     ) {
                         continue;
@@ -271,7 +304,7 @@ fn visit_fast_path_matches<F>(
                         query_target,
                         target,
                         target_dst,
-                        ring_ctx.as_ref(),
+                        ring_ctx_owned.as_deref(),
                         Some(&recursive_cache),
                     ) {
                         continue;
@@ -410,7 +443,7 @@ struct MatchState<'a> {
     pattern: &'a QueryGraph,
     mapping: Vec<u16>,                 // pattern_idx -> target_idx
     reverse_mapping: Vec<Option<u16>>, // target_idx -> Some(pattern_idx) or None
-    ring_ctx: Option<SmartsRingContext>,
+    ring_ctx: Option<Cow<'a, SmartsRingContext>>,
     recursive_cache: SmartsRecursiveCache,
     candidate_targets: Vec<Vec<u16>>, // pattern_idx -> candidate target atom idx
     estimated_candidate_sizes: Vec<usize>,
@@ -423,9 +456,18 @@ struct MatchState<'a> {
 }
 
 impl<'a> MatchState<'a> {
-    fn new(target: &'a Molecule, pattern: &'a QueryGraph, mode: MatchMode) -> Self {
+    fn new(
+        target: &'a Molecule,
+        pattern: &'a QueryGraph,
+        mode: MatchMode,
+        ring_ctx: Option<&'a SmartsRingContext>,
+    ) -> Self {
         let ring_ctx = if query_graph_needs_ring_context(pattern) {
-            Some(SmartsRingContext::for_molecule(target))
+            if let Some(ctx) = ring_ctx {
+                Some(Cow::Borrowed(ctx))
+            } else {
+                Some(Cow::Owned(SmartsRingContext::for_molecule(target)))
+            }
         } else {
             None
         };
@@ -471,7 +513,7 @@ impl<'a> MatchState<'a> {
                         query_atom,
                         target,
                         target_idx,
-                        ring_ctx.as_ref(),
+                        ring_ctx.as_deref(),
                     ) {
                         candidates.push(target_idx);
                     }
@@ -572,7 +614,7 @@ impl<'a> MatchState<'a> {
             &self.pattern.atoms[pattern_idx],
             self.target,
             target_idx,
-            self.ring_ctx.as_ref(),
+            self.ring_ctx.as_deref(),
             Some(&self.recursive_cache),
         );
         self.atom_match_cache[pattern_idx][target_idx as usize] = if matches { 2 } else { 1 };

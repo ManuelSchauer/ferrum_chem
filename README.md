@@ -23,6 +23,9 @@ FerrumChem is a high-performance molecular descriptor calculation engine designe
 - **🔬 100% RDKit accuracy**: Validated against 27 torture molecules × 72 descriptors (1944/1944 exact match)
 - **📈 Current 1000-row parity**: Scalar 99.8%, Rings 100.0%, VSA 100.0%, Chi/Kappa 100.0%
 - **📈 Scalar mismatch scope (1000-row)**: only `Ipc` diverges (`953/1000`), all other scalar descriptors are `1000/1000`
+- **📈 Latest 100k parity campaign**: Scalar 99.3%, Rings 99.2%, VSA 99.5%, Chi/Kappa 99.8% (release mode)
+- **⚡ Latest 100k matched CSV benchmark**: Ferrum `2340.81 mol/s` vs RDKit `603.29 mol/s` (**3.88x faster**)
+- **💾 Latest 100k matched CSV memory**: Ferrum `21.80 MB` peak RSS vs RDKit `202.56 MB` (**9.29x lower**)
 - **📊 Latest pinned CSV benchmark (57 outputs, single-thread)**:
   - 1k rows buffered: `2514.32 mol/s`, `5.94 MB` peak RSS
   - 1k rows stream (`chunk=1`): `2460.29 mol/s`, `7.70 MB` peak RSS
@@ -40,6 +43,7 @@ FerrumChem still has **100% RDKit match** across the 27-molecule torture set (**
 - **1000-row current reference slice**: **Scalar 21953/22000 = 99.8%**, **Ring 4000/4000 = 100.0%**, **VSA 36000/36000 = 100.0%**, **Chi/Kappa 10000/10000 = 100.0%**
 - **Latest 1000-row closures**: `Qed`, `RotatableBonds`, `FractionCSP3`, `HallKierAlpha`, all Chi/Kappa values, all ring descriptors, and all VSA bins now match RDKit on **1000/1000** molecules
 - **Remaining parity gap in current 1000-row suite**: `Ipc` only (**953/1000**, 95.3%)
+- **Latest 100k campaign**: **Scalar 2,184,572/2,200,000 = 99.3%**, **Ring 396,931/400,000 = 99.2%**, **VSA 3,583,114/3,600,000 = 99.5%**, **Chi/Kappa 998,286/1,000,000 = 99.8%**
 
 The only remaining validated parity gap in the current 1000-row RDKit suite is `Ipc` numerical divergence. Non-`Ipc` scalar/ring/VSA/Chi/Kappa descriptors are now fully aligned on that slice; exact `Ipc` emulation remains a deferred item unless strict RDKit bit-level reproducibility becomes a hard requirement.
 
@@ -163,124 +167,147 @@ OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 VECLIB_MAXIMUM_THREAD
   python scripts/benchmark_rdkit_parity_bundle_csv.py
 ```
 
-### Phase 14 TUI — Interactive QSAR Workflow Shell
+### Phase 14 TUI — Interactive QSAR Workbench (Tab-Based, Non-Blocking)
 
-The TUI provides a full interactive terminal interface for loading chemical datasets, training ML models, inspecting descriptors, and managing serialized pipelines — all without writing code.
+FerrumChem now includes a rewritten TUI designed for lab workflows:
+- **Persistent tab navigation** (`Descriptor Studio`, `ML Pipeline`, `Visualization & Analytics`)
+- **Non-blocking architecture** (UI thread + worker thread over `mpsc`)
+- **60 FPS rendering loop** with computing popup/spinner during long operations
+- **Target toggle list** for selecting one or many supervised prediction targets
+- **Visual file picker modal** for `.csv` and `.smi` files (no path typing required)
 
 #### Quick Launch
 
 ```bash
-# Launch with default settings (looks for coconut_csv_lite-02-2026.csv in current dir)
-cargo run -p ferrum_cli --release --bin tui
-
-# Launch with a custom CSV file
-FERRUM_TUI_DATASET_CSV="/path/to/your/molecules.csv" \
-FERRUM_TUI_SMILES_COLUMN="smiles" \
-FERRUM_TUI_TARGET_COLUMN="activity" \
-FERRUM_TUI_ROW_LIMIT=500 \
 cargo run -p ferrum_cli --release --bin tui
 ```
 
-#### CSV File Requirements
+#### Data Input
 
-Your CSV file must have:
-- A **SMILES column** containing valid SMILES strings (one molecule per row)
-- A **target column** containing numeric values (the property you want to predict, e.g. logP, activity, pIC50)
-- A header row with column names
+- The file browser (key: `f` or `p`, depending on tab) supports:
+  - `.csv` files (parsed through `CsvReader`, auto SMILES detection)
+  - `.smi` / `.smiles` files (first token per non-empty, non-comment line)
+- Invalid molecule rows are skipped and reported in status.
 
-Example CSV:
-```csv
-smiles,logp,molecular_weight
-c1ccccc1,1.56,78.11
-CC(=O)O,-0.17,60.05
-CCO,-0.31,46.07
-```
+#### Tab 1: Descriptor Studio
 
-#### Environment Variables
+- Load molecules with `f` (opens file picker popup).
+- Toggle descriptor set with checkbox list:
+  - `Space`: toggle selected descriptor
+  - `a`: select all descriptors
+  - `n`: select none
+  - `↑/↓` or `j/k`: move selection
+- Press `Enter` to compute descriptors in the worker thread.
+- Press `v` to apply variance-threshold filtering (default `1e-12`) on the current matrix.
+- Press `c` to apply correlation filtering (default `|r| > 0.95`) on the current matrix.
+- Press `e` to export `SMILES + current (possibly filtered) feature matrix` to CSV.
+- Output includes a descriptor matrix preview table (first rows/columns).
 
-All TUI settings are configured via environment variables (with sensible defaults):
+#### Tab 2: ML Pipeline
 
-| Variable | Default | Description |
-|---|---|---|
-| `FERRUM_TUI_DATASET_CSV` | `coconut_csv_lite-02-2026.csv` | Path to input CSV file |
-| `FERRUM_TUI_SMILES_COLUMN` | `canonical_smiles` | CSV column containing SMILES strings |
-| `FERRUM_TUI_TARGET_COLUMN` | `alogp` | CSV column containing the numeric target property |
-| `FERRUM_TUI_ROW_LIMIT` | `300` | Maximum number of rows to load (caps memory usage) |
-| `FERRUM_TUI_PIPELINE_PATH` | `/tmp/ferrum_tui_pipeline.bin` | File path for saving/loading serialized pipelines |
+- `t`: open target selection popup (numeric CSV columns); toggle one target or many.
+- `a`: toggle training mode:
+  - `AutoQsar` (default): one-click automatic model selection/tuning.
+  - `Manual`: choose one explicit model and tune its parameters.
+- Mode behavior:
+  - no selected targets => unsupervised/vector-only workflows (`ART2-A`, PCA, feature profiling)
+  - one or more selected targets => supervised training is enabled
+- `m` / `M`: in `Manual` mode, cycle manual model (`Random Forest`, `k-NN`, `PLS`, `Elastic Net`).
+- `z`: toggle scaler (`StandardScaler` / `MinMaxScaler`).
+- `x`: cycle train/test split strategy (`Random`, `Stratified`, `Scaffold`).
+  - `Stratified` is target-dependent and only available when a valid primary target vector is present.
+  - When target validity is lost, stratified split auto-falls back to `Random`.
+- `,` / `.`: in `Manual` mode, cycle hyperparameter pages for models with extended controls.
+- `1..6`: edit currently visible hyperparameters (CV/test/seed + model-specific page + dedicated ART2-A page).
+- `g`: run ART2-A clustering on current feature matrix (target not required).
+- ART2-A clustering uses the currently selected scaler (`z`) before clustering.
+- ART2-A quick tuning keys in Tab 2:
+  - `[` / `]`: decrease/increase vigilance (`rho`)
+  - `;` / `'`: decrease/increase learning rate (`eta`)
+  - `-` / `=`: decrease/increase max iterations
+- ART2-A parameters are also available in the parameter pager (``,`` / ``.`` + `1..6`) as:
+  - `ART2-A rho`
+  - `ART2-A eta`
+  - `ART2-A max iter`
+- If ART2-A reports a single cluster, increase vigilance (`]`) and/or switch scaler (`z`) and run `g` again.
+- `Enter`: train supervised model bundle (one model per selected target) on the current descriptor matrix.
+- `p`: choose a prediction input file (`.csv` / `.smi`).
+- `s`: export current prediction table to CSV.
+- Training status now includes `Q2`, train metrics (`R2`, `RMSE`, `MAE`, Pearson `r`) and holdout split metrics.
+- Prediction now returns one column per selected target (full multi-output prediction by default).
+- If ART2-A clustering is available, prediction additionally emits:
+  - `ART2A_ClusterId`
+  - `ART2A_Similarity`
+  - `ART2A_InDomain` (`1.0`/`0.0`)
+- `p` now supports supervised-only, ART2-A-only, or combined outputs in one pass.
+- You can still predict just one value by selecting only one target in the `t` popup.
+- The UI validates full feature-layout compatibility between training and prediction runs, including feature-subset filters applied in Tab 1.
 
-> **Tip:** If the CSV file is not found, the TUI launches with a fallback mock dataset and shows a warning. You can still explore all screens — the training wizard will work on the mock data.
+#### Tab 3: Visualization & Analytics
 
-#### TUI Screens
+- **Top pane**: PCA scatter (`PC1` vs `PC2`) on current feature matrix.
+- Color mode toggle (`o`) cycles:
+  - uniform
+  - target overlay buckets (from the currently selected primary target, when valid)
+  - ART2-A cluster IDs (when clustering has been run)
+  - applicability domain in/out buckets (green/red, when model AD state is available)
+- **Bottom-left pane**: regression diagnostics:
+  - Predicted vs Actual scatter with `y=x` reference
+  - residual summary (`Train R²/RMSE/MAE/Pearson`, residual bias, residual `σ`, `|residual| p95`, outlier counts, holdout metrics)
+  - residual z-score distribution bins (histogram-like table)
+- **Bottom-right top pane**: top-10 feature-importance table (RF/PLS/Elastic Net).
+- **Bottom-right bottom pane**: descriptor profiling table:
+  - `Descriptor | Mean | Min | Max | StdDev | ZeroVar`
+  - zero-variance rows highlighted
+  - scroll with `↑/↓` or `j/k`
 
-**1. Training Wizard** — Step-by-step model training workflow:
-1. **Dataset** → Press Enter to load (or reload) the CSV. Shows parse stats (rows loaded, failures, missing targets, target range)
-2. **Preprocess** → Confirms StandardScaler preprocessing (applied automatically by AutoQsar)
-3. **Train** → Runs `AutoQsar::regression` which compares k-NN (k=3,5,7), Random Forest (50,100 trees), PLS (2,3,5 components), and Elastic Net (α=0.01,0.1,1.0). Shows wall-clock training time and best model Q²
-4. **Evaluate** → Shows final pipeline summary with CV Q², train R², and prediction preview
-5. **Done** → Pipeline is ready for batch prediction and save/export
+#### Worker-Thread Architecture (Implementation Notes)
 
-**2. Batch Prediction** — Run the trained model against the loaded dataset. Shows R², RMSE, and sample-level prediction preview. Press Enter to recompute.
+The TUI uses explicit request/response channels:
+- `WorkerRequest::{LoadDataset, CalculateDescriptors, TrainModel, RunArt2aClustering, PredictFile, ExportPredictions, ApplyVarianceFilter, ApplyCorrelationFilter, ExportFeatureMatrix}`
+- `WorkerResponse::{DatasetLoaded, DescriptorsCalculated, ModelTrained, ClusteringCompleted, PredictionsReady, PredictionsExported, FeatureFilterApplied, FeatureMatrixExported, Error}`
 
-**3. Chemical Space** — PCA-projected scatter plot of the loaded dataset. Uses StandardScaler + Jacobi PCA(2) to project all molecules into 2D. Shows:
-- Braille-dot scatter plot (PC1 vs PC2)
-- Variance explained per principal component
-- PC axis ranges and sample count
+Heavy tasks (`calculate_batch_flat_static`, configurable model training/CV/splitting, ART2-A clustering, batch prediction, export I/O) run off the render thread, so the interface remains responsive.
 
-**4. Descriptor Profiling** — Scrollable table of all computed molecular descriptors showing per-feature statistics:
-- Mean, standard deviation, min, max
-- Zero-variance features flagged with ⚠ (red) — important for ML: these features provide no discriminatory power
-- Scroll with ↑/↓ to navigate all features
+#### Keybindings Summary
 
-**5. Pipeline Management** — File-backed persistence for trained models:
-- `s` → Serialize current pipeline to file (bincode) at `FERRUM_TUI_PIPELINE_PATH`
-- `l` → Load a previously saved pipeline from file
-- `m` → Reload pipeline from in-memory mirror (useful after re-training)
+| Key | Action |
+|---|---|
+| `q` | Quit TUI |
+| `Left/Right` or `h/l` | Switch top-level tabs |
+| `Esc` | Close popup / cancel current edit |
+| `f` (Tab 1) | Open dataset file browser |
+| `Enter` (Tab 1) | Run descriptor calculation |
+| `Space`, `a`, `n` (Tab 1) | Toggle descriptor selection |
+| `v` (Tab 1) | Apply variance threshold filter to current feature matrix |
+| `c` (Tab 1) | Apply correlation filter to current feature matrix |
+| `e` (Tab 1) | Export current feature matrix CSV |
+| `t` (Tab 2) | Open target selection popup (Space toggle, `a` all, `n` none) |
+| `a` (Tab 2) | Toggle training mode (`AutoQsar` / `Manual`) |
+| `m` / `M` (Tab 2) | In Manual mode, cycle model (`RF` / `k-NN` / `PLS` / `Elastic Net`) |
+| `z` (Tab 2) | Toggle scaler (`StandardScaler` / `MinMaxScaler`) |
+| `x` (Tab 2) | Cycle split strategy (`Random` / `Stratified` / `Scaffold`, stratified requires valid primary target) |
+| `,` / `.` (Tab 2) | In Manual mode, cycle hyperparameter page |
+| `1..6` (Tab 2) | Edit visible hyperparameters (includes ART2-A page) |
+| `g` (Tab 2) | Run ART2-A clustering on current feature matrix |
+| `[` / `]` (Tab 2) | ART2-A vigilance down/up |
+| `;` / `'` (Tab 2) | ART2-A learning rate down/up |
+| `-` / `=` (Tab 2) | ART2-A max-iter down/up |
+| `Enter` (Tab 2) | Train selected model bundle (one model per selected target) |
+| `p` (Tab 2) | Open prediction file browser |
+| `s` (Tab 2) | Export prediction CSV |
+| `o` (Tab 3) | Cycle color mode (`uniform` / `target overlay` / `cluster` / `AD`) |
+| `↑/↓` or `j/k` | List/table navigation and profile scrolling |
 
-#### Keybindings
+#### Descriptor/Fingerprint Coverage in TUI
 
-| Key | Context | Action |
-|---|---|---|
-| `↑`/`↓` or `j`/`k` | Menu | Navigate menu items |
-| `↑`/`↓` or `j`/`k` | Descriptor Profiling | Scroll feature table |
-| `Enter` | Everywhere | Activate selection / advance wizard step |
-| `Esc` | Any view | Return to main menu |
-| `q` | Anywhere | Quit TUI |
-| `s` | Pipeline Management | Save pipeline to file |
-| `l` | Pipeline Management | Load pipeline from file |
-| `m` | Pipeline Management | Load pipeline from memory |
-| `?` | Anywhere | Show keybindings help in status bar |
+The TUI now uses the expanded `BatchDescriptor::all()` set (**66 descriptors/fingerprints**), covering:
 
-#### Computed Descriptors (24 features used in training)
+- Scalar physicochemical/topological descriptors (MW, LogP, TPSA, QED, Bertz, Balaban, Ipc, etc.)
+- Multi-output descriptor families (Chi, Kappa, E-State, autocorrelation, BCUT, ring and functional-group vectors, VSA bins)
+- Fingerprints (`MACCS-166`, `PubChem-881`, `ECFP4`, `FCFP4`, `AtomPair`, `TopologicalTorsion`)
 
-The TUI training workflow computes the following molecular descriptors for each molecule:
-
-`MolecularWeight`, `LogP`, `MolarRefractivity`, `TPSA`, `HBondDonor`, `HBondAcceptor`, `RotatableBondCount`, `HeavyAtomCount`, `AtomCount`, `AromaticAtomCount`, `HeteroatomCount`, `AromaticRingCount`, `FormalCharge`, `FractionCSP3`, `BertzCT`, `LabuteASA`, `QED`, `NumAmideBonds`, `HallKierAlpha`, `BalabanIndex`, `BondCount`, `SLogP_VSA` (8 bins), `SMR_VSA` (7 bins), `PEOE_VSA` (14 bins)
-
-This results in approximately 57 total numeric features per molecule.
-
-#### Example Workflow
-
-```bash
-# 1. Prepare a CSV with SMILES and a target property
-head -3 my_dataset.csv
-# smiles,pIC50
-# c1ccc(cc1)O,5.2
-# CC(=O)Nc1ccc(O)cc1,6.8
-
-# 2. Launch TUI pointing at the CSV
-FERRUM_TUI_DATASET_CSV="my_dataset.csv" \
-FERRUM_TUI_SMILES_COLUMN="smiles" \
-FERRUM_TUI_TARGET_COLUMN="pIC50" \
-FERRUM_TUI_ROW_LIMIT=1000 \
-cargo run -p ferrum_cli --release --bin tui
-
-# 3. Inside TUI:
-#    → Select "Interactive model training wizard" → Enter through all steps
-#    → Select "Batch prediction interface" → Enter to see R²/RMSE
-#    → Select "Chemical space visualization" → See PCA scatter
-#    → Select "Descriptor profiling dashboard" → Scroll features with ↑/↓
-#    → Select "Pipeline management" → Press 's' to save trained model
-```
+With all options enabled, this expands to roughly **9.5k numeric columns** in the feature matrix.
 
 ### Run Tests
 
@@ -347,9 +374,79 @@ Larger pinned slices (10k rows):
 
 The CSV benchmark output includes `peak_rss_bytes` and `peak_rss_mb` for direct memory-footprint comparisons.
 
+### 100k campaign (release-mode, single-thread pinned)
+
+All numbers below are from the latest full 100k wave (2026-03-24), using:
+- dataset: `coconut_csv_lite-02-2026.csv`
+- pinned threading env (`OMP_NUM_THREADS=1`, `OPENBLAS_NUM_THREADS=1`, `MKL_NUM_THREADS=1`, `VECLIB_MAXIMUM_THREADS=1`, `RAYON_NUM_THREADS=1` where applicable)
+
+#### 100k parity summary (RDKit reference vs FerrumChem)
+
+| Suite | Total checks | Passed | Failed | Pass rate | Runtime |
+|---|---:|---:|---:|---:|---:|
+| Scalar | 2,200,000 | 2,184,572 | 15,428 | 99.3% | 59.16s |
+| Ring | 400,000 | 396,931 | 3,069 | 99.2% | 11.63s |
+| VSA | 3,600,000 | 3,583,114 | 16,886 | 99.5% | 22.30s |
+| Chi/Kappa | 1,000,000 | 998,286 | 1,714 | 99.8% | 36.03s |
+
+Scalar descriptor pass rates on 100k (selected):
+- `Ipc`: `94,998 / 100,000` (**95.0%**)
+- `LogP`: `98,640 / 100,000` (**98.6%**)
+- `MolarRefractivity`: `98,623 / 100,000` (**98.6%**)
+- `AromaticAtomCount`: `98,759 / 100,000` (**98.8%**)
+- `AromaticRingCount`: `99,027 / 100,000` (**99.0%**)
+- `LabuteASA`: `98,765 / 100,000` (**98.8%**)
+- `BertzCT`: `98,772 / 100,000` (**98.8%**)
+- `QED`: `99,461 / 100,000` (**99.5%**)
+- `TPSA`: `99,324 / 100,000` (**99.3%**)
+- `RotatableBonds`: `99,852 / 100,000` (**99.9%**)
+
+#### 100k matched CSV performance (57 outputs)
+
+Fresh rerun (2026-03-31) on `coconut_csv_lite-100000-tui.csv`, single-threaded release mode (`FERRUM_BENCH_REPEATS=3`, `FERRUM_BENCH_WARMUP=200`):
+
+| Tool | Rows | Seconds | Molecules/s | Peak RSS |
+|---|---:|---:|---:|---:|
+| FerrumChem | 100,000 | 42.720270 | 2,340.81 | 21.80 MB |
+| RDKit | 100,000 | 165.757513 | 603.29 | 202.56 MB |
+
+Relative 100k result:
+- FerrumChem is **3.88x faster** than RDKit on matched throughput.
+- FerrumChem uses **9.29x lower** peak RSS.
+
+#### FerrumChem per-descriptor throughput on 100k molecules
+
+| Descriptor | Feature len | Seconds | Molecules/s |
+|---|---:|---:|---:|
+| MolecularWeight | 1 | 0.010018 | 9,981,616.86 |
+| LogP | 1 | 4.921086 | 20,320.72 |
+| MolarRefractivity | 1 | 4.913023 | 20,354.07 |
+| TPSA | 1 | 0.035065 | 2,851,843.15 |
+| HBondDonor | 1 | 0.239927 | 416,793.59 |
+| HBondAcceptor | 1 | 0.545074 | 183,461.29 |
+| RotatableBondCount | 1 | 0.101474 | 985,469.26 |
+| HeavyAtomCount | 1 | 0.002639 | 37,897,334.60 |
+| AtomCount | 1 | 0.002865 | 34,905,536.89 |
+| AromaticAtomCount | 1 | 0.002603 | 38,410,437.81 |
+| HeteroatomCount | 1 | 0.002610 | 38,311,108.42 |
+| AromaticRingCount | 1 | 9.486801 | 10,540.96 |
+| FormalCharge | 1 | 0.002586 | 38,677,238.45 |
+| FractionCSP3 | 1 | 0.257220 | 388,772.70 |
+| BertzCT | 1 | 10.329350 | 9,681.15 |
+| LabuteASA | 1 | 0.029436 | 3,397,157.43 |
+| QED | 1 | 26.431232 | 3,783.40 |
+| NumAmideBonds | 1 | 0.010941 | 9,139,897.28 |
+| HallKierAlpha | 1 | 0.337229 | 296,534.22 |
+| BalabanIndex | 1 | 8.383758 | 11,927.82 |
+| BondCount | 1 | 0.000467 | 214,324,139.54 |
+| SlogP_VSA | 12 | 4.954716 | 20,182.79 |
+| SMR_VSA | 10 | 4.955727 | 20,178.67 |
+| PEOE_VSA | 14 | 0.797403 | 125,407.11 |
+
 ### Accuracy & Validation
 - **100% RDKit match**: 1944/1944 descriptor comparisons across 27 torture molecules
 - **Current 1000-row parity**: scalar 99.8%, ring 100.0%, VSA 100.0%, Chi/Kappa 100.0%
+- **Latest 100k parity campaign**: scalar 99.3%, ring 99.2%, VSA 99.5%, Chi/Kappa 99.8%
 - **Extended 10k audit (diagnostic)**: scalar 99.3%, ring 99.4%, VSA 99.6%, Chi/Kappa 99.9%
 - **Exact 1000/1000 descriptors**: all ring descriptors, all VSA bins, all Chi/Kappa values, and all scalar descriptors except `Ipc`
 - **Remaining 1000-row mismatch**: `Ipc` only (47 fails; `953/1000` pass rate)
@@ -421,7 +518,7 @@ ferrum_chem/
 **Phase 15**: Infrastructure (SDF parser, canonical SMILES writer, Python bindings, crates.io)  
 **Phase 16**: 3D descriptors (conformers, PMI, shape — special cases only)
 
-**Current Status**: Production-ready typed QSAR library with 72 typed descriptors, 100% torture-set RDKit agreement, and current **1000-row parity** at scalar **99.8%** (only `Ipc` divergent), ring **100.0%**, VSA **100.0%**, Chi/Kappa **100.0%**. Latest pinned single-thread CSV bundle shows Ferrum at **2502 mol/s** and **6.23 MB** peak RSS on 1k rows vs RDKit at **608 mol/s** and **71.36 MB**. ✅
+**Current Status**: Production-ready typed QSAR library with 72 typed descriptors, 100% torture-set RDKit agreement, current **1000-row parity** at scalar **99.8%** (only `Ipc` divergent), and latest full **100k parity** at scalar **99.3%**, ring **99.2%**, VSA **99.5%**, Chi/Kappa **99.8%**. Latest matched 100k CSV run shows Ferrum at **2341 mol/s** and **21.80 MB** peak RSS vs RDKit at **603 mol/s** and **202.56 MB**. ✅
 
 ## 🎓 Use Cases
 

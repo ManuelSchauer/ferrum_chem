@@ -69,8 +69,13 @@ impl KnnRegressor {
                 (dist, self.train_targets[i])
             })
             .collect();
-        distances.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
-        distances.truncate(self.k);
+        if distances.len() > self.k {
+            distances.select_nth_unstable_by(self.k - 1, |a, b| a.0.total_cmp(&b.0));
+            distances.truncate(self.k);
+            distances.sort_by(|a, b| a.0.total_cmp(&b.0));
+        } else {
+            distances.sort_by(|a, b| a.0.total_cmp(&b.0));
+        }
         distances
     }
 
@@ -125,8 +130,13 @@ impl KnnClassifier {
                 (dist, self.train_targets[i])
             })
             .collect();
-        distances.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
-        distances.truncate(self.k);
+        if distances.len() > self.k {
+            distances.select_nth_unstable_by(self.k - 1, |a, b| a.0.total_cmp(&b.0));
+            distances.truncate(self.k);
+            distances.sort_by(|a, b| a.0.total_cmp(&b.0));
+        } else {
+            distances.sort_by(|a, b| a.0.total_cmp(&b.0));
+        }
 
         let n_pos = distances.iter().filter(|&&(_, t)| t >= 0.5).count();
         n_pos as f64 / self.k as f64

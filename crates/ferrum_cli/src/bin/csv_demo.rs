@@ -1,12 +1,12 @@
 use ferrum_core::algo::aromaticity::perceive_aromaticity;
 use ferrum_core::algo::valency::assign_implicit_hydrogens;
+use ferrum_core::desc::Descriptor;
 use ferrum_core::desc::aromatic_ring_count::AromaticRingCount;
 use ferrum_core::desc::atom_count::{AromaticAtomCount, AtomCount, HeavyAtomCount};
 use ferrum_core::desc::batch::{calculate_batch_flat, write_csv_flat, write_json_flat};
 use ferrum_core::desc::bond_count::BondCount;
 use ferrum_core::desc::formal_charge::FormalCharge;
 use ferrum_core::desc::molecular_weight::MolecularWeight;
-use ferrum_core::desc::Descriptor;
 use ferrum_core::io::csv_reader::CsvReader;
 use std::fs::File;
 use std::io::Write;
