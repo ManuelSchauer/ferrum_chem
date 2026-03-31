@@ -2,6 +2,40 @@
 //!
 //! Supports Euclidean distance (for descriptors) and Tanimoto distance (for fingerprints).
 
+
+//! ## File guide: Knn
+//!
+//! This file belongs to FerrumChem's **machine-learning pipeline layer**.
+//!
+//! What to learn here:
+//! - Which chemistry/ML concern this file owns in the pipeline.
+//! - How Rust types and control-flow encode that concern.
+//! - Which public symbols are the best entry points for reading/debugging.
+//!
+//! Key symbols in this file:
+//! - `enum DistanceMetric`
+//! - `struct KnnRegressor`
+//! - `fn fit`
+//! - `fn predict_one`
+//! - `fn predict`
+//!
+//! Suggested reading workflow:
+//! 1. Read top-level type definitions and public APIs.
+//! 2. Trace helper functions used in hot/critical paths.
+//! 3. Cross-reference tests/examples that exercise this file.
+
+//!
+//! ### Algorithmic assumptions for this file
+//! - `Knn` assumes `ndarray` row-major sample layout (`n_samples x n_features`) throughout fit/predict paths.
+//! - `Knn` prioritizes reproducibility via explicit seeds and deterministic iteration order where applicable.
+//! - Model quality metrics for `Knn` depend on consistent preprocessing choices (scaling, splitting, and leakage control).
+//! - Specific scope anchor: `crates/ferrum_core/src/ml/knn.rs` defines knn behavior and should be updated together with its direct tests.
+//! ### Chemistry/ML references
+//! - Canonical ML literature for `Knn` algorithm family (statistical learning and validation texts).
+//! - scikit-learn/RDKit-style API ergonomics that inform `Knn` fit/transform/predict contracts.
+//! - OECD QSAR validation principles where `Knn` is used in predictive chemistry contexts.
+//! - Code-local source of truth: symbols and tests declared in `crates/ferrum_core/src/ml/knn.rs`.
+
 use ndarray::{Array1, Array2};
 use serde::{Deserialize, Serialize};
 
@@ -96,6 +130,10 @@ pub struct KnnClassifier {
 }
 
 impl KnnClassifier {
+    /// Fits the behavior encoded by this function.
+    ///
+    /// Function context: `crates/ferrum_core/src/ml/knn.rs`.
+    /// ML-layer note: numerical stability and reproducibility are important for comparable model evaluation.
     pub fn fit(
         features: Array2<f64>,
         targets: Array1<f64>,
@@ -183,6 +221,10 @@ mod tests {
     use ndarray::{Array2, array};
 
     #[test]
+    /// Runs regression test for knn regressor simple.
+    ///
+    /// Function context: `crates/ferrum_core/src/ml/knn.rs`.
+    /// ML-layer note: numerical stability and reproducibility are important for comparable model evaluation.
     fn test_knn_regressor_simple() {
         let features =
             Array2::from_shape_vec((4, 2), vec![0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 1.0, 1.0]).unwrap();
@@ -196,6 +238,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for knn regressor k3.
+    ///
+    /// Function context: `crates/ferrum_core/src/ml/knn.rs`.
+    /// ML-layer note: numerical stability and reproducibility are important for comparable model evaluation.
     fn test_knn_regressor_k3() {
         let features = Array2::from_shape_vec((4, 1), vec![0.0, 1.0, 2.0, 3.0]).unwrap();
         let targets = array![0.0, 2.0, 4.0, 6.0];
@@ -206,6 +252,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for knn classifier.
+    ///
+    /// Function context: `crates/ferrum_core/src/ml/knn.rs`.
+    /// ML-layer note: numerical stability and reproducibility are important for comparable model evaluation.
     fn test_knn_classifier() {
         let features = Array2::from_shape_vec(
             (6, 2),
@@ -220,6 +270,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for tanimoto distance.
+    ///
+    /// Function context: `crates/ferrum_core/src/ml/knn.rs`.
+    /// ML-layer note: numerical stability and reproducibility are important for comparable model evaluation.
     fn test_tanimoto_distance() {
         let a = vec![1.0, 0.0, 1.0, 1.0];
         let b = vec![1.0, 0.0, 1.0, 1.0];
@@ -231,6 +285,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for batch predict.
+    ///
+    /// Function context: `crates/ferrum_core/src/ml/knn.rs`.
+    /// ML-layer note: numerical stability and reproducibility are important for comparable model evaluation.
     fn test_batch_predict() {
         let features = Array2::from_shape_vec((3, 1), vec![0.0, 5.0, 10.0]).unwrap();
         let targets = array![0.0, 5.0, 10.0];
@@ -243,6 +301,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for mean knn distance.
+    ///
+    /// Function context: `crates/ferrum_core/src/ml/knn.rs`.
+    /// ML-layer note: numerical stability and reproducibility are important for comparable model evaluation.
     fn test_mean_knn_distance() {
         let features = Array2::from_shape_vec((3, 1), vec![0.0, 1.0, 2.0]).unwrap();
         let targets = array![0.0, 1.0, 2.0];

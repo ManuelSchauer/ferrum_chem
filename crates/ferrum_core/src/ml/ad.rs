@@ -1,5 +1,39 @@
 //! Applicability Domain — k-NN distance AD, leverage AD.
 
+
+//! ## File guide: Ad
+//!
+//! This file belongs to FerrumChem's **machine-learning pipeline layer**.
+//!
+//! What to learn here:
+//! - Which chemistry/ML concern this file owns in the pipeline.
+//! - How Rust types and control-flow encode that concern.
+//! - Which public symbols are the best entry points for reading/debugging.
+//!
+//! Key symbols in this file:
+//! - `trait ApplicabilityDomain`
+//! - `fn is_in_domain`
+//! - `fn confidence`
+//! - `struct KnnDistanceAD`
+//! - `fn fit`
+//!
+//! Suggested reading workflow:
+//! 1. Read top-level type definitions and public APIs.
+//! 2. Trace helper functions used in hot/critical paths.
+//! 3. Cross-reference tests/examples that exercise this file.
+
+//!
+//! ### Algorithmic assumptions for this file
+//! - `Ad` assumes `ndarray` row-major sample layout (`n_samples x n_features`) throughout fit/predict paths.
+//! - `Ad` prioritizes reproducibility via explicit seeds and deterministic iteration order where applicable.
+//! - Model quality metrics for `Ad` depend on consistent preprocessing choices (scaling, splitting, and leakage control).
+//! - Specific scope anchor: `crates/ferrum_core/src/ml/ad.rs` defines ad behavior and should be updated together with its direct tests.
+//! ### Chemistry/ML references
+//! - Canonical ML literature for `Ad` algorithm family (statistical learning and validation texts).
+//! - scikit-learn/RDKit-style API ergonomics that inform `Ad` fit/transform/predict contracts.
+//! - OECD QSAR validation principles where `Ad` is used in predictive chemistry contexts.
+//! - Code-local source of truth: symbols and tests declared in `crates/ferrum_core/src/ml/ad.rs`.
+
 use ndarray::{Array1, Array2, Axis};
 use serde::{Deserialize, Serialize};
 
@@ -75,6 +109,10 @@ impl KnnDistanceAD {
         }
     }
 
+    /// Implements knn distance.
+    ///
+    /// Function context: `crates/ferrum_core/src/ml/ad.rs`.
+    /// ML-layer note: numerical stability and reproducibility are important for comparable model evaluation.
     fn mean_knn_distance(&self, sample: &[f64]) -> f64 {
         let mut dists: Vec<f64> = (0..self.train_features.nrows())
             .map(|i| {
@@ -95,10 +133,18 @@ impl KnnDistanceAD {
 }
 
 impl ApplicabilityDomain for KnnDistanceAD {
+    /// Checks whether in domain.
+    ///
+    /// Function context: `crates/ferrum_core/src/ml/ad.rs`.
+    /// ML-layer note: numerical stability and reproducibility are important for comparable model evaluation.
     fn is_in_domain(&self, sample: &[f64]) -> bool {
         self.mean_knn_distance(sample) <= self.threshold
     }
 
+    /// Implements the behavior encoded by this function.
+    ///
+    /// Function context: `crates/ferrum_core/src/ml/ad.rs`.
+    /// ML-layer note: numerical stability and reproducibility are important for comparable model evaluation.
     fn confidence(&self, sample: &[f64]) -> f64 {
         let dist = self.mean_knn_distance(sample);
         if dist <= self.mean_dist {
@@ -186,10 +232,18 @@ impl LeverageAD {
 }
 
 impl ApplicabilityDomain for LeverageAD {
+    /// Checks whether in domain.
+    ///
+    /// Function context: `crates/ferrum_core/src/ml/ad.rs`.
+    /// ML-layer note: numerical stability and reproducibility are important for comparable model evaluation.
     fn is_in_domain(&self, sample: &[f64]) -> bool {
         self.leverage(sample) <= self.threshold
     }
 
+    /// Implements the behavior encoded by this function.
+    ///
+    /// Function context: `crates/ferrum_core/src/ml/ad.rs`.
+    /// ML-layer note: numerical stability and reproducibility are important for comparable model evaluation.
     fn confidence(&self, sample: &[f64]) -> f64 {
         let h = self.leverage(sample);
         if h <= 0.0 {
@@ -322,6 +376,10 @@ mod tests {
     use ndarray::Array2;
 
     #[test]
+    /// Runs regression test for knn ad in domain.
+    ///
+    /// Function context: `crates/ferrum_core/src/ml/ad.rs`.
+    /// ML-layer note: numerical stability and reproducibility are important for comparable model evaluation.
     fn test_knn_ad_in_domain() {
         let features = Array2::from_shape_vec(
             (6, 2),
@@ -337,6 +395,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for knn ad confidence.
+    ///
+    /// Function context: `crates/ferrum_core/src/ml/ad.rs`.
+    /// ML-layer note: numerical stability and reproducibility are important for comparable model evaluation.
     fn test_knn_ad_confidence() {
         let features = Array2::from_shape_vec((4, 1), vec![0.0, 1.0, 2.0, 3.0]).unwrap();
         let ad = KnnDistanceAD::fit(&features, 2, 2.0);
@@ -347,6 +409,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for leverage ad.
+    ///
+    /// Function context: `crates/ferrum_core/src/ml/ad.rs`.
+    /// ML-layer note: numerical stability and reproducibility are important for comparable model evaluation.
     fn test_leverage_ad() {
         let features = Array2::from_shape_vec(
             (5, 2),
@@ -363,6 +429,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for invert identity.
+    ///
+    /// Function context: `crates/ferrum_core/src/ml/ad.rs`.
+    /// ML-layer note: numerical stability and reproducibility are important for comparable model evaluation.
     fn test_invert_identity() {
         let eye = Array2::<f64>::eye(3);
         let inv = invert_matrix(&eye);
@@ -375,6 +445,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for pseudoinverse shapes.
+    ///
+    /// Function context: `crates/ferrum_core/src/ml/ad.rs`.
+    /// ML-layer note: numerical stability and reproducibility are important for comparable model evaluation.
     fn test_pseudoinverse_shapes() {
         let a = Array2::from_shape_vec((3, 2), vec![1.0, 0.0, 0.0, 1.0, 1.0, 1.0]).unwrap();
         let pinv = pseudoinverse(&a);
@@ -383,6 +457,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for pseudoinverse rank deficient finite.
+    ///
+    /// Function context: `crates/ferrum_core/src/ml/ad.rs`.
+    /// ML-layer note: numerical stability and reproducibility are important for comparable model evaluation.
     fn test_pseudoinverse_rank_deficient_finite() {
         // Collinear columns.
         let a = Array2::from_shape_vec((3, 2), vec![1.0, 2.0, 2.0, 4.0, 3.0, 6.0]).unwrap();

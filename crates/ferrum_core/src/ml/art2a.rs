@@ -2,6 +2,40 @@
 //!
 //! Chemical space clustering and applicability domain definition.
 
+
+//! ## File guide: Art2a
+//!
+//! This file belongs to FerrumChem's **machine-learning pipeline layer**.
+//!
+//! What to learn here:
+//! - Which chemistry/ML concern this file owns in the pipeline.
+//! - How Rust types and control-flow encode that concern.
+//! - Which public symbols are the best entry points for reading/debugging.
+//!
+//! Key symbols in this file:
+//! - `struct Art2a`
+//! - `fn new`
+//! - `fn fit`
+//! - `fn find_best_cluster`
+//! - `fn predict_one`
+//!
+//! Suggested reading workflow:
+//! 1. Read top-level type definitions and public APIs.
+//! 2. Trace helper functions used in hot/critical paths.
+//! 3. Cross-reference tests/examples that exercise this file.
+
+//!
+//! ### Algorithmic assumptions for this file
+//! - `Art2A` assumes `ndarray` row-major sample layout (`n_samples x n_features`) throughout fit/predict paths.
+//! - `Art2A` prioritizes reproducibility via explicit seeds and deterministic iteration order where applicable.
+//! - Model quality metrics for `Art2A` depend on consistent preprocessing choices (scaling, splitting, and leakage control).
+//! - Specific scope anchor: `crates/ferrum_core/src/ml/art2a.rs` defines art2a behavior and should be updated together with its direct tests.
+//! ### Chemistry/ML references
+//! - Canonical ML literature for `Art2A` algorithm family (statistical learning and validation texts).
+//! - scikit-learn/RDKit-style API ergonomics that inform `Art2A` fit/transform/predict contracts.
+//! - OECD QSAR validation principles where `Art2A` is used in predictive chemistry contexts.
+//! - Code-local source of truth: symbols and tests declared in `crates/ferrum_core/src/ml/art2a.rs`.
+
 use ndarray::Array1;
 use serde::{Deserialize, Serialize};
 
@@ -160,6 +194,10 @@ mod tests {
     use super::*;
 
     #[test]
+    /// Runs regression test for art2a basic clustering.
+    ///
+    /// Function context: `crates/ferrum_core/src/ml/art2a.rs`.
+    /// ML-layer note: numerical stability and reproducibility are important for comparable model evaluation.
     fn test_art2a_basic_clustering() {
         let data = vec![
             vec![1.0, 0.0, 0.0],
@@ -188,6 +226,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for art2a vigilance effect.
+    ///
+    /// Function context: `crates/ferrum_core/src/ml/art2a.rs`.
+    /// ML-layer note: numerical stability and reproducibility are important for comparable model evaluation.
     fn test_art2a_vigilance_effect() {
         let data = vec![vec![1.0, 0.0], vec![0.7, 0.3], vec![0.0, 1.0]];
 
@@ -208,6 +250,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for art2a applicability domain.
+    ///
+    /// Function context: `crates/ferrum_core/src/ml/art2a.rs`.
+    /// ML-layer note: numerical stability and reproducibility are important for comparable model evaluation.
     fn test_art2a_applicability_domain() {
         let data = vec![vec![1.0, 0.0, 0.0], vec![0.9, 0.1, 0.0]];
 
@@ -223,6 +269,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for art2a empty data.
+    ///
+    /// Function context: `crates/ferrum_core/src/ml/art2a.rs`.
+    /// ML-layer note: numerical stability and reproducibility are important for comparable model evaluation.
     fn test_art2a_empty_data() {
         let mut model = Art2a::new(0.5, 0.3, 10);
         model.fit(&[]);
@@ -230,6 +280,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for l2 normalize.
+    ///
+    /// Function context: `crates/ferrum_core/src/ml/art2a.rs`.
+    /// ML-layer note: numerical stability and reproducibility are important for comparable model evaluation.
     fn test_l2_normalize() {
         let v = l2_normalize(&[3.0, 4.0]);
         let norm = v.dot(&v).sqrt();

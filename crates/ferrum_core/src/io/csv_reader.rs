@@ -1,3 +1,47 @@
+//! I/O module: Csv Reader.
+//!
+//! This module handles external data interchange (SMILES/SMARTS/CSV/SDF) and
+//! conversion into FerrumChem graph types. It is the boundary between textual
+//! chemical formats and internal, typed molecular structures.
+//!
+//! Learning focus:
+//! - Parser/state-machine techniques in Rust.
+//! - Error-aware ingestion pipelines for large datasets.
+
+
+//! ## File guide: Csv Reader
+//!
+//! This file belongs to FerrumChem's **input/output parsing layer**.
+//!
+//! What to learn here:
+//! - Which chemistry/ML concern this file owns in the pipeline.
+//! - How Rust types and control-flow encode that concern.
+//! - Which public symbols are the best entry points for reading/debugging.
+//!
+//! Key symbols in this file:
+//! - `struct CsvReader`
+//! - `struct MoleculeRecord`
+//! - `fn from_path`
+//! - `fn with_smiles_column`
+//! - `fn with_delimiter`
+//!
+//! Suggested reading workflow:
+//! 1. Read top-level type definitions and public APIs.
+//! 2. Trace helper functions used in hot/critical paths.
+//! 3. Cross-reference tests/examples that exercise this file.
+
+//!
+//! ### Algorithmic assumptions for this file
+//! - `Csv Reader` treats textual chemistry formats as untrusted input and prefers explicit parse errors over silent repair.
+//! - `Csv Reader` must preserve deterministic tokenization so repeated reads produce identical molecule/query graphs.
+//! - Format-specific edge cases in `Csv Reader` are validated against toolkit-compatible semantics where possible.
+//! - Specific scope anchor: `crates/ferrum_core/src/io/csv_reader.rs` defines csv reader behavior and should be updated together with its direct tests.
+//! ### Chemistry/ML references
+//! - SMILES/SMARTS/CTfile family specifications relevant to `Csv Reader` parser or reader behavior.
+//! - RDKit parsing behavior used as external compatibility reference for `Csv Reader`.
+//! - Rust parser/state-machine patterns for reliable streaming and error reporting.
+//! - Code-local source of truth: symbols and tests declared in `crates/ferrum_core/src/io/csv_reader.rs`.
+
 use crate::error::{FerrumError, Result};
 use crate::io::smiles::parse_smiles;
 use crate::mol::molecule::Molecule;
@@ -136,6 +180,10 @@ impl CsvReader {
         ))
     }
 
+    /// Parses chunk records.
+    ///
+    /// Function context: `crates/ferrum_core/src/io/csv_reader.rs`.
+    /// I/O-layer note: parsing/ingestion should surface explicit errors instead of silently repairing malformed input.
     fn parse_chunk_records(
         headers: &csv::StringRecord,
         smiles_idx: usize,
@@ -348,6 +396,10 @@ mod tests {
     use std::io::Write;
     use tempfile::NamedTempFile;
 
+    /// Creates test csv.
+    ///
+    /// Function context: `crates/ferrum_core/src/io/csv_reader.rs`.
+    /// I/O-layer note: parsing/ingestion should surface explicit errors instead of silently repairing malformed input.
     fn create_test_csv(content: &str) -> NamedTempFile {
         let mut file = NamedTempFile::new().unwrap();
         write!(file, "{}", content).unwrap();
@@ -355,6 +407,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for csv reader basic.
+    ///
+    /// Function context: `crates/ferrum_core/src/io/csv_reader.rs`.
+    /// I/O-layer note: parsing/ingestion should surface explicit errors instead of silently repairing malformed input.
     fn test_csv_reader_basic() {
         let csv_content = "\
 SMILES,Name
@@ -375,6 +431,10 @@ CC,Ethane
     }
 
     #[test]
+    /// Runs regression test for csv reader with errors.
+    ///
+    /// Function context: `crates/ferrum_core/src/io/csv_reader.rs`.
+    /// I/O-layer note: parsing/ingestion should surface explicit errors instead of silently repairing malformed input.
     fn test_csv_reader_with_errors() {
         let csv_content = "\
 SMILES,Name
@@ -393,6 +453,10 @@ CC,Ethane
     }
 
     #[test]
+    /// Runs regression test for csv reader custom column.
+    ///
+    /// Function context: `crates/ferrum_core/src/io/csv_reader.rs`.
+    /// I/O-layer note: parsing/ingestion should surface explicit errors instead of silently repairing malformed input.
     fn test_csv_reader_custom_column() {
         let csv_content = "\
 Compound,Structure
@@ -411,6 +475,10 @@ Benzene,c1ccccc1
     }
 
     #[test]
+    /// Runs regression test for csv reader with id.
+    ///
+    /// Function context: `crates/ferrum_core/src/io/csv_reader.rs`.
+    /// I/O-layer note: parsing/ingestion should surface explicit errors instead of silently repairing malformed input.
     fn test_csv_reader_with_id() {
         let csv_content = "\
 SMILES,Name
@@ -431,6 +499,10 @@ c1ccccc1,Benzene
     }
 
     #[test]
+    /// Runs regression test for csv reader valid only.
+    ///
+    /// Function context: `crates/ferrum_core/src/io/csv_reader.rs`.
+    /// I/O-layer note: parsing/ingestion should surface explicit errors instead of silently repairing malformed input.
     fn test_csv_reader_valid_only() {
         let csv_content = "\
 SMILES
@@ -447,6 +519,10 @@ CC
     }
 
     #[test]
+    /// Runs regression test for csv reader without properties.
+    ///
+    /// Function context: `crates/ferrum_core/src/io/csv_reader.rs`.
+    /// I/O-layer note: parsing/ingestion should surface explicit errors instead of silently repairing malformed input.
     fn test_csv_reader_without_properties() {
         let csv_content = "\
 SMILES,Name
@@ -465,6 +541,10 @@ CC,Ethane
     }
 
     #[test]
+    /// Runs regression test for csv reader chunked parsing keeps row order.
+    ///
+    /// Function context: `crates/ferrum_core/src/io/csv_reader.rs`.
+    /// I/O-layer note: parsing/ingestion should surface explicit errors instead of silently repairing malformed input.
     fn test_csv_reader_chunked_parsing_keeps_row_order() {
         let csv_content = "\
 SMILES
@@ -489,6 +569,10 @@ CC
     }
 
     #[test]
+    /// Runs regression test for csv reader parse stream summary and order.
+    ///
+    /// Function context: `crates/ferrum_core/src/io/csv_reader.rs`.
+    /// I/O-layer note: parsing/ingestion should surface explicit errors instead of silently repairing malformed input.
     fn test_csv_reader_parse_stream_summary_and_order() {
         let csv_content = "\
 SMILES
@@ -518,6 +602,10 @@ CC
     }
 
     #[test]
+    /// Runs regression test for csv reader row limit.
+    ///
+    /// Function context: `crates/ferrum_core/src/io/csv_reader.rs`.
+    /// I/O-layer note: parsing/ingestion should surface explicit errors instead of silently repairing malformed input.
     fn test_csv_reader_row_limit() {
         let csv_content = "\
 SMILES

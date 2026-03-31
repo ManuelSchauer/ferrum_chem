@@ -1,3 +1,45 @@
+//! I/O module: Smarts.
+//!
+//! This module handles external data interchange (SMILES/SMARTS/CSV/SDF) and
+//! conversion into FerrumChem graph types. It is the boundary between textual
+//! chemical formats and internal, typed molecular structures.
+//!
+//! Learning focus:
+//! - Parser/state-machine techniques in Rust.
+//! - Error-aware ingestion pipelines for large datasets.
+
+
+//! ## File guide: Smarts
+//!
+//! This file belongs to FerrumChem's **input/output parsing layer**.
+//!
+//! What to learn here:
+//! - Which chemistry/ML concern this file owns in the pipeline.
+//! - How Rust types and control-flow encode that concern.
+//! - Which public symbols are the best entry points for reading/debugging.
+//!
+//! Key symbols in this file:
+//! - `struct QueryGraph`
+//! - `struct QueryGraphBond`
+//! - `struct QueryAtom`
+//! - `enum AtomPrimitive`
+//! - `enum QueryBond`
+//!
+//! Suggested reading workflow:
+//! 1. Read top-level type definitions and public APIs.
+//! 2. Trace helper functions used in hot/critical paths.
+//! 3. Cross-reference tests/examples that exercise this file.
+
+//!
+//! ### Algorithmic assumptions for this file
+//! - SMARTS bracket logic treats `&` as high-precedence atom-level AND and `;` as low-precedence AND, matching Daylight/RDKit semantics.
+//! - Recursive SMARTS and ring-bond primitives are interpreted on the 2D molecular graph; no conformer geometry is consulted.
+//! - Query matching assumes deterministic atom indexing so repeated substructure runs produce stable match sets.
+//! ### Chemistry/ML references
+//! - Daylight SMARTS reference (operator precedence, primitive tables, recursive SMARTS syntax).
+//! - RDKit SMARTS parser behavior and query semantics used as parity target in this repository.
+//! - Weininger, D. (1988). SMILES notation specification for shared atom/bond grammar roots.
+
 use crate::error::{FerrumError, Result};
 use crate::mol::molecule::Molecule;
 use crate::types::BondType;
@@ -179,6 +221,10 @@ pub(crate) struct SmartsRingContext {
 }
 
 impl SmartsRingContext {
+    /// Implements molecule.
+    ///
+    /// Function context: `crates/ferrum_core/src/io/smarts.rs`.
+    /// I/O-layer note: parsing/ingestion should surface explicit errors instead of silently repairing malformed input.
     pub(crate) fn for_molecule(mol: &Molecule) -> Self {
         let mut atom_ring_membership = vec![0u8; mol.num_atoms()];
         let mut atom_ring_sizes = vec![SmallVec::new(); mol.num_atoms()];
@@ -206,10 +252,18 @@ impl SmartsRingContext {
         }
     }
 
+    /// Implements membership.
+    ///
+    /// Function context: `crates/ferrum_core/src/io/smarts.rs`.
+    /// I/O-layer note: parsing/ingestion should surface explicit errors instead of silently repairing malformed input.
     fn ring_membership(&self, atom_idx: u16) -> u8 {
         self.atom_ring_membership[atom_idx as usize]
     }
 
+    /// Checks whether ring size.
+    ///
+    /// Function context: `crates/ferrum_core/src/io/smarts.rs`.
+    /// I/O-layer note: parsing/ingestion should surface explicit errors instead of silently repairing malformed input.
     fn has_ring_size(&self, atom_idx: u16, ring_size: u8) -> bool {
         self.atom_ring_sizes[atom_idx as usize].contains(&ring_size)
     }
@@ -221,6 +275,10 @@ pub(crate) struct SmartsRecursiveCache {
 }
 
 impl SmartsRecursiveCache {
+    /// Implements start atom.
+    ///
+    /// Function context: `crates/ferrum_core/src/io/smarts.rs`.
+    /// I/O-layer note: parsing/ingestion should surface explicit errors instead of silently repairing malformed input.
     fn matches_start_atom(&self, mol: &Molecule, sub_pattern: &QueryGraph, atom_idx: u16) -> bool {
         let key = sub_pattern as *const QueryGraph as usize;
 
@@ -250,6 +308,10 @@ impl SmartsRecursiveCache {
     }
 }
 
+/// Implements graph needs ring context.
+///
+/// Function context: `crates/ferrum_core/src/io/smarts.rs`.
+/// I/O-layer note: parsing/ingestion should surface explicit errors instead of silently repairing malformed input.
 pub(crate) fn query_graph_needs_ring_context(query: &QueryGraph) -> bool {
     query
         .atoms
@@ -258,6 +320,10 @@ pub(crate) fn query_graph_needs_ring_context(query: &QueryGraph) -> bool {
         .any(primitive_needs_ring_context)
 }
 
+/// Implements needs ring context.
+///
+/// Function context: `crates/ferrum_core/src/io/smarts.rs`.
+/// I/O-layer note: parsing/ingestion should surface explicit errors instead of silently repairing malformed input.
 fn primitive_needs_ring_context(primitive: &AtomPrimitive) -> bool {
     match primitive {
         AtomPrimitive::RingSize(_) | AtomPrimitive::RingMembership(_) => true,
@@ -270,10 +336,18 @@ fn primitive_needs_ring_context(primitive: &AtomPrimitive) -> bool {
     }
 }
 
+/// Implements atom needs ring context.
+///
+/// Function context: `crates/ferrum_core/src/io/smarts.rs`.
+/// I/O-layer note: parsing/ingestion should surface explicit errors instead of silently repairing malformed input.
 fn query_atom_needs_ring_context(query_atom: &QueryAtom) -> bool {
     query_atom.primitives.iter().any(primitive_needs_ring_context)
 }
 
+/// Implements atom matches with context.
+///
+/// Function context: `crates/ferrum_core/src/io/smarts.rs`.
+/// I/O-layer note: parsing/ingestion should surface explicit errors instead of silently repairing malformed input.
 pub(crate) fn query_atom_matches_with_context(
     query_atom: &QueryAtom,
     mol: &Molecule,
@@ -283,6 +357,10 @@ pub(crate) fn query_atom_matches_with_context(
     query_atom_matches_with_cache(query_atom, mol, atom_idx, ring_ctx, None)
 }
 
+/// Implements atom matches with cache.
+///
+/// Function context: `crates/ferrum_core/src/io/smarts.rs`.
+/// I/O-layer note: parsing/ingestion should surface explicit errors instead of silently repairing malformed input.
 pub(crate) fn query_atom_matches_with_cache(
     query_atom: &QueryAtom,
     mol: &Molecule,
@@ -466,6 +544,10 @@ impl QueryBond {
     }
 }
 
+/// Implements bond query and.
+///
+/// Function context: `crates/ferrum_core/src/io/smarts.rs`.
+/// I/O-layer note: parsing/ingestion should surface explicit errors instead of silently repairing malformed input.
 fn merge_bond_query_and(current: Option<QueryBond>, next: QueryBond) -> QueryBond {
     match current {
         Some(QueryBond::And(mut bonds)) => {
@@ -477,6 +559,10 @@ fn merge_bond_query_and(current: Option<QueryBond>, next: QueryBond) -> QueryBon
     }
 }
 
+/// Implements bond query or.
+///
+/// Function context: `crates/ferrum_core/src/io/smarts.rs`.
+/// I/O-layer note: parsing/ingestion should surface explicit errors instead of silently repairing malformed input.
 fn merge_bond_query_or(current: Option<QueryBond>, next: QueryBond) -> QueryBond {
     match current {
         Some(QueryBond::Or(mut bonds)) => {
@@ -513,6 +599,10 @@ struct SmartsParser {
 }
 
 impl SmartsParser {
+    /// Creates a new value with the defaults and invariants required by this module.
+    ///
+    /// Function context: `crates/ferrum_core/src/io/smarts.rs`.
+    /// I/O-layer note: parsing/ingestion should surface explicit errors instead of silently repairing malformed input.
     fn new(input: &str) -> Self {
         Self {
             input: input.chars().collect(),
@@ -524,6 +614,10 @@ impl SmartsParser {
         }
     }
 
+    /// Parses the behavior encoded by this function.
+    ///
+    /// Function context: `crates/ferrum_core/src/io/smarts.rs`.
+    /// I/O-layer note: parsing/ingestion should surface explicit errors instead of silently repairing malformed input.
     fn parse(&mut self) -> std::result::Result<QueryGraph, String> {
         if self.input.is_empty() {
             return Ok(QueryGraph {
@@ -547,6 +641,10 @@ impl SmartsParser {
         })
     }
 
+    /// Parses chain.
+    ///
+    /// Function context: `crates/ferrum_core/src/io/smarts.rs`.
+    /// I/O-layer note: parsing/ingestion should surface explicit errors instead of silently repairing malformed input.
     fn parse_chain(&mut self) -> std::result::Result<(), String> {
         let mut prev_atom_idx: Option<u16> = None;
         let mut bond_type: Option<QueryBond> = None;
@@ -831,6 +929,10 @@ impl SmartsParser {
         Ok(())
     }
 
+    /// Parses bracket atom.
+    ///
+    /// Function context: `crates/ferrum_core/src/io/smarts.rs`.
+    /// I/O-layer note: parsing/ingestion should surface explicit errors instead of silently repairing malformed input.
     fn parse_bracket_atom(&mut self) -> std::result::Result<QueryAtom, String> {
         self.pos += 1; // Skip '['
 
@@ -1253,6 +1355,10 @@ impl SmartsParser {
         }
     }
 
+    /// Parses organic atom.
+    ///
+    /// Function context: `crates/ferrum_core/src/io/smarts.rs`.
+    /// I/O-layer note: parsing/ingestion should surface explicit errors instead of silently repairing malformed input.
     fn parse_organic_atom(&mut self) -> std::result::Result<(QueryAtom, usize), String> {
         let ch = self.input[self.pos];
         let is_aromatic = ch.is_lowercase();
@@ -1295,6 +1401,10 @@ impl SmartsParser {
         Ok((atom, consumed))
     }
 
+    /// Parses ring closures.
+    ///
+    /// Function context: `crates/ferrum_core/src/io/smarts.rs`.
+    /// I/O-layer note: parsing/ingestion should surface explicit errors instead of silently repairing malformed input.
     fn parse_ring_closures(
         &mut self,
         atom_idx: u16,
@@ -1324,6 +1434,10 @@ impl SmartsParser {
         Ok(())
     }
 
+    /// Implements the behavior encoded by this function.
+    ///
+    /// Function context: `crates/ferrum_core/src/io/smarts.rs`.
+    /// I/O-layer note: parsing/ingestion should surface explicit errors instead of silently repairing malformed input.
     fn peek(&self) -> Option<char> {
         if self.pos < self.input.len() {
             Some(self.input[self.pos])
@@ -1332,6 +1446,10 @@ impl SmartsParser {
         }
     }
 
+    /// Parses digit.
+    ///
+    /// Function context: `crates/ferrum_core/src/io/smarts.rs`.
+    /// I/O-layer note: parsing/ingestion should surface explicit errors instead of silently repairing malformed input.
     fn parse_digit(&mut self) -> Option<u8> {
         if self.pos < self.input.len() && self.input[self.pos].is_ascii_digit() {
             let digit = (self.input[self.pos] as u8) - b'0';
@@ -1342,6 +1460,10 @@ impl SmartsParser {
         }
     }
 
+    /// Implements atom.
+    ///
+    /// Function context: `crates/ferrum_core/src/io/smarts.rs`.
+    /// I/O-layer note: parsing/ingestion should surface explicit errors instead of silently repairing malformed input.
     fn add_atom(&mut self, atom: QueryAtom) -> u16 {
         let idx = self.atoms.len() as u16;
         self.atoms.push(atom);
@@ -1349,6 +1471,10 @@ impl SmartsParser {
         idx
     }
 
+    /// Implements bond.
+    ///
+    /// Function context: `crates/ferrum_core/src/io/smarts.rs`.
+    /// I/O-layer note: parsing/ingestion should surface explicit errors instead of silently repairing malformed input.
     fn add_bond(&mut self, source: u16, target: u16, bond: QueryBond) {
         let bond_idx = self.bonds.len() as u16;
         self.bonds.push(QueryGraphBond {
@@ -1366,6 +1492,10 @@ mod smarts_parser_tests {
     use super::*;
 
     #[test]
+    /// Runs regression test for parse single element.
+    ///
+    /// Function context: `crates/ferrum_core/src/io/smarts.rs`.
+    /// I/O-layer note: parsing/ingestion should surface explicit errors instead of silently repairing malformed input.
     fn test_parse_single_element() {
         let pattern = parse_smarts("[C]").unwrap();
         assert_eq!(pattern.atoms.len(), 1);
@@ -1373,6 +1503,10 @@ mod smarts_parser_tests {
     }
 
     #[test]
+    /// Runs regression test for parse chain.
+    ///
+    /// Function context: `crates/ferrum_core/src/io/smarts.rs`.
+    /// I/O-layer note: parsing/ingestion should surface explicit errors instead of silently repairing malformed input.
     fn test_parse_chain() {
         let pattern = parse_smarts("CC").unwrap();
         assert_eq!(pattern.atoms.len(), 2);
@@ -1380,6 +1514,10 @@ mod smarts_parser_tests {
     }
 
     #[test]
+    /// Runs regression test for parse double bond.
+    ///
+    /// Function context: `crates/ferrum_core/src/io/smarts.rs`.
+    /// I/O-layer note: parsing/ingestion should surface explicit errors instead of silently repairing malformed input.
     fn test_parse_double_bond() {
         let pattern = parse_smarts("C=O").unwrap();
         assert_eq!(pattern.atoms.len(), 2);
@@ -1387,6 +1525,10 @@ mod smarts_parser_tests {
     }
 
     #[test]
+    /// Runs regression test for parse aromatic ring.
+    ///
+    /// Function context: `crates/ferrum_core/src/io/smarts.rs`.
+    /// I/O-layer note: parsing/ingestion should surface explicit errors instead of silently repairing malformed input.
     fn test_parse_aromatic_ring() {
         let pattern = parse_smarts("c1ccccc1").unwrap();
         assert_eq!(pattern.atoms.len(), 6);
@@ -1402,6 +1544,10 @@ mod tests {
     use crate::io::smiles::parse_smiles;
 
     #[test]
+    /// Runs regression test for query atom element.
+    ///
+    /// Function context: `crates/ferrum_core/src/io/smarts.rs`.
+    /// I/O-layer note: parsing/ingestion should surface explicit errors instead of silently repairing malformed input.
     fn test_query_atom_element() {
         let mol = parse_smiles("CCO").unwrap();
 
@@ -1417,6 +1563,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for query atom any.
+    ///
+    /// Function context: `crates/ferrum_core/src/io/smarts.rs`.
+    /// I/O-layer note: parsing/ingestion should surface explicit errors instead of silently repairing malformed input.
     fn test_query_atom_any() {
         let mol = parse_smiles("CCO").unwrap();
         let any_query = QueryAtom::any();
@@ -1427,6 +1577,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for query atom aromatic.
+    ///
+    /// Function context: `crates/ferrum_core/src/io/smarts.rs`.
+    /// I/O-layer note: parsing/ingestion should surface explicit errors instead of silently repairing malformed input.
     fn test_query_atom_aromatic() {
         let mut mol = parse_smiles("c1ccccc1").unwrap();
         perceive_aromaticity(&mut mol);
@@ -1441,6 +1595,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for query atom degree.
+    ///
+    /// Function context: `crates/ferrum_core/src/io/smarts.rs`.
+    /// I/O-layer note: parsing/ingestion should surface explicit errors instead of silently repairing malformed input.
     fn test_query_atom_degree() {
         let mol = parse_smiles("CC(C)C").unwrap(); // Isopropane: C-C(C)-C
 
@@ -1457,6 +1615,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for query atom in ring.
+    ///
+    /// Function context: `crates/ferrum_core/src/io/smarts.rs`.
+    /// I/O-layer note: parsing/ingestion should surface explicit errors instead of silently repairing malformed input.
     fn test_query_atom_in_ring() {
         let mut mol = parse_smiles("C1CCCCC1").unwrap(); // Cyclohexane
         find_sssr(&mut mol);
@@ -1474,6 +1636,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for query bond types.
+    ///
+    /// Function context: `crates/ferrum_core/src/io/smarts.rs`.
+    /// I/O-layer note: parsing/ingestion should surface explicit errors instead of silently repairing malformed input.
     fn test_query_bond_types() {
         let mol = parse_smiles("C=C").unwrap();
 
@@ -1493,6 +1659,10 @@ mod smarts_advanced_tests {
     use crate::io::smiles::parse_smiles;
 
     #[test]
+    /// Runs regression test for or in brackets.
+    ///
+    /// Function context: `crates/ferrum_core/src/io/smarts.rs`.
+    /// I/O-layer note: parsing/ingestion should surface explicit errors instead of silently repairing malformed input.
     fn test_or_in_brackets() {
         // Test comma-separated OR lists
         let query = parse_smarts("[#6,#7,#8]").unwrap();
@@ -1516,6 +1686,10 @@ mod smarts_advanced_tests {
     }
 
     #[test]
+    /// Runs regression test for and in brackets.
+    ///
+    /// Function context: `crates/ferrum_core/src/io/smarts.rs`.
+    /// I/O-layer note: parsing/ingestion should surface explicit errors instead of silently repairing malformed input.
     fn test_and_in_brackets() {
         // Test implicit AND (no operator between primitives)
         let query = parse_smarts("[CH3]").unwrap();
@@ -1533,6 +1707,10 @@ mod smarts_advanced_tests {
     }
 
     #[test]
+    /// Runs regression test for branching.
+    ///
+    /// Function context: `crates/ferrum_core/src/io/smarts.rs`.
+    /// I/O-layer note: parsing/ingestion should surface explicit errors instead of silently repairing malformed input.
     fn test_branching() {
         // Test branching patterns
         let query = parse_smarts("C(C)C").unwrap();
@@ -1552,6 +1730,10 @@ mod smarts_advanced_tests {
     }
 
     #[test]
+    /// Runs regression test for complex branching.
+    ///
+    /// Function context: `crates/ferrum_core/src/io/smarts.rs`.
+    /// I/O-layer note: parsing/ingestion should surface explicit errors instead of silently repairing malformed input.
     fn test_complex_branching() {
         // Test [CH2](C)C pattern (CH2 connected to two carbons)
         let query = parse_smarts("[CH2](C)C").unwrap();
@@ -1566,6 +1748,10 @@ mod smarts_advanced_tests {
     }
 
     #[test]
+    /// Runs regression test for not operator.
+    ///
+    /// Function context: `crates/ferrum_core/src/io/smarts.rs`.
+    /// I/O-layer note: parsing/ingestion should surface explicit errors instead of silently repairing malformed input.
     fn test_not_operator() {
         // Test NOT operator
         let query = parse_smarts("[!#6]").unwrap();
@@ -1578,6 +1764,10 @@ mod smarts_advanced_tests {
     }
 
     #[test]
+    /// Runs regression test for multiple or elements.
+    ///
+    /// Function context: `crates/ferrum_core/src/io/smarts.rs`.
+    /// I/O-layer note: parsing/ingestion should surface explicit errors instead of silently repairing malformed input.
     fn test_multiple_or_elements() {
         // Test [N,O,P,S]
         let query = parse_smarts("[N,O,P,S]").unwrap();
@@ -1589,6 +1779,10 @@ mod smarts_advanced_tests {
     }
 
     #[test]
+    /// Runs regression test for aromatic with hcount.
+    ///
+    /// Function context: `crates/ferrum_core/src/io/smarts.rs`.
+    /// I/O-layer note: parsing/ingestion should surface explicit errors instead of silently repairing malformed input.
     fn test_aromatic_with_hcount() {
         // Test [cH] (aromatic carbon with 1 H)
         let query = parse_smarts("[cH]").unwrap();
@@ -1602,6 +1796,10 @@ mod smarts_advanced_tests {
     }
 
     #[test]
+    /// Runs regression test for lowercase a outside brackets.
+    ///
+    /// Function context: `crates/ferrum_core/src/io/smarts.rs`.
+    /// I/O-layer note: parsing/ingestion should surface explicit errors instead of silently repairing malformed input.
     fn test_lowercase_a_outside_brackets() {
         // Test lowercase 'a' as any aromatic
         let query = parse_smarts("a").unwrap();
@@ -1620,6 +1818,10 @@ mod smarts_advanced_tests {
     }
 
     #[test]
+    /// Runs regression test for nested branches.
+    ///
+    /// Function context: `crates/ferrum_core/src/io/smarts.rs`.
+    /// I/O-layer note: parsing/ingestion should surface explicit errors instead of silently repairing malformed input.
     fn test_nested_branches() {
         // Test C(C)(C)C (carbon with 3 branches)
         let query = parse_smarts("C(C)(C)C").unwrap();
@@ -1634,6 +1836,10 @@ mod smarts_advanced_tests {
     }
 
     #[test]
+    /// Runs regression test for valence matching.
+    ///
+    /// Function context: `crates/ferrum_core/src/io/smarts.rs`.
+    /// I/O-layer note: parsing/ingestion should surface explicit errors instead of silently repairing malformed input.
     fn test_valence_matching() {
         // Test valence matching [Cv4] (carbon with valence 4)
         let query = parse_smarts("[Cv4]").unwrap();
@@ -1652,6 +1858,10 @@ mod smarts_advanced_tests {
     }
 
     #[test]
+    /// Runs regression test for valence with double bonds.
+    ///
+    /// Function context: `crates/ferrum_core/src/io/smarts.rs`.
+    /// I/O-layer note: parsing/ingestion should surface explicit errors instead of silently repairing malformed input.
     fn test_valence_with_double_bonds() {
         // Test [Cv4] with double bonds
         let query = parse_smarts("[Cv4]").unwrap();
@@ -1664,6 +1874,10 @@ mod smarts_advanced_tests {
     }
 
     #[test]
+    /// Runs regression test for ring bonds count.
+    ///
+    /// Function context: `crates/ferrum_core/src/io/smarts.rs`.
+    /// I/O-layer note: parsing/ingestion should surface explicit errors instead of silently repairing malformed input.
     fn test_ring_bonds_count() {
         // Test [cx2] (aromatic atom with 2 ring bonds)
         let query = parse_smarts("[cx2]").unwrap();
@@ -1681,6 +1895,10 @@ mod smarts_advanced_tests {
     }
 
     #[test]
+    /// Runs regression test for valence nitrogen.
+    ///
+    /// Function context: `crates/ferrum_core/src/io/smarts.rs`.
+    /// I/O-layer note: parsing/ingestion should surface explicit errors instead of silently repairing malformed input.
     fn test_valence_nitrogen() {
         // Test [Nv3] (nitrogen with valence 3)
         let query = parse_smarts("[Nv3]").unwrap();
@@ -1699,6 +1917,10 @@ mod smarts_advanced_tests {
     }
 
     #[test]
+    /// Runs regression test for simple cu parse.
+    ///
+    /// Function context: `crates/ferrum_core/src/io/smarts.rs`.
+    /// I/O-layer note: parsing/ingestion should surface explicit errors instead of silently repairing malformed input.
     fn test_simple_cu_parse() {
         // Simple test for Cu
         let result = parse_smarts("[Cu]");
@@ -1707,6 +1929,10 @@ mod smarts_advanced_tests {
     }
 
     #[test]
+    /// Runs regression test for two letter elements in or list.
+    ///
+    /// Function context: `crates/ferrum_core/src/io/smarts.rs`.
+    /// I/O-layer note: parsing/ingestion should surface explicit errors instead of silently repairing malformed input.
     fn test_two_letter_elements_in_or_list() {
         // Test parsing Cu, Zn
         let pattern = parse_smarts("[Cu,Zn]");
@@ -1738,6 +1964,10 @@ mod smarts_advanced_tests {
     }
 
     #[test]
+    /// Runs regression test for single letter elements in or list.
+    ///
+    /// Function context: `crates/ferrum_core/src/io/smarts.rs`.
+    /// I/O-layer note: parsing/ingestion should surface explicit errors instead of silently repairing malformed input.
     fn test_single_letter_elements_in_or_list() {
         // Test single-letter elements like V, W
         let pattern = parse_smarts("[V]");
@@ -1751,6 +1981,10 @@ mod smarts_advanced_tests {
     }
 
     #[test]
+    /// Runs regression test for aromatic any pattern.
+    ///
+    /// Function context: `crates/ferrum_core/src/io/smarts.rs`.
+    /// I/O-layer note: parsing/ingestion should surface explicit errors instead of silently repairing malformed input.
     fn test_aromatic_any_pattern() {
         // Test that 'a' (any aromatic) parses and matches benzene
         let pattern = parse_smarts("a").expect("Failed to parse 'a'");
@@ -1770,6 +2004,10 @@ mod smarts_advanced_tests {
     }
 
     #[test]
+    /// Runs regression test for six member ring wildcard on benzene.
+    ///
+    /// Function context: `crates/ferrum_core/src/io/smarts.rs`.
+    /// I/O-layer note: parsing/ingestion should surface explicit errors instead of silently repairing malformed input.
     fn test_six_member_ring_wildcard_on_benzene() {
         // Test key 163 pattern on benzene
         let pattern = parse_smarts("*1~*~*~*~*~*~1").expect("Failed to parse 6M ring");
@@ -1793,6 +2031,10 @@ mod smarts_advanced_tests {
     }
 
     #[test]
+    /// Runs regression test for lanthanides in or list.
+    ///
+    /// Function context: `crates/ferrum_core/src/io/smarts.rs`.
+    /// I/O-layer note: parsing/ingestion should surface explicit errors instead of silently repairing malformed input.
     fn test_lanthanides_in_or_list() {
         // Test key 6: [La,Ce,Pr,Nd,Pm,Sm,Eu,Gd,Tb,Dy,Ho,Er,Tm,Yb,Lu]
         let pattern = parse_smarts("[La,Ce]");
@@ -1804,6 +2046,10 @@ mod smarts_advanced_tests {
     }
 
     #[test]
+    /// Runs regression test for wildcard ring closure.
+    ///
+    /// Function context: `crates/ferrum_core/src/io/smarts.rs`.
+    /// I/O-layer note: parsing/ingestion should surface explicit errors instead of silently repairing malformed input.
     fn test_wildcard_ring_closure() {
         // Test *1~*~*~*~1 (4-membered ring with wildcards)
         let result = parse_smarts("*1~*~*~*~1");
@@ -1819,6 +2065,10 @@ mod smarts_advanced_tests {
     }
 
     #[test]
+    /// Runs regression test for six member ring wildcard.
+    ///
+    /// Function context: `crates/ferrum_core/src/io/smarts.rs`.
+    /// I/O-layer note: parsing/ingestion should surface explicit errors instead of silently repairing malformed input.
     fn test_six_member_ring_wildcard() {
         // Test *1~*~*~*~*~*~1 (6-membered ring) - Key 163 from MACCS
         let result = parse_smarts("*1~*~*~*~*~*~1");
@@ -1830,6 +2080,10 @@ mod smarts_advanced_tests {
     }
 
     #[test]
+    /// Runs regression test for bare element symbols.
+    ///
+    /// Function context: `crates/ferrum_core/src/io/smarts.rs`.
+    /// I/O-layer note: parsing/ingestion should surface explicit errors instead of silently repairing malformed input.
     fn test_bare_element_symbols() {
         // Test Br, Cl without brackets (currently may fail)
         let tests = vec![
@@ -1847,6 +2101,10 @@ mod smarts_advanced_tests {
     }
 
     #[test]
+    /// Runs regression test for ring closure bonds preserved.
+    ///
+    /// Function context: `crates/ferrum_core/src/io/smarts.rs`.
+    /// I/O-layer note: parsing/ingestion should surface explicit errors instead of silently repairing malformed input.
     fn test_ring_closure_bonds_preserved() {
         use crate::algo::aromaticity::perceive_aromaticity;
         use crate::algo::iso::find_all_matches;
@@ -1883,6 +2141,10 @@ mod smarts_advanced_tests {
     }
 
     #[test]
+    /// Runs regression test for recursive smarts parsing.
+    ///
+    /// Function context: `crates/ferrum_core/src/io/smarts.rs`.
+    /// I/O-layer note: parsing/ingestion should surface explicit errors instead of silently repairing malformed input.
     fn test_recursive_smarts_parsing() {
         // Test parsing of recursive SMARTS patterns
 
@@ -1912,6 +2174,10 @@ mod smarts_advanced_tests {
     }
 
     #[test]
+    /// Runs regression test for recursive smarts matching.
+    ///
+    /// Function context: `crates/ferrum_core/src/io/smarts.rs`.
+    /// I/O-layer note: parsing/ingestion should surface explicit errors instead of silently repairing malformed input.
     fn test_recursive_smarts_matching() {
         use crate::algo::iso::find_all_matches;
         use crate::algo::valency::assign_implicit_hydrogens;

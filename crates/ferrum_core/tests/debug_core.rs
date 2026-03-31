@@ -1,3 +1,43 @@
+//! Integration tests: Debug Core.
+//!
+//! This test module validates end-to-end behavior across parser, chemistry
+//! algorithms, descriptors, and ML surfaces. It captures real-world edge cases
+//! so regressions are caught before parity or performance runs.
+
+
+//! ## File guide: Debug Core
+//!
+//! This file belongs to FerrumChem's **integration/diagnostic validation layer**.
+//!
+//! What to learn here:
+//! - Which chemistry/ML concern this file owns in the pipeline.
+//! - How Rust types and control-flow encode that concern.
+//! - Which public symbols are the best entry points for reading/debugging.
+//!
+//! Key symbols in this file:
+//! - `fn debug_molecules`
+//! - `fn debug_rotatable_failures`
+//! - `fn heavy_degrees`
+//! - `fn bond_in_cycle`
+//! - `fn dfs`
+//!
+//! Suggested reading workflow:
+//! 1. Read top-level type definitions and public APIs.
+//! 2. Trace helper functions used in hot/critical paths.
+//! 3. Cross-reference tests/examples that exercise this file.
+
+//!
+//! ### Algorithmic assumptions for this file
+//! - `Debug Core` fixtures are regression-focused: they pin previously fragile behavior before parity/performance runs.
+//! - `Debug Core` assumes deterministic parser/descriptor outputs so test failures indicate real semantic drift.
+//! - Test expectations in `Debug Core` are intentionally explicit to support learning-oriented debugging.
+//! - Specific scope anchor: `crates/ferrum_core/tests/debug_core.rs` defines debug core behavior and should be updated together with its direct tests.
+//! ### Chemistry/ML references
+//! - Repository historical bug reports and checkpoints that motivated `Debug Core` assertions.
+//! - RDKit or chemistry-reference fixtures used to validate `Debug Core` expectations.
+//! - Rust integration-test best practices for reproducible scientific software checks.
+//! - Code-local source of truth: symbols and tests declared in `crates/ferrum_core/tests/debug_core.rs`.
+
 use ferrum_core::algo::electronic::effective_hybridization_pub;
 use ferrum_core::algo::rings::find_sssr;
 use ferrum_core::desc::extra_counts::HallKierAlpha;
@@ -8,6 +48,10 @@ use ferrum_core::types::BondType;
 use ferrum_core::types::Hybridization;
 
 #[test]
+/// Runs regression test for debug molecules.
+///
+/// Function context: `crates/ferrum_core/tests/debug_core.rs`.
+/// Test-layer note: this assertion path pins expected behavior to prevent regressions.
 fn debug_molecules() {
     for (name, smiles) in [
         (
@@ -245,6 +289,10 @@ fn debug_rotatable_failures() {
 
     // Replicate the filtering logic from compute_rotatable_bond_count so we can
     // annotate why each bond is kept or skipped.
+    /// Implements degrees.
+    ///
+    /// Function context: `crates/ferrum_core/tests/debug_core.rs`.
+    /// Test-layer note: this assertion path pins expected behavior to prevent regressions.
     fn heavy_degrees(mol: &ferrum_core::mol::molecule::Molecule) -> Vec<usize> {
         (0..mol.num_atoms())
             .map(|i| {
@@ -264,6 +312,10 @@ fn debug_rotatable_failures() {
             .collect()
     }
 
+    /// Implements in cycle.
+    ///
+    /// Function context: `crates/ferrum_core/tests/debug_core.rs`.
+    /// Test-layer note: this assertion path pins expected behavior to prevent regressions.
     fn bond_in_cycle(mol: &ferrum_core::mol::molecule::Molecule) -> Vec<bool> {
         use ferrum_core::types::BondType;
         let n = mol.num_atoms();
@@ -273,6 +325,10 @@ fn debug_rotatable_failures() {
         let mut is_bridge = vec![false; m];
         let mut time = 0usize;
 
+        /// Implements the behavior encoded by this function.
+        ///
+        /// Function context: `crates/ferrum_core/tests/debug_core.rs`.
+        /// Test-layer note: this assertion path pins expected behavior to prevent regressions.
         fn dfs(
             mol: &ferrum_core::mol::molecule::Molecule,
             u: usize,
@@ -315,6 +371,10 @@ fn debug_rotatable_failures() {
         is_bridge.into_iter().map(|b| !b).collect()
     }
 
+    /// Checks whether triple nbr.
+    ///
+    /// Function context: `crates/ferrum_core/tests/debug_core.rs`.
+    /// Test-layer note: this assertion path pins expected behavior to prevent regressions.
     fn has_triple_nbr(mol: &ferrum_core::mol::molecule::Molecule) -> Vec<bool> {
         use ferrum_core::types::BondType;
         (0..mol.num_atoms())
@@ -326,6 +386,10 @@ fn debug_rotatable_failures() {
             .collect()
     }
 
+    /// Checks whether carbonyl hetero.
+    ///
+    /// Function context: `crates/ferrum_core/tests/debug_core.rs`.
+    /// Test-layer note: this assertion path pins expected behavior to prevent regressions.
     fn is_carbonyl_hetero(mol: &ferrum_core::mol::molecule::Molecule, bond_idx: usize) -> bool {
         use ferrum_core::types::BondType;
         let bond = &mol.bonds[bond_idx];

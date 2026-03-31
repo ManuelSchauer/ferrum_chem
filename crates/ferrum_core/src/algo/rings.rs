@@ -1,3 +1,45 @@
+//! Rings algorithms.
+//!
+//! This module contains core cheminformatics graph logic used by parsers and
+//! descriptors. The implementations prioritize determinism, correctness, and
+//! predictable performance on large molecular batches.
+//!
+//! Learning focus:
+//! - Graph traversal and indexing patterns over atom/bond adjacency.
+//! - Performance-oriented Rust design in numerically heavy code paths.
+
+
+//! ## File guide: Rings
+//!
+//! This file belongs to FerrumChem's **cheminformatics algorithm layer**.
+//!
+//! What to learn here:
+//! - Which chemistry/ML concern this file owns in the pipeline.
+//! - How Rust types and control-flow encode that concern.
+//! - Which public symbols are the best entry points for reading/debugging.
+//!
+//! Key symbols in this file:
+//! - `fn find_sssr`
+//! - `fn find_minimum_cycle_basis_bonds`
+//! - `fn cycle_rank_count`
+//! - `fn find_symmetrized_sssr_bonds`
+//! - `struct ShortestPathWorkspace`
+//!
+//! Suggested reading workflow:
+//! 1. Read top-level type definitions and public APIs.
+//! 2. Trace helper functions used in hot/critical paths.
+//! 3. Cross-reference tests/examples that exercise this file.
+
+//!
+//! ### Algorithmic assumptions for this file
+//! - Cycle-basis routines assume an undirected simple molecular graph with consistent bond indexing.
+//! - Ring flags cached on atoms/bonds must be invalidated when topology mutates and recomputed before dependent descriptors.
+//! - Symmetrized SSSR heuristics prioritize chemically intuitive small cycles over exhaustive all-cycle enumeration.
+//! ### Chemistry/ML references
+//! - Smallest Set of Smallest Rings (SSSR) and minimum cycle basis graph-theory literature.
+//! - Cheminformatics ring-perception discussions in RDKit/CDK/OpenBabel ecosystems.
+//! - Figueras-like and cycle-basis methods commonly used for 2D ring annotation.
+
 use crate::mol::molecule::Molecule;
 use crate::types::AtomIdx;
 use std::collections::{HashSet, VecDeque};
@@ -101,6 +143,10 @@ pub fn find_minimum_cycle_basis_bonds(mol: &Molecule) -> Vec<smallvec::SmallVec<
     basis
 }
 
+/// Finds minimum cycle basis bonds cached.
+///
+/// Function context: `crates/ferrum_core/src/algo/rings.rs`.
+/// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
 pub(crate) fn find_minimum_cycle_basis_bonds_cached(mol: &mut Molecule) -> Vec<smallvec::SmallVec<[usize; 8]>> {
     if let Some(cached) = mol.cached_min_cycle_basis_bonds() {
         return cached.clone();
@@ -110,6 +156,10 @@ pub(crate) fn find_minimum_cycle_basis_bonds_cached(mol: &mut Molecule) -> Vec<s
     rings
 }
 
+/// Implements minimum cycle basis bonds cached.
+///
+/// Function context: `crates/ferrum_core/src/algo/rings.rs`.
+/// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
 pub(crate) fn ensure_minimum_cycle_basis_bonds_cached(mol: &mut Molecule) {
     if mol.cached_min_cycle_basis_bonds().is_none() {
         let rings = find_minimum_cycle_basis_bonds(mol);
@@ -117,6 +167,10 @@ pub(crate) fn ensure_minimum_cycle_basis_bonds_cached(mol: &mut Molecule) {
     }
 }
 
+/// Implements rank count.
+///
+/// Function context: `crates/ferrum_core/src/algo/rings.rs`.
+/// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
 fn cycle_rank_count(mol: &Molecule) -> usize {
     let n_atoms = mol.num_atoms();
     if n_atoms == 0 {
@@ -216,6 +270,10 @@ pub fn find_symmetrized_sssr_bonds(mol: &Molecule) -> Vec<smallvec::SmallVec<[us
     cycles
 }
 
+/// Finds symmetrized sssr bonds cached.
+///
+/// Function context: `crates/ferrum_core/src/algo/rings.rs`.
+/// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
 pub(crate) fn find_symmetrized_sssr_bonds_cached(mol: &mut Molecule) -> Vec<smallvec::SmallVec<[usize; 8]>> {
     if let Some(cached) = mol.cached_symmetrized_sssr_bonds() {
         return cached.clone();
@@ -225,6 +283,10 @@ pub(crate) fn find_symmetrized_sssr_bonds_cached(mol: &mut Molecule) -> Vec<smal
     rings
 }
 
+/// Implements symmetrized sssr bonds cached.
+///
+/// Function context: `crates/ferrum_core/src/algo/rings.rs`.
+/// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
 pub(crate) fn ensure_symmetrized_sssr_bonds_cached(mol: &mut Molecule) {
     if mol.cached_symmetrized_sssr_bonds().is_none() {
         let rings = find_symmetrized_sssr_bonds(mol);
@@ -232,6 +294,10 @@ pub(crate) fn ensure_symmetrized_sssr_bonds_cached(mol: &mut Molecule) {
     }
 }
 
+/// Implements symmetrized sssr bonds ref.
+///
+/// Function context: `crates/ferrum_core/src/algo/rings.rs`.
+/// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
 pub(crate) fn cached_symmetrized_sssr_bonds_ref(mol: &Molecule) -> Option<&[smallvec::SmallVec<[usize; 8]>]> {
     mol.cached_symmetrized_sssr_bonds().map(|rings| rings.as_slice())
 }
@@ -243,6 +309,10 @@ struct ShortestPathWorkspace {
 }
 
 impl ShortestPathWorkspace {
+    /// Creates a new value with the defaults and invariants required by this module.
+    ///
+    /// Function context: `crates/ferrum_core/src/algo/rings.rs`.
+    /// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
     fn new(n_atoms: usize) -> Self {
         Self {
             dist: vec![usize::MAX; n_atoms],
@@ -251,6 +321,10 @@ impl ShortestPathWorkspace {
         }
     }
 
+    /// Implements the behavior encoded by this function.
+    ///
+    /// Function context: `crates/ferrum_core/src/algo/rings.rs`.
+    /// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
     fn prepare(&mut self, n_atoms: usize, start: usize) {
         if self.dist.len() != n_atoms {
             self.dist.clear();
@@ -269,6 +343,10 @@ impl ShortestPathWorkspace {
     }
 }
 
+/// Implements paths excluding bond.
+///
+/// Function context: `crates/ferrum_core/src/algo/rings.rs`.
+/// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
 fn shortest_paths_excluding_bond(
     mol: &Molecule,
     start: usize,
@@ -314,6 +392,10 @@ fn shortest_paths_excluding_bond(
     out
 }
 
+/// Implements overlap count.
+///
+/// Function context: `crates/ferrum_core/src/algo/rings.rs`.
+/// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
 fn sorted_overlap_count(left: &[usize], right: &[usize]) -> usize {
     let mut i = 0usize;
     let mut j = 0usize;
@@ -332,6 +414,10 @@ fn sorted_overlap_count(left: &[usize], right: &[usize]) -> usize {
     overlap
 }
 
+/// Implements shortest bond paths.
+///
+/// Function context: `crates/ferrum_core/src/algo/rings.rs`.
+/// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
 fn collect_shortest_bond_paths(
     node: usize,
     start: usize,
@@ -353,6 +439,10 @@ fn collect_shortest_bond_paths(
     }
 }
 
+/// Implements component.
+///
+/// Function context: `crates/ferrum_core/src/algo/rings.rs`.
+/// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
 fn collect_component(
     mol: &Molecule,
     start: usize,
@@ -396,6 +486,10 @@ fn collect_component(
     (atoms, bonds)
 }
 
+/// Implements cycle basis component.
+///
+/// Function context: `crates/ferrum_core/src/algo/rings.rs`.
+/// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
 fn minimum_cycle_basis_component(
     mol: &Molecule,
     component_atoms: &[usize],
@@ -469,6 +563,10 @@ fn minimum_cycle_basis_component(
     basis
 }
 
+/// Implements tree edge flags.
+///
+/// Function context: `crates/ferrum_core/src/algo/rings.rs`.
+/// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
 fn spanning_tree_edge_flags(
     mol: &Molecule,
     component_atoms: &[usize],
@@ -512,6 +610,10 @@ fn spanning_tree_edge_flags(
     tree_edges
 }
 
+/// Implements orthogonal cycle.
+///
+/// Function context: `crates/ferrum_core/src/algo/rings.rs`.
+/// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
 fn minimum_orthogonal_cycle(
     mol: &Molecule,
     component_atoms: &[usize],
@@ -758,6 +860,10 @@ fn find_cycle_path(start: AtomIdx, end: AtomIdx, parent: &[Option<AtomIdx>]) -> 
     )
 }
 
+/// Finds cycle path reuse.
+///
+/// Function context: `crates/ferrum_core/src/algo/rings.rs`.
+/// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
 fn find_cycle_path_reuse(
     start: AtomIdx,
     end: AtomIdx,
@@ -888,6 +994,10 @@ mod tests {
     use crate::io::smiles::parse_smiles;
 
     #[test]
+    /// Runs regression test for no rings.
+    ///
+    /// Function context: `crates/ferrum_core/src/algo/rings.rs`.
+    /// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
     fn test_no_rings() {
         // Ethane: CC (no rings)
         let mut mol = parse_smiles("CC").unwrap();
@@ -899,6 +1009,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for benzene ring.
+    ///
+    /// Function context: `crates/ferrum_core/src/algo/rings.rs`.
+    /// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
     fn test_benzene_ring() {
         // Benzene: c1ccccc1 (one 6-membered ring)
         let mut mol = parse_smiles("c1ccccc1").unwrap();
@@ -916,6 +1030,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for cyclohexane ring.
+    ///
+    /// Function context: `crates/ferrum_core/src/algo/rings.rs`.
+    /// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
     fn test_cyclohexane_ring() {
         // Cyclohexane: C1CCCCC1 (one 6-membered ring)
         let mut mol = parse_smiles("C1CCCCC1").unwrap();
@@ -927,6 +1045,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for toluene.
+    ///
+    /// Function context: `crates/ferrum_core/src/algo/rings.rs`.
+    /// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
     fn test_toluene() {
         // Toluene: Cc1ccccc1 (benzene ring + methyl)
         let mut mol = parse_smiles("Cc1ccccc1").unwrap();
@@ -945,6 +1067,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for naphthalene.
+    ///
+    /// Function context: `crates/ferrum_core/src/algo/rings.rs`.
+    /// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
     fn test_naphthalene() {
         // Naphthalene: c1ccc2ccccc2c1 (two fused 6-membered rings)
         let mut mol = parse_smiles("c1ccc2ccccc2c1").unwrap();
@@ -956,30 +1082,50 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for symmetrized sssr counts cubane faces.
+    ///
+    /// Function context: `crates/ferrum_core/src/algo/rings.rs`.
+    /// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
     fn test_symmetrized_sssr_counts_cubane_faces() {
         let mol = parse_smiles("C12C3C4C1C5C2C3C45").unwrap();
         assert_eq!(find_symmetrized_sssr_bonds(&mol).len(), 6);
     }
 
     #[test]
+    /// Runs regression test for symmetrized sssr counts adamantane faces.
+    ///
+    /// Function context: `crates/ferrum_core/src/algo/rings.rs`.
+    /// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
     fn test_symmetrized_sssr_counts_adamantane_faces() {
         let mol = parse_smiles("C1C2CC3CC1CC(C2)C3").unwrap();
         assert_eq!(find_symmetrized_sssr_bonds(&mol).len(), 4);
     }
 
     #[test]
+    /// Runs regression test for symmetrized sssr counts bicyclo 2 2 2 octane faces.
+    ///
+    /// Function context: `crates/ferrum_core/src/algo/rings.rs`.
+    /// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
     fn test_symmetrized_sssr_counts_bicyclo_2_2_2_octane_faces() {
         let mol = parse_smiles("C1CC2CCC1CC2").unwrap();
         assert_eq!(find_symmetrized_sssr_bonds(&mol).len(), 3);
     }
 
     #[test]
+    /// Runs regression test for symmetrized sssr avoids asymmetric extra cycle.
+    ///
+    /// Function context: `crates/ferrum_core/src/algo/rings.rs`.
+    /// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
     fn test_symmetrized_sssr_avoids_asymmetric_extra_cycle() {
         let mol = parse_smiles("CCCC[C@]12[C@@H]3[C@H](O)CN1[C@@H]1C[C@H]2O[C@]32O/C(=C3/OC(=O)C(C)=C3OC)[C@H](C)[C@@H]12").unwrap();
         assert_eq!(find_symmetrized_sssr_bonds(&mol).len(), 6);
     }
 
     #[test]
+    /// Runs regression test for helper functions.
+    ///
+    /// Function context: `crates/ferrum_core/src/algo/rings.rs`.
+    /// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
     fn test_helper_functions() {
         let mut mol = parse_smiles("c1ccccc1").unwrap();
         find_sssr(&mut mol);

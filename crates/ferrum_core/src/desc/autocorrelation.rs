@@ -12,6 +12,40 @@
 //!
 //! Reference: Moreau, G. & Broto, P. (1980) Nouv. J. Chim. 4, 359-360.
 
+
+//! ## File guide: Autocorrelation
+//!
+//! This file belongs to FerrumChem's **descriptor/fingerprint feature layer**.
+//!
+//! What to learn here:
+//! - Which chemistry/ML concern this file owns in the pipeline.
+//! - How Rust types and control-flow encode that concern.
+//! - Which public symbols are the best entry points for reading/debugging.
+//!
+//! Key symbols in this file:
+//! - `fn _compute_distance_matrix_unused`
+//! - `fn compute_ats`
+//! - `struct Autocorrelation`
+//! - `fn name`
+//! - `fn calculate`
+//!
+//! Suggested reading workflow:
+//! 1. Read top-level type definitions and public APIs.
+//! 2. Trace helper functions used in hot/critical paths.
+//! 3. Cross-reference tests/examples that exercise this file.
+
+//!
+//! ### Algorithmic assumptions for this file
+//! - `Autocorrelation` assumes molecule preprocessing (implicit hydrogens, aromaticity flags, and ring annotations) is current before calculation.
+//! - `Autocorrelation` remains deterministic for identical atom/bond indexing so batch and single-molecule runs agree bit-for-bit.
+//! - Typed `DescriptorValue` output is part of the contract; downstream ML code should not rely on ad-hoc coercions.
+//! - Specific scope anchor: `crates/ferrum_core/src/desc/autocorrelation.rs` defines autocorrelation behavior and should be updated together with its direct tests.
+//! ### Chemistry/ML references
+//! - Todeschini & Consonni. Handbook of Molecular Descriptors (general descriptor taxonomy).
+//! - RDKit descriptor/fingerprint APIs used as practical parity baselines for `Autocorrelation` workflows.
+//! - Repository unit and parity tests covering `Autocorrelation` behavior and edge molecules.
+//! - Code-local source of truth: symbols and tests declared in `crates/ferrum_core/src/desc/autocorrelation.rs`.
+
 use super::atomic_props::{
     atomic_mass, burden_polarizability, burden_vdw_volume, pauling_electronegativity,
 };
@@ -29,6 +63,10 @@ use std::collections::VecDeque;
 // ---------------------------------------------------------------------------
 
 #[allow(dead_code)]
+/// Computes distance matrix unused.
+///
+/// Function context: `crates/ferrum_core/src/desc/autocorrelation.rs`.
+/// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
 fn _compute_distance_matrix_unused(mol: &Molecule) -> Vec<u32> {
     let n = mol.num_atoms();
     let mut distances = vec![u32::MAX; n * n];
@@ -108,10 +146,18 @@ fn compute_ats(mol: &Molecule, dist: &[u8], weights: &[f64]) -> [f64; MAX_LAG] {
 pub struct Autocorrelation;
 
 impl Descriptor for Autocorrelation {
+    /// Implements the behavior encoded by this function.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/autocorrelation.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn name(&self) -> &str {
         "Autocorrelation"
     }
 
+    /// Calculates the behavior encoded by this function.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/autocorrelation.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn calculate(&self, mol: &mut Molecule, ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
         let mut values = vec![0.0f32; MAX_LAG * 4];
 
@@ -153,6 +199,10 @@ impl Descriptor for Autocorrelation {
 }
 
 const _: () = {
+    /// Asserts send sync to guard invariants.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/autocorrelation.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     const fn assert_send_sync<T: Send + Sync>() {}
     let _ = assert_send_sync::<Autocorrelation>;
 };
@@ -162,6 +212,10 @@ mod tests {
     use super::*;
     use crate::io::smiles::parse_smiles;
 
+    /// Implements ats.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/autocorrelation.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn calc_ats(smiles: &str) -> Vec<f32> {
         let mut mol = parse_smiles(smiles).expect("valid SMILES");
         match Autocorrelation.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()) {
@@ -171,12 +225,20 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for ats size.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/autocorrelation.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_ats_size() {
         let a = calc_ats("CC");
         assert_eq!(a.len(), 32);
     }
 
     #[test]
+    /// Runs regression test for ats ethane.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/autocorrelation.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_ats_ethane() {
         let a = calc_ats("CC");
         assert!(a[0] > 200.0, "ATSm1 = {}", a[0]);
@@ -184,6 +246,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for ats propane.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/autocorrelation.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_ats_propane() {
         let a = calc_ats("CCC");
         assert!(a[0] > 0.0, "ATSm1 > 0");
@@ -192,6 +258,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for ats benzene.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/autocorrelation.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_ats_benzene() {
         let a = calc_ats("c1ccccc1");
         assert!(a[0] > 0.0, "ATSm1");
@@ -201,6 +271,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for ats ethanol vs ethane.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/autocorrelation.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_ats_ethanol_vs_ethane() {
         let ethane = calc_ats("CC");
         let ethanol = calc_ats("CCO");
@@ -208,6 +282,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for ats single atom.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/autocorrelation.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_ats_single_atom() {
         let a = calc_ats("C");
         for v in &a {
@@ -216,6 +294,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for ats long chain.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/autocorrelation.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_ats_long_chain() {
         let a = calc_ats("CCCCCCCCCC");
         for i in 0..MAX_LAG {

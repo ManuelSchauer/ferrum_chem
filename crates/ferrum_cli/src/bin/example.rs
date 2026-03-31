@@ -1,9 +1,53 @@
+//! Example binary.
+//!
+//! This executable is a task-oriented demo or benchmark used to explore
+//! FerrumChem behavior from the command line. It is intentionally small and
+//! readable so learners can trace data flow from CSV/SMILES input to outputs.
+//!
+//! Learning focus:
+//! - Environment-driven configuration patterns in Rust CLIs.
+//! - How FerrumChem APIs are wired into practical workflows.
+
+
+//! ## File guide: Example
+//!
+//! This file belongs to FerrumChem's **CLI/demo/benchmark executable layer**.
+//!
+//! What to learn here:
+//! - Which chemistry/ML concern this file owns in the pipeline.
+//! - How Rust types and control-flow encode that concern.
+//! - Which public symbols are the best entry points for reading/debugging.
+//!
+//! Key symbols in this file:
+//! - `fn main`
+//!
+//! Suggested reading workflow:
+//! 1. Read top-level type definitions and public APIs.
+//! 2. Trace helper functions used in hot/critical paths.
+//! 3. Cross-reference tests/examples that exercise this file.
+
+//!
+//! ### Algorithmic assumptions for this file
+//! - `Example` is a task-focused executable; CLI environment variables are part of the stable workflow contract.
+//! - `Example` should keep parse/descriptor/model behavior aligned with `ferrum_core` defaults to avoid demo drift.
+//! - Benchmark/demo paths in `Example` prefer deterministic setup to keep measurements comparable over time.
+//! - Specific scope anchor: `crates/ferrum_cli/src/bin/example.rs` defines example behavior and should be updated together with its direct tests.
+//! ### Chemistry/ML references
+//! - Rust CLI patterns (argument/env handling, structured errors, stdout diagnostics) reflected by `Example`.
+//! - FerrumChem benchmark/parity methodology documents referenced by `Example` scripts.
+//! - Terminal UX libraries (where applicable) used by `Example` for interactive workflows.
+//! - Code-local source of truth: symbols and tests declared in `crates/ferrum_cli/src/bin/example.rs`.
+
 use ferrum_core::algo::aromaticity::perceive_aromaticity;
 use ferrum_core::algo::rings::find_sssr;
 use ferrum_core::desc::Descriptor;
 use ferrum_core::desc::molecular_weight::MolecularWeight;
 use ferrum_core::io::smiles::parse_smiles;
 
+/// Runs this executable entrypoint and orchestrates its top-level workflow.
+///
+/// Function context: `crates/ferrum_cli/src/bin/example.rs`.
+/// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
 fn main() {
     println!("=== FerrumChem Example Usage ===\n");
 

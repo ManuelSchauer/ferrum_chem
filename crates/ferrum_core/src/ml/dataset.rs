@@ -1,5 +1,39 @@
 //! QsarDataset — typed container for feature matrices and targets.
 
+
+//! ## File guide: Dataset
+//!
+//! This file belongs to FerrumChem's **machine-learning pipeline layer**.
+//!
+//! What to learn here:
+//! - Which chemistry/ML concern this file owns in the pipeline.
+//! - How Rust types and control-flow encode that concern.
+//! - Which public symbols are the best entry points for reading/debugging.
+//!
+//! Key symbols in this file:
+//! - `struct QsarDataset`
+//! - `fn new`
+//! - `fn from_f32_vectors`
+//! - `fn n_samples`
+//! - `fn n_features`
+//!
+//! Suggested reading workflow:
+//! 1. Read top-level type definitions and public APIs.
+//! 2. Trace helper functions used in hot/critical paths.
+//! 3. Cross-reference tests/examples that exercise this file.
+
+//!
+//! ### Algorithmic assumptions for this file
+//! - `Dataset` assumes `ndarray` row-major sample layout (`n_samples x n_features`) throughout fit/predict paths.
+//! - `Dataset` prioritizes reproducibility via explicit seeds and deterministic iteration order where applicable.
+//! - Model quality metrics for `Dataset` depend on consistent preprocessing choices (scaling, splitting, and leakage control).
+//! - Specific scope anchor: `crates/ferrum_core/src/ml/dataset.rs` defines dataset behavior and should be updated together with its direct tests.
+//! ### Chemistry/ML references
+//! - Canonical ML literature for `Dataset` algorithm family (statistical learning and validation texts).
+//! - scikit-learn/RDKit-style API ergonomics that inform `Dataset` fit/transform/predict contracts.
+//! - OECD QSAR validation principles where `Dataset` is used in predictive chemistry contexts.
+//! - Code-local source of truth: symbols and tests declared in `crates/ferrum_core/src/ml/dataset.rs`.
+
 use ndarray::{Array1, Array2};
 use serde::{Deserialize, Serialize};
 
@@ -136,6 +170,10 @@ mod tests {
     use ndarray::{Array2, array};
 
     #[test]
+    /// Runs regression test for new dataset.
+    ///
+    /// Function context: `crates/ferrum_core/src/ml/dataset.rs`.
+    /// ML-layer note: numerical stability and reproducibility are important for comparable model evaluation.
     fn test_new_dataset() {
         let features = Array2::from_shape_vec((3, 2), vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]).unwrap();
         let targets = array![0.1, 0.2, 0.3];
@@ -146,6 +184,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for from f32 vectors.
+    ///
+    /// Function context: `crates/ferrum_core/src/ml/dataset.rs`.
+    /// ML-layer note: numerical stability and reproducibility are important for comparable model evaluation.
     fn test_from_f32_vectors() {
         let vecs = vec![vec![1.0f32, 2.0], vec![3.0, 4.0]];
         let targets = vec![0.5, 1.5];
@@ -157,6 +199,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for subset.
+    ///
+    /// Function context: `crates/ferrum_core/src/ml/dataset.rs`.
+    /// ML-layer note: numerical stability and reproducibility are important for comparable model evaluation.
     fn test_subset() {
         let features =
             Array2::from_shape_vec((4, 2), vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]).unwrap();
@@ -170,6 +216,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for select features.
+    ///
+    /// Function context: `crates/ferrum_core/src/ml/dataset.rs`.
+    /// ML-layer note: numerical stability and reproducibility are important for comparable model evaluation.
     fn test_select_features() {
         let features = Array2::from_shape_vec((2, 3), vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]).unwrap();
         let targets = array![0.1, 0.2];
@@ -183,6 +233,10 @@ mod tests {
 
     #[test]
     #[should_panic(expected = "Feature rows")]
+    /// Runs regression test for mismatched dimensions.
+    ///
+    /// Function context: `crates/ferrum_core/src/ml/dataset.rs`.
+    /// ML-layer note: numerical stability and reproducibility are important for comparable model evaluation.
     fn test_mismatched_dimensions() {
         let features = Array2::from_shape_vec((3, 2), vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]).unwrap();
         let targets = array![0.1, 0.2]; // wrong length

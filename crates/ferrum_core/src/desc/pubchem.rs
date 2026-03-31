@@ -14,6 +14,40 @@
 //!
 //! Reference: ftp://ftp.ncbi.nlm.nih.gov/pubchem/specifications/pubchem_fingerprints.txt
 
+
+//! ## File guide: Pubchem
+//!
+//! This file belongs to FerrumChem's **descriptor/fingerprint feature layer**.
+//!
+//! What to learn here:
+//! - Which chemistry/ML concern this file owns in the pipeline.
+//! - How Rust types and control-flow encode that concern.
+//! - Which public symbols are the best entry points for reading/debugging.
+//!
+//! Key symbols in this file:
+//! - `struct PubChemKey`
+//! - `struct PatternEntry`
+//! - `struct QueryScreen`
+//! - `struct ScreenedPubChemPattern`
+//! - `struct MoleculeScreenStats`
+//!
+//! Suggested reading workflow:
+//! 1. Read top-level type definitions and public APIs.
+//! 2. Trace helper functions used in hot/critical paths.
+//! 3. Cross-reference tests/examples that exercise this file.
+
+//!
+//! ### Algorithmic assumptions for this file
+//! - `Pubchem` assumes molecule preprocessing (implicit hydrogens, aromaticity flags, and ring annotations) is current before calculation.
+//! - `Pubchem` remains deterministic for identical atom/bond indexing so batch and single-molecule runs agree bit-for-bit.
+//! - Typed `DescriptorValue` output is part of the contract; downstream ML code should not rely on ad-hoc coercions.
+//! - Specific scope anchor: `crates/ferrum_core/src/desc/pubchem.rs` defines pubchem behavior and should be updated together with its direct tests.
+//! ### Chemistry/ML references
+//! - Todeschini & Consonni. Handbook of Molecular Descriptors (general descriptor taxonomy).
+//! - RDKit descriptor/fingerprint APIs used as practical parity baselines for `Pubchem` workflows.
+//! - Repository unit and parity tests covering `Pubchem` behavior and edge molecules.
+//! - Code-local source of truth: symbols and tests declared in `crates/ferrum_core/src/desc/pubchem.rs`.
+
 use super::typed::{Descriptor, DescriptorValue};
 use crate::algo::iso::{has_substruct_match, visit_matches};
 use crate::io::smarts::{AtomPrimitive, QueryAtom, QueryGraph, parse_smarts};
@@ -59,6 +93,10 @@ struct MoleculeScreenStats {
 }
 
 impl MoleculeScreenStats {
+    /// Constructs molecule between representations.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/pubchem.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn from_molecule(mol: &Molecule) -> Self {
         let mut element_counts = [0u16; 119];
         let mut aromatic_atom_count = 0u16;
@@ -80,6 +118,10 @@ impl MoleculeScreenStats {
         }
     }
 
+    /// Implements the behavior encoded by this function.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/pubchem.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn passes(&self, screen: &QueryScreen) -> bool {
         if screen.min_atoms > self.num_atoms || screen.min_bonds > self.num_bonds {
             return false;
@@ -94,6 +136,10 @@ impl MoleculeScreenStats {
     }
 }
 
+/// Builds query screen.
+///
+/// Function context: `crates/ferrum_core/src/desc/pubchem.rs`.
+/// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
 fn build_query_screen(query: &QueryGraph) -> QueryScreen {
     let mut required = [0u16; 119];
     let mut requires_aromatic_atom = false;
@@ -119,6 +165,10 @@ fn build_query_screen(query: &QueryGraph) -> QueryScreen {
     }
 }
 
+/// Implements atomic number.
+///
+/// Function context: `crates/ferrum_core/src/desc/pubchem.rs`.
+/// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
 fn fixed_atomic_number(query_atom: &QueryAtom) -> Option<u8> {
     let mut fixed = None;
     for primitive in &query_atom.primitives {
@@ -136,6 +186,10 @@ fn fixed_atomic_number(query_atom: &QueryAtom) -> Option<u8> {
     fixed
 }
 
+/// Implements atomic number primitive.
+///
+/// Function context: `crates/ferrum_core/src/desc/pubchem.rs`.
+/// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
 fn fixed_atomic_number_primitive(primitive: &AtomPrimitive) -> Option<u8> {
     match primitive {
         AtomPrimitive::Element(z) | AtomPrimitive::Aromatic(z) | AtomPrimitive::Aliphatic(z) => {
@@ -170,6 +224,10 @@ fn fixed_atomic_number_primitive(primitive: &AtomPrimitive) -> Option<u8> {
     }
 }
 
+/// Implements atom requires aromatic.
+///
+/// Function context: `crates/ferrum_core/src/desc/pubchem.rs`.
+/// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
 fn query_atom_requires_aromatic(query_atom: &QueryAtom) -> bool {
     query_atom
         .primitives
@@ -177,6 +235,10 @@ fn query_atom_requires_aromatic(query_atom: &QueryAtom) -> bool {
         .any(primitive_requires_aromatic_atom)
 }
 
+/// Implements requires aromatic atom.
+///
+/// Function context: `crates/ferrum_core/src/desc/pubchem.rs`.
+/// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
 fn primitive_requires_aromatic_atom(primitive: &AtomPrimitive) -> bool {
     match primitive {
         AtomPrimitive::AnyAromatic | AtomPrimitive::Aromatic(_) => true,
@@ -193,6 +255,10 @@ fn primitive_requires_aromatic_atom(primitive: &AtomPrimitive) -> bool {
     }
 }
 
+/// Counts matches up to.
+///
+/// Function context: `crates/ferrum_core/src/desc/pubchem.rs`.
+/// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
 fn count_matches_up_to(mol: &Molecule, query: &QueryGraph, limit: usize) -> usize {
     if limit == 0 {
         return 0;
@@ -265,10 +331,18 @@ static SCREENED_PATTERNS: Lazy<Vec<ScreenedPubChemPattern>> = Lazy::new(|| {
 pub struct PubChem881;
 
 impl Descriptor for PubChem881 {
+    /// Implements the behavior encoded by this function.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/pubchem.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn name(&self) -> &str {
         "PubChem881"
     }
 
+    /// Calculates the behavior encoded by this function.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/pubchem.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn calculate(&self, mol: &mut Molecule, _ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
         let mut bits = bitvec![u8, Lsb0; 0; 881];
         let stats = MoleculeScreenStats::from_molecule(mol);
@@ -295,6 +369,10 @@ impl Descriptor for PubChem881 {
 }
 
 const _: () = {
+    /// Asserts send sync to guard invariants.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/pubchem.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     const fn assert_send_sync<T: Send + Sync>() {}
     let _ = assert_send_sync::<PubChem881>;
 };
@@ -1409,12 +1487,20 @@ mod tests {
     use super::*;
     use crate::io::smiles::parse_smiles;
 
+    /// Implements pubchem.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/pubchem.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn calc_pubchem(smiles: &str) -> BitVec<u8, Lsb0> {
         let mut mol = parse_smiles(smiles).expect("valid SMILES");
         PubChem881.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()).as_binary().clone()
     }
 
     #[test]
+    /// Runs regression test for pubchem size.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/pubchem.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_pubchem_size() {
         let mut mol = parse_smiles("C").unwrap();
         let fp = PubChem881.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new());
@@ -1422,6 +1508,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for pubchem methane.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/pubchem.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_pubchem_methane() {
         let fp = calc_pubchem("C");
         let bits = fp.count_ones();
@@ -1429,6 +1519,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for pubchem benzene.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/pubchem.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_pubchem_benzene() {
         let fp = calc_pubchem("c1ccccc1");
         let bits = fp.count_ones();
@@ -1436,6 +1530,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for pubchem ethanol.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/pubchem.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_pubchem_ethanol() {
         let fp = calc_pubchem("CCO");
         assert!(fp[12], "Should have >=2 C");
@@ -1444,12 +1542,20 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for pubchem acetic acid.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/pubchem.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_pubchem_acetic_acid() {
         let fp = calc_pubchem("CC(=O)O");
         assert!(fp[463], "Should have carboxylic acid pattern");
     }
 
     #[test]
+    /// Runs regression test for pubchem aspirin.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/pubchem.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_pubchem_aspirin() {
         let fp = calc_pubchem("CC(=O)Oc1ccccc1C(=O)O");
         let bits = fp.count_ones();
@@ -1457,6 +1563,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for pubchem caffeine.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/pubchem.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_pubchem_caffeine() {
         let fp = calc_pubchem("CN1C=NC2=C1C(=O)N(C(=O)N2C)C");
         let bits = fp.count_ones();
@@ -1464,6 +1574,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for pubchem identical.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/pubchem.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_pubchem_identical() {
         let fp1 = calc_pubchem("CCO");
         let fp2 = calc_pubchem("CCO");
@@ -1471,6 +1585,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for pubchem different molecules.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/pubchem.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_pubchem_different_molecules() {
         let fp1 = calc_pubchem("c1ccccc1");
         let fp2 = calc_pubchem("CCCCCC");
@@ -1478,6 +1596,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for pubchem patterns parse.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/pubchem.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_pubchem_patterns_parse() {
         let mut failed = Vec::new();
         for (i, key) in PUBCHEM_KEYS.iter().enumerate() {

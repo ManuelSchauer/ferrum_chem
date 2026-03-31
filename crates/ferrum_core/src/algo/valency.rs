@@ -1,3 +1,47 @@
+//! Valency algorithms.
+//!
+//! This module contains core cheminformatics graph logic used by parsers and
+//! descriptors. The implementations prioritize determinism, correctness, and
+//! predictable performance on large molecular batches.
+//!
+//! Learning focus:
+//! - Graph traversal and indexing patterns over atom/bond adjacency.
+//! - Performance-oriented Rust design in numerically heavy code paths.
+
+
+//! ## File guide: Valency
+//!
+//! This file belongs to FerrumChem's **cheminformatics algorithm layer**.
+//!
+//! What to learn here:
+//! - Which chemistry/ML concern this file owns in the pipeline.
+//! - How Rust types and control-flow encode that concern.
+//! - Which public symbols are the best entry points for reading/debugging.
+//!
+//! Key symbols in this file:
+//! - `fn assign_implicit_hydrogens`
+//! - `fn assign_dative_bonds`
+//! - `fn is_donor_atom`
+//! - `fn calculate_connectivity`
+//! - `mod tests`
+//!
+//! Suggested reading workflow:
+//! 1. Read top-level type definitions and public APIs.
+//! 2. Trace helper functions used in hot/critical paths.
+//! 3. Cross-reference tests/examples that exercise this file.
+
+//!
+//! ### Algorithmic assumptions for this file
+//! - `Valency` operates on 2D molecular graphs (atoms/bonds) and does not consume conformer geometry.
+//! - `Valency` relies on stable `AtomIdx`/`BondIdx` semantics and adjacency invariants from `mol::molecule`.
+//! - Performance paths in `Valency` prefer deterministic pruning/caching over probabilistic heuristics.
+//! - Specific scope anchor: `crates/ferrum_core/src/algo/valency.rs` defines valency behavior and should be updated together with its direct tests.
+//! ### Chemistry/ML references
+//! - Core graph algorithm literature relevant to `Valency` (traversal, cycle, isomorphism, or canonicalization topics).
+//! - Cheminformatics toolkit conventions (RDKit/CDK/OpenBabel) mirrored by `Valency` decisions.
+//! - FerrumChem regression tests that pin `Valency` behavior on representative molecules.
+//! - Code-local source of truth: symbols and tests declared in `crates/ferrum_core/src/algo/valency.rs`.
+
 use crate::error::{FerrumError, Result};
 use crate::mol::elements::{get_aromatic_valences, get_valences};
 use crate::mol::molecule::Molecule;
@@ -219,6 +263,10 @@ mod tests {
     use crate::io::smiles::parse_smiles;
 
     #[test]
+    /// Runs regression test for methane implicit h.
+    ///
+    /// Function context: `crates/ferrum_core/src/algo/valency.rs`.
+    /// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
     fn test_methane_implicit_h() {
         // Methane: C (should get 4 implicit H)
         let mut mol = parse_smiles("C").unwrap();
@@ -229,6 +277,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for ethane implicit h.
+    ///
+    /// Function context: `crates/ferrum_core/src/algo/valency.rs`.
+    /// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
     fn test_ethane_implicit_h() {
         // Ethane: CC
         let mut mol = parse_smiles("CC").unwrap();
@@ -240,6 +292,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for water implicit h.
+    ///
+    /// Function context: `crates/ferrum_core/src/algo/valency.rs`.
+    /// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
     fn test_water_implicit_h() {
         // Water: O
         let mut mol = parse_smiles("O").unwrap();
@@ -250,6 +306,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for ammonia implicit h.
+    ///
+    /// Function context: `crates/ferrum_core/src/algo/valency.rs`.
+    /// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
     fn test_ammonia_implicit_h() {
         // Ammonia: N
         let mut mol = parse_smiles("N").unwrap();
@@ -260,6 +320,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for ethene implicit h.
+    ///
+    /// Function context: `crates/ferrum_core/src/algo/valency.rs`.
+    /// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
     fn test_ethene_implicit_h() {
         // Ethene: C=C
         let mut mol = parse_smiles("C=C").unwrap();
@@ -271,6 +335,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for acetylene implicit h.
+    ///
+    /// Function context: `crates/ferrum_core/src/algo/valency.rs`.
+    /// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
     fn test_acetylene_implicit_h() {
         // Acetylene: C#C
         let mut mol = parse_smiles("C#C").unwrap();
@@ -282,6 +350,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for charged ammonium.
+    ///
+    /// Function context: `crates/ferrum_core/src/algo/valency.rs`.
+    /// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
     fn test_charged_ammonium() {
         // Ammonium: [NH4+]
         let mut mol = parse_smiles("[NH4+]").unwrap();
@@ -293,6 +365,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for benzene implicit h.
+    ///
+    /// Function context: `crates/ferrum_core/src/algo/valency.rs`.
+    /// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
     fn test_benzene_implicit_h() {
         // Benzene: c1ccccc1
         let mut mol = parse_smiles("c1ccccc1").unwrap();
@@ -305,6 +381,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for ethanol implicit h.
+    ///
+    /// Function context: `crates/ferrum_core/src/algo/valency.rs`.
+    /// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
     fn test_ethanol_implicit_h() {
         // Ethanol: CCO
         let mut mol = parse_smiles("CCO").unwrap();

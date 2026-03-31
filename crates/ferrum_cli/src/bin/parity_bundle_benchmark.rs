@@ -1,3 +1,47 @@
+//! Parity Bundle Benchmark binary.
+//!
+//! This executable is a task-oriented demo or benchmark used to explore
+//! FerrumChem behavior from the command line. It is intentionally small and
+//! readable so learners can trace data flow from CSV/SMILES input to outputs.
+//!
+//! Learning focus:
+//! - Environment-driven configuration patterns in Rust CLIs.
+//! - How FerrumChem APIs are wired into practical workflows.
+
+
+//! ## File guide: Parity Bundle Benchmark
+//!
+//! This file belongs to FerrumChem's **CLI/demo/benchmark executable layer**.
+//!
+//! What to learn here:
+//! - Which chemistry/ML concern this file owns in the pipeline.
+//! - How Rust types and control-flow encode that concern.
+//! - Which public symbols are the best entry points for reading/debugging.
+//!
+//! Key symbols in this file:
+//! - `struct Case`
+//! - `fn bundle_descriptors`
+//! - `fn bundle_output_len`
+//! - `fn run_bundle`
+//! - `fn median`
+//!
+//! Suggested reading workflow:
+//! 1. Read top-level type definitions and public APIs.
+//! 2. Trace helper functions used in hot/critical paths.
+//! 3. Cross-reference tests/examples that exercise this file.
+
+//!
+//! ### Algorithmic assumptions for this file
+//! - `Parity Bundle Benchmark` is a task-focused executable; CLI environment variables are part of the stable workflow contract.
+//! - `Parity Bundle Benchmark` should keep parse/descriptor/model behavior aligned with `ferrum_core` defaults to avoid demo drift.
+//! - Benchmark/demo paths in `Parity Bundle Benchmark` prefer deterministic setup to keep measurements comparable over time.
+//! - Specific scope anchor: `crates/ferrum_cli/src/bin/parity_bundle_benchmark.rs` defines parity bundle benchmark behavior and should be updated together with its direct tests.
+//! ### Chemistry/ML references
+//! - Rust CLI patterns (argument/env handling, structured errors, stdout diagnostics) reflected by `Parity Bundle Benchmark`.
+//! - FerrumChem benchmark/parity methodology documents referenced by `Parity Bundle Benchmark` scripts.
+//! - Terminal UX libraries (where applicable) used by `Parity Bundle Benchmark` for interactive workflows.
+//! - Code-local source of truth: symbols and tests declared in `crates/ferrum_cli/src/bin/parity_bundle_benchmark.rs`.
+
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
@@ -16,6 +60,10 @@ struct Case {
     smiles: &'static str,
 }
 
+/// Implements descriptors.
+///
+/// Function context: `crates/ferrum_cli/src/bin/parity_bundle_benchmark.rs`.
+/// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
 fn bundle_descriptors() -> Vec<BatchDescriptor> {
     vec![
         BatchDescriptor::MolecularWeight,
@@ -45,6 +93,10 @@ fn bundle_descriptors() -> Vec<BatchDescriptor> {
     ]
 }
 
+/// Implements output len.
+///
+/// Function context: `crates/ferrum_cli/src/bin/parity_bundle_benchmark.rs`.
+/// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
 fn bundle_output_len(smiles: &str, descriptors: &[BatchDescriptor]) -> usize {
     let mut mol = parse_smiles(smiles).expect("valid benchmark SMILES");
     let mut total = 0usize;
@@ -55,6 +107,10 @@ fn bundle_output_len(smiles: &str, descriptors: &[BatchDescriptor]) -> usize {
     total
 }
 
+/// Runs bundle.
+///
+/// Function context: `crates/ferrum_cli/src/bin/parity_bundle_benchmark.rs`.
+/// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
 fn run_bundle(smiles: &str, descriptors: &[BatchDescriptor]) {
     let mut mol = parse_smiles(smiles).expect("valid benchmark SMILES");
     let mut ctx = ferrum_core::desc::context::CalculationContext::new();
@@ -63,11 +119,19 @@ fn run_bundle(smiles: &str, descriptors: &[BatchDescriptor]) {
     }
 }
 
+/// Implements the behavior encoded by this function.
+///
+/// Function context: `crates/ferrum_cli/src/bin/parity_bundle_benchmark.rs`.
+/// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
 fn median(values: &mut [f64]) -> f64 {
     values.sort_by(|a, b| a.partial_cmp(b).expect("finite timings"));
     values[values.len() / 2]
 }
 
+/// Implements usize.
+///
+/// Function context: `crates/ferrum_cli/src/bin/parity_bundle_benchmark.rs`.
+/// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
 fn env_usize(name: &str, default: usize) -> usize {
     env::var(name)
         .ok()
@@ -76,6 +140,10 @@ fn env_usize(name: &str, default: usize) -> usize {
         .unwrap_or(default)
 }
 
+/// Runs this executable entrypoint and orchestrates its top-level workflow.
+///
+/// Function context: `crates/ferrum_cli/src/bin/parity_bundle_benchmark.rs`.
+/// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
 fn main() {
     let iterations = env_usize("FERRUM_BENCH_ITERATIONS", DEFAULT_ITERATIONS);
     let repeats = env_usize("FERRUM_BENCH_REPEATS", DEFAULT_REPEATS);

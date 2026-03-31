@@ -1,4 +1,46 @@
+//! Integration tests: Smarts Edge.
+//!
+//! This test module validates end-to-end behavior across parser, chemistry
+//! algorithms, descriptors, and ML surfaces. It captures real-world edge cases
+//! so regressions are caught before parity or performance runs.
+
+
+//! ## File guide: Smarts Edge
+//!
+//! This file belongs to FerrumChem's **integration/diagnostic validation layer**.
+//!
+//! What to learn here:
+//! - Which chemistry/ML concern this file owns in the pipeline.
+//! - How Rust types and control-flow encode that concern.
+//! - Which public symbols are the best entry points for reading/debugging.
+//!
+//! Key symbols in this file:
+//! - `fn test_smarts_edge_cases`
+//! - `fn test_smarts_hba_edge_cases`
+//! - `fn test_smarts_bond_and_valence`
+//! - `fn test_smarts_ring_bond_features`
+//! - `fn test_smarts_disconnected_components_and_default_bonds`
+//!
+//! Suggested reading workflow:
+//! 1. Read top-level type definitions and public APIs.
+//! 2. Trace helper functions used in hot/critical paths.
+//! 3. Cross-reference tests/examples that exercise this file.
+
+//!
+//! ### Algorithmic assumptions for this file
+//! - Edge-case SMARTS fixtures intentionally target precedence (`&,;,,!`), aromatic/aliphatic classing, and ring-bond corner cases.
+//! - Expected match counts are pinned to current RDKit-aligned semantics and should change only with deliberate parser updates.
+//! - Disconnected-component and default-bond tests validate language semantics, not synthetic chemistry likelihood.
+//! ### Chemistry/ML references
+//! - Daylight SMARTS specification examples for logical operators and atom/bond primitives.
+//! - RDKit SMARTS matching behavior used when curating expected counts.
+//! - Internal regression history around SMARTS precedence fixes in FerrumChem.
+
 #[test]
+/// Runs regression test for smarts edge cases.
+///
+/// Function context: `crates/ferrum_core/tests/smarts_edge.rs`.
+/// Test-layer note: this assertion path pins expected behavior to prevent regressions.
 fn test_smarts_edge_cases() {
     use ferrum_core::algo::iso::{count_matches, find_all_matches};
     use ferrum_core::io::smarts::parse_smarts;
@@ -90,6 +132,10 @@ fn test_smarts_edge_cases() {
 }
 
 #[test]
+/// Runs regression test for smarts hba edge cases.
+///
+/// Function context: `crates/ferrum_core/tests/smarts_edge.rs`.
+/// Test-layer note: this assertion path pins expected behavior to prevent regressions.
 fn test_smarts_hba_edge_cases() {
     use ferrum_core::algo::iso::count_matches;
     use ferrum_core::io::smarts::parse_smarts;
@@ -145,6 +191,10 @@ fn test_smarts_hba_edge_cases() {
 }
 
 #[test]
+/// Runs regression test for smarts bond and valence.
+///
+/// Function context: `crates/ferrum_core/tests/smarts_edge.rs`.
+/// Test-layer note: this assertion path pins expected behavior to prevent regressions.
 fn test_smarts_bond_and_valence() {
     use ferrum_core::algo::iso::count_matches;
     use ferrum_core::io::smarts::parse_smarts;
@@ -211,6 +261,10 @@ fn test_smarts_bond_and_valence() {
 }
 
 #[test]
+/// Runs regression test for smarts ring bond features.
+///
+/// Function context: `crates/ferrum_core/tests/smarts_edge.rs`.
+/// Test-layer note: this assertion path pins expected behavior to prevent regressions.
 fn test_smarts_ring_bond_features() {
     use ferrum_core::algo::iso::count_matches;
     use ferrum_core::io::smarts::parse_smarts;
@@ -296,6 +350,10 @@ fn test_smarts_ring_bond_features() {
 }
 
 #[test]
+/// Runs regression test for smarts disconnected components and default bonds.
+///
+/// Function context: `crates/ferrum_core/tests/smarts_edge.rs`.
+/// Test-layer note: this assertion path pins expected behavior to prevent regressions.
 fn test_smarts_disconnected_components_and_default_bonds() {
     use ferrum_core::algo::iso::has_substruct_match;
     use ferrum_core::io::smarts::parse_smarts;

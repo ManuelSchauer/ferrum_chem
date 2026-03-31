@@ -9,6 +9,38 @@
 //! Note: This is the public MACCS keys set with 166 keys (numbered 1-166).
 //! Key 0 is reserved and always returns 0.
 
+
+//! ## File guide: Maccs
+//!
+//! This file belongs to FerrumChem's **descriptor/fingerprint feature layer**.
+//!
+//! What to learn here:
+//! - Which chemistry/ML concern this file owns in the pipeline.
+//! - How Rust types and control-flow encode that concern.
+//! - Which public symbols are the best entry points for reading/debugging.
+//!
+//! Key symbols in this file:
+//! - `struct QueryScreen`
+//! - `struct ScreenedQuery`
+//! - `struct MoleculeScreenStats`
+//! - `fn from_molecule`
+//! - `fn passes`
+//!
+//! Suggested reading workflow:
+//! 1. Read top-level type definitions and public APIs.
+//! 2. Trace helper functions used in hot/critical paths.
+//! 3. Cross-reference tests/examples that exercise this file.
+
+//!
+//! ### Algorithmic assumptions for this file
+//! - SMARTS-backed MACCS keys use early-stop threshold matching (`has_substruct_match`/`has_at_least_matches`) without changing key semantics.
+//! - QueryScreen prefilters (atom/bond/element/aromatic minima) only prune impossible matches and must never cause false negatives.
+//! - Key 125 ring logic assumes aromatic ring count implementation is consistent with toolkit-style aromaticity perception.
+//! ### Chemistry/ML references
+//! - MDL MACCS structural key definitions (166-bit public key family).
+//! - RDKit MACCS behavior for bit-level parity and threshold key semantics.
+//! - Daylight SMARTS query semantics for substructure key definitions.
+
 use super::aromatic_ring_count::AromaticRingCount;
 use super::typed::{Descriptor, DescriptorValue};
 use crate::algo::iso::{has_at_least_matches, has_substruct_match};
@@ -41,6 +73,10 @@ struct MoleculeScreenStats {
 }
 
 impl MoleculeScreenStats {
+    /// Constructs molecule between representations.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/maccs.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn from_molecule(mol: &Molecule) -> Self {
         let mut element_counts = [0u16; 119];
         let mut aromatic_atom_count = 0u16;
@@ -61,6 +97,10 @@ impl MoleculeScreenStats {
         }
     }
 
+    /// Implements the behavior encoded by this function.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/maccs.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn passes(&self, screen: &QueryScreen) -> bool {
         if screen.min_atoms > self.num_atoms || screen.min_bonds > self.num_bonds {
             return false;
@@ -75,6 +115,10 @@ impl MoleculeScreenStats {
     }
 }
 
+/// Builds query screen.
+///
+/// Function context: `crates/ferrum_core/src/desc/maccs.rs`.
+/// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
 fn build_query_screen(query: &QueryGraph) -> QueryScreen {
     let mut required = [0u16; 119];
     let mut requires_aromatic_atom = false;
@@ -100,6 +144,10 @@ fn build_query_screen(query: &QueryGraph) -> QueryScreen {
     }
 }
 
+/// Implements atomic number.
+///
+/// Function context: `crates/ferrum_core/src/desc/maccs.rs`.
+/// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
 fn fixed_atomic_number(query_atom: &QueryAtom) -> Option<u8> {
     let mut fixed = None;
     for primitive in &query_atom.primitives {
@@ -117,6 +165,10 @@ fn fixed_atomic_number(query_atom: &QueryAtom) -> Option<u8> {
     fixed
 }
 
+/// Implements atomic number primitive.
+///
+/// Function context: `crates/ferrum_core/src/desc/maccs.rs`.
+/// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
 fn fixed_atomic_number_primitive(primitive: &AtomPrimitive) -> Option<u8> {
     match primitive {
         AtomPrimitive::Element(z) | AtomPrimitive::Aromatic(z) | AtomPrimitive::Aliphatic(z) => {
@@ -151,10 +203,18 @@ fn fixed_atomic_number_primitive(primitive: &AtomPrimitive) -> Option<u8> {
     }
 }
 
+/// Implements atom requires aromatic.
+///
+/// Function context: `crates/ferrum_core/src/desc/maccs.rs`.
+/// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
 fn query_atom_requires_aromatic(query_atom: &QueryAtom) -> bool {
     query_atom.primitives.iter().any(primitive_requires_aromatic_atom)
 }
 
+/// Implements requires aromatic atom.
+///
+/// Function context: `crates/ferrum_core/src/desc/maccs.rs`.
+/// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
 fn primitive_requires_aromatic_atom(primitive: &AtomPrimitive) -> bool {
     match primitive {
         AtomPrimitive::AnyAromatic | AtomPrimitive::Aromatic(_) => true,
@@ -188,6 +248,10 @@ static SCREENED_KEYS: Lazy<Vec<Option<ScreenedQuery>>> = Lazy::new(|| {
         .collect()
 });
 
+/// Implements match count.
+///
+/// Function context: `crates/ferrum_core/src/desc/maccs.rs`.
+/// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
 fn required_match_count(key_number: usize) -> Option<usize> {
     match key_number {
         118 | 120 | 127 | 130 | 131 | 136 | 138 | 142 | 145 | 149 | 159 => Some(1),
@@ -211,10 +275,18 @@ struct MaccsKey {
 pub struct MaccsKeys;
 
 impl Descriptor for MaccsKeys {
+    /// Implements the behavior encoded by this function.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/maccs.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn name(&self) -> &str {
         "MaccsKeys"
     }
 
+    /// Calculates the behavior encoded by this function.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/maccs.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn calculate(
         &self,
         mol: &mut Molecule,
@@ -1132,6 +1204,10 @@ mod tests {
     use crate::algo::valency::assign_implicit_hydrogens;
     use crate::io::smiles::parse_smiles;
 
+    /// Parses and prepare.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/maccs.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn parse_and_prepare(smiles: &str) -> Molecule {
         let mut mol = parse_smiles(smiles).unwrap();
         assign_implicit_hydrogens(&mut mol).unwrap();
@@ -1140,6 +1216,10 @@ mod tests {
         mol
     }
 
+    /// Returns set bits.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/maccs.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn get_set_bits(bits: &BitVec<u8, Lsb0>) -> Vec<usize> {
         bits.iter()
             .by_vals()
@@ -1148,12 +1228,20 @@ mod tests {
             .collect()
     }
 
+    /// Implements maccs.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/maccs.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn calc_maccs(smiles: &str) -> BitVec<u8, Lsb0> {
         let mut mol = parse_and_prepare(smiles);
         MaccsKeys.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()).as_binary().clone()
     }
 
     #[test]
+    /// Runs regression test for pattern parsing.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/maccs.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_pattern_parsing() {
         let parsed_count = SCREENED_KEYS.iter().filter(|p| p.is_some()).count();
         assert!(
@@ -1164,12 +1252,20 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for maccs descriptor name.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/maccs.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_maccs_descriptor_name() {
         let desc = MaccsKeys;
         assert_eq!(Descriptor::name(&desc), "MaccsKeys");
     }
 
     #[test]
+    /// Runs regression test for maccs benzene.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/maccs.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_maccs_benzene() {
         let fp = calc_maccs("c1ccccc1");
         assert!(fp[161], "Key 162: Aromatic");
@@ -1178,6 +1274,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for maccs ethanol.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/maccs.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_maccs_ethanol() {
         let fp = calc_maccs("CCO");
         assert!(fp[163], "Key 164: O");
@@ -1187,6 +1287,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for maccs aspirin.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/maccs.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_maccs_aspirin() {
         let fp = calc_maccs("CC(=O)Oc1ccccc1C(=O)O");
         let set_bits = get_set_bits(&fp);
@@ -1203,6 +1307,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for maccs caffeine.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/maccs.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_maccs_caffeine() {
         let fp = calc_maccs("CN1C=NC2=C1C(=O)N(C(=O)N2C)C");
         let set_bits = get_set_bits(&fp);
@@ -1218,6 +1326,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for maccs hexane.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/maccs.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_maccs_hexane() {
         let fp = calc_maccs("CCCCCC");
         assert!(fp[159], "Key 160: CH3");
@@ -1232,6 +1344,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for maccs pyridine.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/maccs.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_maccs_pyridine() {
         let fp = calc_maccs("c1ccncc1");
         assert!(fp[64], "Key 65: C%N");
@@ -1243,6 +1359,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for maccs threshold keys.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/maccs.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_maccs_threshold_keys() {
         let fp = calc_maccs("CCO");
         assert!(
@@ -1268,6 +1388,10 @@ mod tests {
 
 // Thread safety
 const _: () = {
+    /// Asserts send sync to guard invariants.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/maccs.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     const fn assert_send_sync<T: Send + Sync>() {}
     let _ = assert_send_sync::<MaccsKeys>;
 };

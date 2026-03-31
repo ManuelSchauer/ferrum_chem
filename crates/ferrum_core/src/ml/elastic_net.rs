@@ -3,6 +3,40 @@
 //! Automatic feature selection via L1 regularization.
 //! α controls overall regularization strength, l1_ratio controls L1/L2 mix.
 
+
+//! ## File guide: Elastic Net
+//!
+//! This file belongs to FerrumChem's **machine-learning pipeline layer**.
+//!
+//! What to learn here:
+//! - Which chemistry/ML concern this file owns in the pipeline.
+//! - How Rust types and control-flow encode that concern.
+//! - Which public symbols are the best entry points for reading/debugging.
+//!
+//! Key symbols in this file:
+//! - `struct ElasticNet`
+//! - `fn fit`
+//! - `fn lasso`
+//! - `fn ridge`
+//! - `fn predict_one`
+//!
+//! Suggested reading workflow:
+//! 1. Read top-level type definitions and public APIs.
+//! 2. Trace helper functions used in hot/critical paths.
+//! 3. Cross-reference tests/examples that exercise this file.
+
+//!
+//! ### Algorithmic assumptions for this file
+//! - `Elastic Net` assumes `ndarray` row-major sample layout (`n_samples x n_features`) throughout fit/predict paths.
+//! - `Elastic Net` prioritizes reproducibility via explicit seeds and deterministic iteration order where applicable.
+//! - Model quality metrics for `Elastic Net` depend on consistent preprocessing choices (scaling, splitting, and leakage control).
+//! - Specific scope anchor: `crates/ferrum_core/src/ml/elastic_net.rs` defines elastic net behavior and should be updated together with its direct tests.
+//! ### Chemistry/ML references
+//! - Canonical ML literature for `Elastic Net` algorithm family (statistical learning and validation texts).
+//! - scikit-learn/RDKit-style API ergonomics that inform `Elastic Net` fit/transform/predict contracts.
+//! - OECD QSAR validation principles where `Elastic Net` is used in predictive chemistry contexts.
+//! - Code-local source of truth: symbols and tests declared in `crates/ferrum_core/src/ml/elastic_net.rs`.
+
 use ndarray::{Array1, Array2, Axis, Zip};
 use serde::{Deserialize, Serialize};
 
@@ -198,6 +232,10 @@ mod tests {
     use ndarray::{Array1, Array2, array};
 
     #[test]
+    /// Runs regression test for elastic net linear.
+    ///
+    /// Function context: `crates/ferrum_core/src/ml/elastic_net.rs`.
+    /// ML-layer note: numerical stability and reproducibility are important for comparable model evaluation.
     fn test_elastic_net_linear() {
         // y = 2*x1 + 3*x2
         let features = Array2::from_shape_vec(
@@ -225,6 +263,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for lasso sparsity.
+    ///
+    /// Function context: `crates/ferrum_core/src/ml/elastic_net.rs`.
+    /// ML-layer note: numerical stability and reproducibility are important for comparable model evaluation.
     fn test_lasso_sparsity() {
         // 3 features, only first is relevant: y = x1
         let features = Array2::from_shape_vec(
@@ -253,6 +295,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for ridge no sparsity.
+    ///
+    /// Function context: `crates/ferrum_core/src/ml/elastic_net.rs`.
+    /// ML-layer note: numerical stability and reproducibility are important for comparable model evaluation.
     fn test_ridge_no_sparsity() {
         let features = Array2::from_shape_vec(
             (5, 2),
@@ -268,6 +314,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for soft threshold.
+    ///
+    /// Function context: `crates/ferrum_core/src/ml/elastic_net.rs`.
+    /// ML-layer note: numerical stability and reproducibility are important for comparable model evaluation.
     fn test_soft_threshold() {
         assert!((soft_threshold(5.0, 2.0) - 3.0).abs() < 1e-10);
         assert!((soft_threshold(-5.0, 2.0) - (-3.0)).abs() < 1e-10);
@@ -275,6 +325,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for selected features.
+    ///
+    /// Function context: `crates/ferrum_core/src/ml/elastic_net.rs`.
+    /// ML-layer note: numerical stability and reproducibility are important for comparable model evaluation.
     fn test_selected_features() {
         let features = Array2::from_shape_vec(
             (6, 3),

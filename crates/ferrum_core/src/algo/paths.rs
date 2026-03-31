@@ -1,6 +1,54 @@
+//! Paths algorithms.
+//!
+//! This module contains core cheminformatics graph logic used by parsers and
+//! descriptors. The implementations prioritize determinism, correctness, and
+//! predictable performance on large molecular batches.
+//!
+//! Learning focus:
+//! - Graph traversal and indexing patterns over atom/bond adjacency.
+//! - Performance-oriented Rust design in numerically heavy code paths.
+
+
+//! ## File guide: Paths
+//!
+//! This file belongs to FerrumChem's **cheminformatics algorithm layer**.
+//!
+//! What to learn here:
+//! - Which chemistry/ML concern this file owns in the pipeline.
+//! - How Rust types and control-flow encode that concern.
+//! - Which public symbols are the best entry points for reading/debugging.
+//!
+//! Key symbols in this file:
+//! - `fn find_all_paths_of_length`
+//! - `fn dfs_paths_of_length_mask`
+//! - `fn dfs_paths_of_length_vec`
+//! - `mod tests`
+//! - `fn test_triangle_counts_closed_three_bond_path_once`
+//!
+//! Suggested reading workflow:
+//! 1. Read top-level type definitions and public APIs.
+//! 2. Trace helper functions used in hot/critical paths.
+//! 3. Cross-reference tests/examples that exercise this file.
+
+//!
+//! ### Algorithmic assumptions for this file
+//! - `Paths` operates on 2D molecular graphs (atoms/bonds) and does not consume conformer geometry.
+//! - `Paths` relies on stable `AtomIdx`/`BondIdx` semantics and adjacency invariants from `mol::molecule`.
+//! - Performance paths in `Paths` prefer deterministic pruning/caching over probabilistic heuristics.
+//! - Specific scope anchor: `crates/ferrum_core/src/algo/paths.rs` defines paths behavior and should be updated together with its direct tests.
+//! ### Chemistry/ML references
+//! - Core graph algorithm literature relevant to `Paths` (traversal, cycle, isomorphism, or canonicalization topics).
+//! - Cheminformatics toolkit conventions (RDKit/CDK/OpenBabel) mirrored by `Paths` decisions.
+//! - FerrumChem regression tests that pin `Paths` behavior on representative molecules.
+//! - Code-local source of truth: symbols and tests declared in `crates/ferrum_core/src/algo/paths.rs`.
+
 use crate::mol::molecule::Molecule;
 use crate::types::AtomIdx;
 
+/// Finds all paths of length.
+///
+/// Function context: `crates/ferrum_core/src/algo/paths.rs`.
+/// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
 pub fn find_all_paths_of_length<F>(mol: &Molecule, bond_length: usize, mut callback: F)
 where
     F: FnMut(&[AtomIdx]),
@@ -58,6 +106,10 @@ where
     }
 }
 
+/// Implements paths of length mask.
+///
+/// Function context: `crates/ferrum_core/src/algo/paths.rs`.
+/// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
 fn dfs_paths_of_length_mask<F>(
     mol: &Molecule,
     atom_path: &mut Vec<AtomIdx>,
@@ -105,6 +157,10 @@ fn dfs_paths_of_length_mask<F>(
     }
 }
 
+/// Implements paths of length vec.
+///
+/// Function context: `crates/ferrum_core/src/algo/paths.rs`.
+/// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
 fn dfs_paths_of_length_vec<F>(
     mol: &Molecule,
     atom_path: &mut Vec<AtomIdx>,
@@ -152,6 +208,10 @@ mod tests {
     use crate::io::smiles::parse_smiles;
 
     #[test]
+    /// Runs regression test for triangle counts closed three bond path once.
+    ///
+    /// Function context: `crates/ferrum_core/src/algo/paths.rs`.
+    /// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
     fn test_triangle_counts_closed_three_bond_path_once() {
         let mol = parse_smiles("C1CC1").unwrap();
         let mut paths = 0;
@@ -168,6 +228,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for cyclobutane counts open and closed paths like rdkit.
+    ///
+    /// Function context: `crates/ferrum_core/src/algo/paths.rs`.
+    /// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
     fn test_cyclobutane_counts_open_and_closed_paths_like_rdkit() {
         let mol = parse_smiles("C1CCC1").unwrap();
         let mut paths_3 = 0;

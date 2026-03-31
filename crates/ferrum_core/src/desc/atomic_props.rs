@@ -1,5 +1,42 @@
 //! Shared atomic property lookup tables used by multiple descriptors.
 
+
+//! ## File guide: Atomic Props
+//!
+//! This file belongs to FerrumChem's **descriptor/fingerprint feature layer**.
+//!
+//! What to learn here:
+//! - Which chemistry/ML concern this file owns in the pipeline.
+//! - How Rust types and control-flow encode that concern.
+//! - Which public symbols are the best entry points for reading/debugging.
+//!
+//! Key symbols in this file:
+//! - `fn atomic_mass`
+//! - `fn pauling_electronegativity`
+//! - `fn burden_polarizability`
+//! - `fn burden_vdw_volume`
+//!
+//! Suggested reading workflow:
+//! 1. Read top-level type definitions and public APIs.
+//! 2. Trace helper functions used in hot/critical paths.
+//! 3. Cross-reference tests/examples that exercise this file.
+
+//!
+//! ### Algorithmic assumptions for this file
+//! - `Atomic Props` assumes molecule preprocessing (implicit hydrogens, aromaticity flags, and ring annotations) is current before calculation.
+//! - `Atomic Props` remains deterministic for identical atom/bond indexing so batch and single-molecule runs agree bit-for-bit.
+//! - Typed `DescriptorValue` output is part of the contract; downstream ML code should not rely on ad-hoc coercions.
+//! - Specific scope anchor: `crates/ferrum_core/src/desc/atomic_props.rs` defines atomic props behavior and should be updated together with its direct tests.
+//! ### Chemistry/ML references
+//! - Todeschini & Consonni. Handbook of Molecular Descriptors (general descriptor taxonomy).
+//! - RDKit descriptor/fingerprint APIs used as practical parity baselines for `Atomic Props` workflows.
+//! - Repository unit and parity tests covering `Atomic Props` behavior and edge molecules.
+//! - Code-local source of truth: symbols and tests declared in `crates/ferrum_core/src/desc/atomic_props.rs`.
+
+/// Builds table.
+///
+/// Function context: `crates/ferrum_core/src/desc/atomic_props.rs`.
+/// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
 const fn make_table(default: f64, overrides: &[(u8, f64)]) -> [f64; 119] {
     let mut table = [default; 119];
     let mut i = 0;
@@ -68,21 +105,37 @@ const BURDEN_VDW_RADIUS: [f64; 119] = make_table(
 const VDW_VOLUME_SCALE: f64 = (4.0 / 3.0) * std::f64::consts::PI;
 
 #[inline]
+/// Implements mass.
+///
+/// Function context: `crates/ferrum_core/src/desc/atomic_props.rs`.
+/// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
 pub fn atomic_mass(atomic_number: u8) -> f64 {
     crate::mol::elements::ATOMIC_MASSES[atomic_number as usize] as f64
 }
 
 #[inline]
+/// Implements electronegativity.
+///
+/// Function context: `crates/ferrum_core/src/desc/atomic_props.rs`.
+/// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
 pub fn pauling_electronegativity(atomic_number: u8) -> f64 {
     PAULING_ELECTRONEGATIVITY[atomic_number as usize]
 }
 
 #[inline]
+/// Implements polarizability.
+///
+/// Function context: `crates/ferrum_core/src/desc/atomic_props.rs`.
+/// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
 pub fn burden_polarizability(atomic_number: u8) -> f64 {
     BURDEN_POLARIZABILITY[atomic_number as usize]
 }
 
 #[inline]
+/// Implements vdw volume.
+///
+/// Function context: `crates/ferrum_core/src/desc/atomic_props.rs`.
+/// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
 pub fn burden_vdw_volume(atomic_number: u8) -> f64 {
     let r = BURDEN_VDW_RADIUS[atomic_number as usize];
     VDW_VOLUME_SCALE * r * r * r

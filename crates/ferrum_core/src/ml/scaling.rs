@@ -2,6 +2,40 @@
 //!
 //! Both store fitted parameters for consistent inference-time transforms.
 
+
+//! ## File guide: Scaling
+//!
+//! This file belongs to FerrumChem's **machine-learning pipeline layer**.
+//!
+//! What to learn here:
+//! - Which chemistry/ML concern this file owns in the pipeline.
+//! - How Rust types and control-flow encode that concern.
+//! - Which public symbols are the best entry points for reading/debugging.
+//!
+//! Key symbols in this file:
+//! - `struct StandardScaler`
+//! - `fn fit`
+//! - `fn transform`
+//! - `fn transform_one`
+//! - `fn fit_transform`
+//!
+//! Suggested reading workflow:
+//! 1. Read top-level type definitions and public APIs.
+//! 2. Trace helper functions used in hot/critical paths.
+//! 3. Cross-reference tests/examples that exercise this file.
+
+//!
+//! ### Algorithmic assumptions for this file
+//! - `Scaling` assumes `ndarray` row-major sample layout (`n_samples x n_features`) throughout fit/predict paths.
+//! - `Scaling` prioritizes reproducibility via explicit seeds and deterministic iteration order where applicable.
+//! - Model quality metrics for `Scaling` depend on consistent preprocessing choices (scaling, splitting, and leakage control).
+//! - Specific scope anchor: `crates/ferrum_core/src/ml/scaling.rs` defines scaling behavior and should be updated together with its direct tests.
+//! ### Chemistry/ML references
+//! - Canonical ML literature for `Scaling` algorithm family (statistical learning and validation texts).
+//! - scikit-learn/RDKit-style API ergonomics that inform `Scaling` fit/transform/predict contracts.
+//! - OECD QSAR validation principles where `Scaling` is used in predictive chemistry contexts.
+//! - Code-local source of truth: symbols and tests declared in `crates/ferrum_core/src/ml/scaling.rs`.
+
 use ndarray::{Array1, Array2, Axis, Zip};
 use serde::{Deserialize, Serialize};
 
@@ -167,6 +201,10 @@ mod tests {
     use ndarray::array;
 
     #[test]
+    /// Runs regression test for standard scaler zero mean.
+    ///
+    /// Function context: `crates/ferrum_core/src/ml/scaling.rs`.
+    /// ML-layer note: numerical stability and reproducibility are important for comparable model evaluation.
     fn test_standard_scaler_zero_mean() {
         let data = Array2::from_shape_vec((4, 2), vec![1.0, 10.0, 2.0, 20.0, 3.0, 30.0, 4.0, 40.0])
             .unwrap();
@@ -185,6 +223,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for standard scaler unit variance.
+    ///
+    /// Function context: `crates/ferrum_core/src/ml/scaling.rs`.
+    /// ML-layer note: numerical stability and reproducibility are important for comparable model evaluation.
     fn test_standard_scaler_unit_variance() {
         let data = Array2::from_shape_vec((4, 2), vec![1.0, 10.0, 2.0, 20.0, 3.0, 30.0, 4.0, 40.0])
             .unwrap();
@@ -199,6 +241,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for minmax scaler range.
+    ///
+    /// Function context: `crates/ferrum_core/src/ml/scaling.rs`.
+    /// ML-layer note: numerical stability and reproducibility are important for comparable model evaluation.
     fn test_minmax_scaler_range() {
         let data = Array2::from_shape_vec((3, 2), vec![1.0, -5.0, 5.0, 0.0, 3.0, 5.0]).unwrap();
         let (scaler, transformed) = MinMaxScaler::fit_transform(&data);
@@ -220,6 +266,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for constant feature.
+    ///
+    /// Function context: `crates/ferrum_core/src/ml/scaling.rs`.
+    /// ML-layer note: numerical stability and reproducibility are important for comparable model evaluation.
     fn test_constant_feature() {
         // Constant column should not produce NaN
         let data = Array2::from_shape_vec((3, 2), vec![5.0, 1.0, 5.0, 2.0, 5.0, 3.0]).unwrap();
@@ -230,6 +280,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for transform one matches batch standard.
+    ///
+    /// Function context: `crates/ferrum_core/src/ml/scaling.rs`.
+    /// ML-layer note: numerical stability and reproducibility are important for comparable model evaluation.
     fn test_transform_one_matches_batch_standard() {
         let data =
             Array2::from_shape_vec((3, 2), vec![1.0, 10.0, 2.0, 20.0, 3.0, 30.0]).unwrap();
@@ -246,6 +300,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for transform one matches batch minmax.
+    ///
+    /// Function context: `crates/ferrum_core/src/ml/scaling.rs`.
+    /// ML-layer note: numerical stability and reproducibility are important for comparable model evaluation.
     fn test_transform_one_matches_batch_minmax() {
         let data = Array2::from_shape_vec((3, 2), vec![1.0, -5.0, 5.0, 0.0, 3.0, 5.0]).unwrap();
         let scaler = MinMaxScaler::fit(&data);

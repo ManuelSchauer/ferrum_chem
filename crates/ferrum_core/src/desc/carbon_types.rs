@@ -11,6 +11,40 @@
 //! - C3SP3: 3 neighbors, sp³ hybridization (methine)
 //! - C4SP3: 4 neighbors, sp³ hybridization (quaternary)
 
+
+//! ## File guide: Carbon Types
+//!
+//! This file belongs to FerrumChem's **descriptor/fingerprint feature layer**.
+//!
+//! What to learn here:
+//! - Which chemistry/ML concern this file owns in the pipeline.
+//! - How Rust types and control-flow encode that concern.
+//! - Which public symbols are the best entry points for reading/debugging.
+//!
+//! Key symbols in this file:
+//! - `fn carbon_types`
+//! - `mod tests`
+//! - `fn parse`
+//! - `fn test_methane`
+//! - `fn test_ethane`
+//!
+//! Suggested reading workflow:
+//! 1. Read top-level type definitions and public APIs.
+//! 2. Trace helper functions used in hot/critical paths.
+//! 3. Cross-reference tests/examples that exercise this file.
+
+//!
+//! ### Algorithmic assumptions for this file
+//! - `Carbon Types` assumes molecule preprocessing (implicit hydrogens, aromaticity flags, and ring annotations) is current before calculation.
+//! - `Carbon Types` remains deterministic for identical atom/bond indexing so batch and single-molecule runs agree bit-for-bit.
+//! - Typed `DescriptorValue` output is part of the contract; downstream ML code should not rely on ad-hoc coercions.
+//! - Specific scope anchor: `crates/ferrum_core/src/desc/carbon_types.rs` defines carbon types behavior and should be updated together with its direct tests.
+//! ### Chemistry/ML references
+//! - Todeschini & Consonni. Handbook of Molecular Descriptors (general descriptor taxonomy).
+//! - RDKit descriptor/fingerprint APIs used as practical parity baselines for `Carbon Types` workflows.
+//! - Repository unit and parity tests covering `Carbon Types` behavior and edge molecules.
+//! - Code-local source of truth: symbols and tests declared in `crates/ferrum_core/src/desc/carbon_types.rs`.
+
 use crate::desc::typed::{Descriptor, DescriptorValue};
 use crate::mol::molecule::Molecule;
 use crate::types::Hybridization;
@@ -108,11 +142,19 @@ mod tests {
     use super::*;
     use crate::io::smiles::parse_smiles;
 
+    /// Parses the behavior encoded by this function.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/carbon_types.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn parse(smiles: &str) -> Molecule {
         parse_smiles(smiles).unwrap()
     }
 
     #[test]
+    /// Runs regression test for methane.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/carbon_types.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_methane() {
         let mol = parse("C");
         let (c1sp1, c2sp1, c1sp2, c2sp2, c3sp2, c1sp3, c2sp3, c3sp3, c4sp3) = carbon_types(&mol);
@@ -128,6 +170,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for ethane.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/carbon_types.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_ethane() {
         let mol = parse("CC");
         println!("Ethane: {} atoms", mol.num_atoms());
@@ -150,6 +196,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for propane.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/carbon_types.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_propane() {
         let mol = parse("CCC");
         let (_c1sp1, _c2sp1, _c1sp2, _c2sp2, _c3sp2, c1sp3, c2sp3, _c3sp3, _c4sp3) =
@@ -159,6 +209,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for ethene.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/carbon_types.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_ethene() {
         let mol = parse("C=C");
         let (_c1sp1, _c2sp1, c1sp2, _c2sp2, _c3sp2, _c1sp3, _c2sp3, _c3sp3, _c4sp3) =
@@ -167,6 +221,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for ethyne.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/carbon_types.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_ethyne() {
         let mol = parse("C#C");
         let (c1sp1, _c2sp1, _c1sp2, _c2sp2, _c3sp2, _c1sp3, _c2sp3, _c3sp3, _c4sp3) =
@@ -175,6 +233,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for benzene.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/carbon_types.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_benzene() {
         let mol = parse("c1ccccc1");
         let (_c1sp1, _c2sp1, _c1sp2, c2sp2, _c3sp2, _c1sp3, _c2sp3, _c3sp3, _c4sp3) =
@@ -183,6 +245,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for acetone.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/carbon_types.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_acetone() {
         let mol = parse("CC(=O)C");
         let (_c1sp1, _c2sp1, _c1sp2, _c2sp2, c3sp2, c1sp3, _c2sp3, _c3sp3, _c4sp3) =
@@ -192,6 +258,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for neopentane.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/carbon_types.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_neopentane() {
         let mol = parse("CC(C)(C)C");
         let (_c1sp1, _c2sp1, _c1sp2, _c2sp2, _c3sp2, c1sp3, _c2sp3, _c3sp3, c4sp3) =
@@ -201,6 +271,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for propyne.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/carbon_types.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_propyne() {
         let mol = parse("CC#C");
         let (c1sp1, c2sp1, _c1sp2, _c2sp2, _c3sp2, c1sp3, _c2sp3, _c3sp3, _c4sp3) =
@@ -224,10 +298,18 @@ mod tests {
 pub struct CarbonTypes;
 
 impl Descriptor for CarbonTypes {
+    /// Implements the behavior encoded by this function.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/carbon_types.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn name(&self) -> &str {
         "CarbonTypes"
     }
 
+    /// Calculates the behavior encoded by this function.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/carbon_types.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn calculate(&self, mol: &mut Molecule, ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
         use crate::types::BondType;
 
@@ -306,6 +388,10 @@ impl Descriptor for CarbonTypes {
 }
 
 const _: () = {
+    /// Asserts send sync to guard invariants.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/carbon_types.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     const fn assert_send_sync<T: Send + Sync>() {}
     let _ = assert_send_sync::<CarbonTypes>;
 };

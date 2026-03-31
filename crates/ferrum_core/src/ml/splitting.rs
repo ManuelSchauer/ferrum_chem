@@ -1,5 +1,39 @@
 //! Train/test splitting — random, stratified, scaffold-based.
 
+
+//! ## File guide: Splitting
+//!
+//! This file belongs to FerrumChem's **machine-learning pipeline layer**.
+//!
+//! What to learn here:
+//! - Which chemistry/ML concern this file owns in the pipeline.
+//! - How Rust types and control-flow encode that concern.
+//! - Which public symbols are the best entry points for reading/debugging.
+//!
+//! Key symbols in this file:
+//! - `struct TrainTestSplit`
+//! - `fn random_split`
+//! - `fn stratified_split`
+//! - `fn scaffold_split`
+//! - `mod tests`
+//!
+//! Suggested reading workflow:
+//! 1. Read top-level type definitions and public APIs.
+//! 2. Trace helper functions used in hot/critical paths.
+//! 3. Cross-reference tests/examples that exercise this file.
+
+//!
+//! ### Algorithmic assumptions for this file
+//! - `Splitting` assumes `ndarray` row-major sample layout (`n_samples x n_features`) throughout fit/predict paths.
+//! - `Splitting` prioritizes reproducibility via explicit seeds and deterministic iteration order where applicable.
+//! - Model quality metrics for `Splitting` depend on consistent preprocessing choices (scaling, splitting, and leakage control).
+//! - Specific scope anchor: `crates/ferrum_core/src/ml/splitting.rs` defines splitting behavior and should be updated together with its direct tests.
+//! ### Chemistry/ML references
+//! - Canonical ML literature for `Splitting` algorithm family (statistical learning and validation texts).
+//! - scikit-learn/RDKit-style API ergonomics that inform `Splitting` fit/transform/predict contracts.
+//! - OECD QSAR validation principles where `Splitting` is used in predictive chemistry contexts.
+//! - Code-local source of truth: symbols and tests declared in `crates/ferrum_core/src/ml/splitting.rs`.
+
 use crate::ml::dataset::QsarDataset;
 use rand::SeedableRng;
 use rand::rngs::StdRng;
@@ -156,6 +190,10 @@ mod tests {
     use super::*;
     use ndarray::{Array1, Array2};
 
+    /// Builds dataset.
+    ///
+    /// Function context: `crates/ferrum_core/src/ml/splitting.rs`.
+    /// ML-layer note: numerical stability and reproducibility are important for comparable model evaluation.
     fn make_dataset(n: usize) -> QsarDataset {
         let features = Array2::from_shape_fn((n, 3), |(i, j)| (i * 3 + j) as f64);
         let targets = Array1::from_vec((0..n).map(|i| i as f64).collect());
@@ -164,6 +202,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for random split sizes.
+    ///
+    /// Function context: `crates/ferrum_core/src/ml/splitting.rs`.
+    /// ML-layer note: numerical stability and reproducibility are important for comparable model evaluation.
     fn test_random_split_sizes() {
         let ds = make_dataset(100);
         let split = random_split(&ds, 0.2, 42);
@@ -172,6 +214,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for random split no overlap.
+    ///
+    /// Function context: `crates/ferrum_core/src/ml/splitting.rs`.
+    /// ML-layer note: numerical stability and reproducibility are important for comparable model evaluation.
     fn test_random_split_no_overlap() {
         let ds = make_dataset(50);
         let split = random_split(&ds, 0.3, 42);
@@ -181,6 +227,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for stratified split.
+    ///
+    /// Function context: `crates/ferrum_core/src/ml/splitting.rs`.
+    /// ML-layer note: numerical stability and reproducibility are important for comparable model evaluation.
     fn test_stratified_split() {
         // Binary classification: 60 class-0, 40 class-1
         let n = 100;
@@ -200,6 +250,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for scaffold split.
+    ///
+    /// Function context: `crates/ferrum_core/src/ml/splitting.rs`.
+    /// ML-layer note: numerical stability and reproducibility are important for comparable model evaluation.
     fn test_scaffold_split() {
         let ds = make_dataset(10);
         let scaffolds: Vec<String> = (0..10)
@@ -237,6 +291,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for stratified split handles singleton bins.
+    ///
+    /// Function context: `crates/ferrum_core/src/ml/splitting.rs`.
+    /// ML-layer note: numerical stability and reproducibility are important for comparable model evaluation.
     fn test_stratified_split_handles_singleton_bins() {
         // Every rounded target ends up in its own bin (singleton classes).
         let n = 8;
@@ -252,6 +310,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for scaffold split deterministic for same seed.
+    ///
+    /// Function context: `crates/ferrum_core/src/ml/splitting.rs`.
+    /// ML-layer note: numerical stability and reproducibility are important for comparable model evaluation.
     fn test_scaffold_split_deterministic_for_same_seed() {
         let ds = make_dataset(12);
         let scaffolds: Vec<String> = (0..12)

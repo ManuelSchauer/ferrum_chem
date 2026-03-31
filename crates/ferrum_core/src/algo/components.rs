@@ -1,3 +1,47 @@
+//! Components algorithms.
+//!
+//! This module contains core cheminformatics graph logic used by parsers and
+//! descriptors. The implementations prioritize determinism, correctness, and
+//! predictable performance on large molecular batches.
+//!
+//! Learning focus:
+//! - Graph traversal and indexing patterns over atom/bond adjacency.
+//! - Performance-oriented Rust design in numerically heavy code paths.
+
+
+//! ## File guide: Components
+//!
+//! This file belongs to FerrumChem's **cheminformatics algorithm layer**.
+//!
+//! What to learn here:
+//! - Which chemistry/ML concern this file owns in the pipeline.
+//! - How Rust types and control-flow encode that concern.
+//! - Which public symbols are the best entry points for reading/debugging.
+//!
+//! Key symbols in this file:
+//! - `fn connected_components`
+//! - `fn num_fragments`
+//! - `fn keep_largest_fragment`
+//! - `mod tests`
+//! - `fn test_single_fragment`
+//!
+//! Suggested reading workflow:
+//! 1. Read top-level type definitions and public APIs.
+//! 2. Trace helper functions used in hot/critical paths.
+//! 3. Cross-reference tests/examples that exercise this file.
+
+//!
+//! ### Algorithmic assumptions for this file
+//! - `Components` operates on 2D molecular graphs (atoms/bonds) and does not consume conformer geometry.
+//! - `Components` relies on stable `AtomIdx`/`BondIdx` semantics and adjacency invariants from `mol::molecule`.
+//! - Performance paths in `Components` prefer deterministic pruning/caching over probabilistic heuristics.
+//! - Specific scope anchor: `crates/ferrum_core/src/algo/components.rs` defines components behavior and should be updated together with its direct tests.
+//! ### Chemistry/ML references
+//! - Core graph algorithm literature relevant to `Components` (traversal, cycle, isomorphism, or canonicalization topics).
+//! - Cheminformatics toolkit conventions (RDKit/CDK/OpenBabel) mirrored by `Components` decisions.
+//! - FerrumChem regression tests that pin `Components` behavior on representative molecules.
+//! - Code-local source of truth: symbols and tests declared in `crates/ferrum_core/src/algo/components.rs`.
+
 use crate::mol::molecule::Molecule;
 use std::collections::VecDeque;
 
@@ -96,24 +140,40 @@ mod tests {
     use crate::io::smiles::parse_smiles;
 
     #[test]
+    /// Runs regression test for single fragment.
+    ///
+    /// Function context: `crates/ferrum_core/src/algo/components.rs`.
+    /// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
     fn test_single_fragment() {
         let mol = parse_smiles("CCO").unwrap();
         assert_eq!(num_fragments(&mol), 1);
     }
 
     #[test]
+    /// Runs regression test for two fragments.
+    ///
+    /// Function context: `crates/ferrum_core/src/algo/components.rs`.
+    /// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
     fn test_two_fragments() {
         let mol = parse_smiles("[Na+].[Cl-]").unwrap();
         assert_eq!(num_fragments(&mol), 2);
     }
 
     #[test]
+    /// Runs regression test for three fragments.
+    ///
+    /// Function context: `crates/ferrum_core/src/algo/components.rs`.
+    /// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
     fn test_three_fragments() {
         let mol = parse_smiles("[Na+].O.[Cl-]").unwrap();
         assert_eq!(num_fragments(&mol), 3);
     }
 
     #[test]
+    /// Runs regression test for keep largest fragment.
+    ///
+    /// Function context: `crates/ferrum_core/src/algo/components.rs`.
+    /// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
     fn test_keep_largest_fragment() {
         let mut mol = parse_smiles("[Na+].CCCCCC.[Cl-]").unwrap();
         assert_eq!(num_fragments(&mol), 3);
@@ -123,6 +183,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for keep largest no change.
+    ///
+    /// Function context: `crates/ferrum_core/src/algo/components.rs`.
+    /// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
     fn test_keep_largest_no_change() {
         let mut mol = parse_smiles("c1ccccc1").unwrap();
         let orig_atoms = mol.atoms.len();
@@ -131,6 +195,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for keep largest salt strip.
+    ///
+    /// Function context: `crates/ferrum_core/src/algo/components.rs`.
+    /// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
     fn test_keep_largest_salt_strip() {
         let mut mol = parse_smiles("[Na+].OC(=O)c1ccccc1").unwrap();
         keep_largest_fragment(&mut mol);

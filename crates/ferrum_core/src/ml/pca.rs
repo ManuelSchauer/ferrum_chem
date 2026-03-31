@@ -1,5 +1,37 @@
 //! PCA dimensionality reduction — Jacobi eigendecomposition (from scratch).
 
+
+//! ## File guide: Pca
+//!
+//! This file belongs to FerrumChem's **machine-learning pipeline layer**.
+//!
+//! What to learn here:
+//! - Which chemistry/ML concern this file owns in the pipeline.
+//! - How Rust types and control-flow encode that concern.
+//! - Which public symbols are the best entry points for reading/debugging.
+//!
+//! Key symbols in this file:
+//! - `struct Pca`
+//! - `fn fit`
+//! - `fn transform`
+//! - `fn transform_one`
+//! - `fn fit_transform`
+//!
+//! Suggested reading workflow:
+//! 1. Read top-level type definitions and public APIs.
+//! 2. Trace helper functions used in hot/critical paths.
+//! 3. Cross-reference tests/examples that exercise this file.
+
+//!
+//! ### Algorithmic assumptions for this file
+//! - Chooses covariance eigendecomposition for p<=n and dual Gram eigendecomposition for p>n to control cost.
+//! - Centered data and finite eigenvalue sanitation are required before component sorting and ratio computation.
+//! - Jacobi solver tolerance/iteration settings trade tiny precision loss for predictable runtime on large descriptor matrices.
+//! ### Chemistry/ML references
+//! - Jolliffe & Cadima (2016). Principal Component Analysis review.
+//! - Golub & Van Loan. Matrix Computations (eigendecomposition and numerical stability).
+//! - Kernel/dual PCA derivations for p>>n regimes used to justify Gram-matrix path.
+
 use ndarray::{Array1, Array2, Axis};
 use serde::{Deserialize, Serialize};
 
@@ -298,6 +330,10 @@ mod tests {
     use ndarray::Array2;
 
     #[test]
+    /// Runs regression test for pca basic.
+    ///
+    /// Function context: `crates/ferrum_core/src/ml/pca.rs`.
+    /// ML-layer note: numerical stability and reproducibility are important for comparable model evaluation.
     fn test_pca_basic() {
         // 2D data with clear principal axis along x=y
         let data = Array2::from_shape_vec(
@@ -312,6 +348,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for pca dimensionality reduction.
+    ///
+    /// Function context: `crates/ferrum_core/src/ml/pca.rs`.
+    /// ML-layer note: numerical stability and reproducibility are important for comparable model evaluation.
     fn test_pca_dimensionality_reduction() {
         let data = Array2::from_shape_vec(
             (4, 3),
@@ -335,6 +375,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for pca transform dimensions.
+    ///
+    /// Function context: `crates/ferrum_core/src/ml/pca.rs`.
+    /// ML-layer note: numerical stability and reproducibility are important for comparable model evaluation.
     fn test_pca_transform_dimensions() {
         let data = Array2::from_shape_vec(
             (6, 4),
@@ -350,6 +394,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for jacobi identity.
+    ///
+    /// Function context: `crates/ferrum_core/src/ml/pca.rs`.
+    /// ML-layer note: numerical stability and reproducibility are important for comparable model evaluation.
     fn test_jacobi_identity() {
         // Eigenvalues of identity should be all 1
         let eye = Array2::<f64>::eye(3);
@@ -360,6 +408,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for jacobi diagonal.
+    ///
+    /// Function context: `crates/ferrum_core/src/ml/pca.rs`.
+    /// ML-layer note: numerical stability and reproducibility are important for comparable model evaluation.
     fn test_jacobi_diagonal() {
         let mut diag = Array2::<f64>::zeros((3, 3));
         diag[[0, 0]] = 3.0;
@@ -374,6 +426,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for pca high dimensional small sample.
+    ///
+    /// Function context: `crates/ferrum_core/src/ml/pca.rs`.
+    /// ML-layer note: numerical stability and reproducibility are important for comparable model evaluation.
     fn test_pca_high_dimensional_small_sample() {
         let rows = 30usize;
         let cols = 5395usize;
@@ -397,6 +453,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for transform one matches batch.
+    ///
+    /// Function context: `crates/ferrum_core/src/ml/pca.rs`.
+    /// ML-layer note: numerical stability and reproducibility are important for comparable model evaluation.
     fn test_transform_one_matches_batch() {
         let data = Array2::from_shape_vec((4, 3), vec![1.0, 2.0, 3.0, 2.0, 3.0, 5.0, 3.0, 5.0, 8.0, 4.0, 6.0, 10.0]).unwrap();
         let pca = Pca::fit(&data, 2);

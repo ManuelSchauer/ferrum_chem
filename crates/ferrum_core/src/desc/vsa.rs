@@ -14,6 +14,40 @@
 //! - Labute (2000) J. Mol. Graph. Model. 18, 464
 //! - Wildman & Crippen (1999) JCICS 39(5), 868
 
+
+//! ## File guide: Vsa
+//!
+//! This file belongs to FerrumChem's **descriptor/fingerprint feature layer**.
+//!
+//! What to learn here:
+//! - Which chemistry/ML concern this file owns in the pipeline.
+//! - How Rust types and control-flow encode that concern.
+//! - Which public symbols are the best entry points for reading/debugging.
+//!
+//! Key symbols in this file:
+//! - `fn rb0_radius`
+//! - `fn bond_scale_factor`
+//! - `fn compute_labute_contribs_uncached`
+//! - `fn compute_labute_contribs`
+//! - `fn ensure_labute_contribs_cached`
+//!
+//! Suggested reading workflow:
+//! 1. Read top-level type definitions and public APIs.
+//! 2. Trace helper functions used in hot/critical paths.
+//! 3. Cross-reference tests/examples that exercise this file.
+
+//!
+//! ### Algorithmic assumptions for this file
+//! - `Vsa` assumes molecule preprocessing (implicit hydrogens, aromaticity flags, and ring annotations) is current before calculation.
+//! - `Vsa` remains deterministic for identical atom/bond indexing so batch and single-molecule runs agree bit-for-bit.
+//! - Typed `DescriptorValue` output is part of the contract; downstream ML code should not rely on ad-hoc coercions.
+//! - Specific scope anchor: `crates/ferrum_core/src/desc/vsa.rs` defines vsa behavior and should be updated together with its direct tests.
+//! ### Chemistry/ML references
+//! - Todeschini & Consonni. Handbook of Molecular Descriptors (general descriptor taxonomy).
+//! - RDKit descriptor/fingerprint APIs used as practical parity baselines for `Vsa` workflows.
+//! - Repository unit and parity tests covering `Vsa` behavior and edge molecules.
+//! - Code-local source of truth: symbols and tests declared in `crates/ferrum_core/src/desc/vsa.rs`.
+
 use super::logp::{
     cached_crippen_atom_contributions_ref, crippen_atom_contributions,
     ensure_crippen_atom_contributions_cached,
@@ -33,6 +67,10 @@ static LABUTE_CACHE_ENABLED: Lazy<bool> =
 // Covalent bond radii (Rb0, Å) — same as RDKit GetRb0()
 // ---------------------------------------------------------------------------
 
+/// Implements radius.
+///
+/// Function context: `crates/ferrum_core/src/desc/vsa.rs`.
+/// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
 pub fn rb0_radius(an: u8) -> f64 {
     match an {
         1 => 0.330,
@@ -124,6 +162,10 @@ pub fn rb0_radius(an: u8) -> f64 {
 }
 
 // Bond-type scaling factors: aromatic=0.1, single=0.0, double=0.2, triple=0.3
+/// Implements scale factor.
+///
+/// Function context: `crates/ferrum_core/src/desc/vsa.rs`.
+/// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
 fn bond_scale_factor(bond: &crate::mol::bond::Bond) -> f64 {
     if bond.is_aromatic() {
         return 0.1;
@@ -212,6 +254,10 @@ fn compute_labute_contribs_uncached<'a>(
     (vsa, h_contrib)
 }
 
+/// Computes labute contribs.
+///
+/// Function context: `crates/ferrum_core/src/desc/vsa.rs`.
+/// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
 fn compute_labute_contribs(
     mol: &Molecule,
     ctx: &mut crate::desc::context::CalculationContext,
@@ -220,6 +266,10 @@ fn compute_labute_contribs(
     (vsa.to_vec(), h)
 }
 
+/// Implements labute contribs cached.
+///
+/// Function context: `crates/ferrum_core/src/desc/vsa.rs`.
+/// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
 fn ensure_labute_contribs_cached(
     mol: &mut Molecule,
     ctx: &mut crate::desc::context::CalculationContext,
@@ -255,6 +305,10 @@ const SLOGP_BINS: [f64; 12] = [
     f64::INFINITY,
 ];
 
+/// Implements binned vsa.
+///
+/// Function context: `crates/ferrum_core/src/desc/vsa.rs`.
+/// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
 fn fill_binned_vsa(
     mol: &Molecule,
     atom_property: &[f64],
@@ -272,6 +326,10 @@ fn fill_binned_vsa(
     }
 }
 
+/// Implements slogp vsa into.
+///
+/// Function context: `crates/ferrum_core/src/desc/vsa.rs`.
+/// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
 pub(crate) fn fill_slogp_vsa_into(
     mol: &mut Molecule,
     out: &mut [f32],
@@ -299,10 +357,18 @@ pub(crate) fn fill_slogp_vsa_into(
 }
 
 impl Descriptor for SlogpVSA {
+    /// Implements the behavior encoded by this function.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/vsa.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn name(&self) -> &str {
         "SlogP_VSA"
     }
 
+    /// Calculates the behavior encoded by this function.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/vsa.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn calculate(&self, mol: &mut Molecule, ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
         let mut values = vec![0.0f32; 12];
         fill_slogp_vsa_into(mol, &mut values, ctx);
@@ -332,6 +398,10 @@ const SMR_BINS: [f64; 10] = [
     f64::INFINITY,
 ];
 
+/// Implements smr vsa into.
+///
+/// Function context: `crates/ferrum_core/src/desc/vsa.rs`.
+/// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
 pub(crate) fn fill_smr_vsa_into(
     mol: &mut Molecule,
     out: &mut [f32],
@@ -355,10 +425,18 @@ pub(crate) fn fill_smr_vsa_into(
 }
 
 impl Descriptor for SmrVSA {
+    /// Implements the behavior encoded by this function.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/vsa.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn name(&self) -> &str {
         "SMR_VSA"
     }
 
+    /// Calculates the behavior encoded by this function.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/vsa.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn calculate(&self, mol: &mut Molecule, ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
         let mut values = vec![0.0f32; 10];
         fill_smr_vsa_into(mol, &mut values, ctx);
@@ -376,10 +454,18 @@ impl Descriptor for SmrVSA {
 pub struct LabuteASA;
 
 impl Descriptor for LabuteASA {
+    /// Implements the behavior encoded by this function.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/vsa.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn name(&self) -> &str {
         "LabuteASA"
     }
 
+    /// Calculates the behavior encoded by this function.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/vsa.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn calculate(&self, mol: &mut Molecule, ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
         ensure_labute_contribs_cached(mol, ctx);
         let (total, h_contrib) = if let Some((vsa, h_contrib)) = mol.cached_labute_contribs() {
@@ -418,6 +504,10 @@ const PEOE_BINS: [f64; 14] = [
     f64::INFINITY,
 ];
 
+/// Implements peoe vsa into.
+///
+/// Function context: `crates/ferrum_core/src/desc/vsa.rs`.
+/// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
 pub(crate) fn fill_peoe_vsa_into(
     mol: &mut Molecule,
     out: &mut [f32],
@@ -445,10 +535,18 @@ pub(crate) fn fill_peoe_vsa_into(
 }
 
 impl Descriptor for PeoeVsa {
+    /// Implements the behavior encoded by this function.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/vsa.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn name(&self) -> &str {
         "PEOE_VSA"
     }
 
+    /// Calculates the behavior encoded by this function.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/vsa.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn calculate(&self, mol: &mut Molecule, ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
         let mut values = vec![0.0f32; 14];
         fill_peoe_vsa_into(mol, &mut values, ctx);
@@ -474,6 +572,10 @@ fn find_bin(val: f64, bins: &[f64]) -> usize {
 // Thread safety
 // ---------------------------------------------------------------------------
 const _: () = {
+    /// Asserts send sync to guard invariants.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/vsa.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     const fn assert_send_sync<T: Send + Sync>() {}
     let _ = assert_send_sync::<SlogpVSA>;
     let _ = assert_send_sync::<SmrVSA>;
@@ -490,6 +592,10 @@ mod tests {
     use super::*;
     use crate::io::smiles::parse_smiles;
 
+    /// Implements float vec.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/vsa.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn calc_float_vec(d: &dyn Descriptor, smiles: &str) -> Vec<f32> {
         let mut mol = parse_smiles(smiles).expect("valid SMILES");
         match d.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()) {
@@ -498,6 +604,10 @@ mod tests {
         }
     }
 
+    /// Implements float.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/vsa.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn calc_float(d: &dyn Descriptor, smiles: &str) -> f32 {
         let mut mol = parse_smiles(smiles).expect("valid SMILES");
         match d.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()) {
@@ -509,6 +619,10 @@ mod tests {
     // -- compute_labute_contribs --
 
     #[test]
+    /// Runs regression test for vsa positive.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/vsa.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_vsa_positive() {
         let mut mol = parse_smiles("CCO").unwrap();
         let mut ctx = crate::desc::context::CalculationContext::new();
@@ -521,6 +635,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for vsa benzene symmetry.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/vsa.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_vsa_benzene_symmetry() {
         let mut mol = parse_smiles("c1ccccc1").unwrap();
         let mut ctx = crate::desc::context::CalculationContext::new();
@@ -540,6 +658,10 @@ mod tests {
     // -- SlogP_VSA --
 
     #[test]
+    /// Runs regression test for slogp vsa nonzero.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/vsa.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_slogp_vsa_nonzero() {
         let v = calc_float_vec(&SlogpVSA, "c1ccccc1");
         let total: f32 = v.iter().sum();
@@ -547,6 +669,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for slogp vsa bins sum approx labute.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/vsa.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_slogp_vsa_bins_sum_approx_labute() {
         let slogp = calc_float_vec(&SlogpVSA, "CCO");
         let labute = calc_float(&LabuteASA, "CCO");
@@ -561,6 +687,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for slogp vsa larger molecule.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/vsa.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_slogp_vsa_larger_molecule() {
         let v = calc_float_vec(&SlogpVSA, "CC(=O)Oc1ccccc1C(=O)O");
         let total: f32 = v.iter().sum();
@@ -570,6 +700,10 @@ mod tests {
     // -- SMR_VSA --
 
     #[test]
+    /// Runs regression test for smr vsa nonzero.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/vsa.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_smr_vsa_nonzero() {
         let v = calc_float_vec(&SmrVSA, "c1ccccc1");
         let total: f32 = v.iter().sum();
@@ -577,6 +711,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for smr vsa bins sum approx labute.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/vsa.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_smr_vsa_bins_sum_approx_labute() {
         let smr = calc_float_vec(&SmrVSA, "CCO");
         let labute = calc_float(&LabuteASA, "CCO");
@@ -593,12 +731,20 @@ mod tests {
     // -- LabuteASA --
 
     #[test]
+    /// Runs regression test for labute positive.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/vsa.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_labute_positive() {
         let v = calc_float(&LabuteASA, "CCCCCC");
         assert!(v > 0.0, "hexane ASA = {}", v);
     }
 
     #[test]
+    /// Runs regression test for labute larger more.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/vsa.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_labute_larger_more() {
         let small = calc_float(&LabuteASA, "CC");
         let large = calc_float(&LabuteASA, "CCCCCCCCCC");
@@ -606,6 +752,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for labute benzene.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/vsa.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_labute_benzene() {
         let v = calc_float(&LabuteASA, "c1ccccc1");
         // RDKit: 37.43
@@ -613,6 +763,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for labute methane.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/vsa.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_labute_methane() {
         let v = calc_float(&LabuteASA, "C");
         // RDKit: 8.74
@@ -622,6 +776,10 @@ mod tests {
     // -- PEOE_VSA --
 
     #[test]
+    /// Runs regression test for peoe vsa benzene.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/vsa.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_peoe_vsa_benzene() {
         let v = calc_float_vec(&PeoeVsa, "c1ccccc1");
         let nonzero: Vec<_> = v.iter().filter(|&&x| x > 0.0).collect();
@@ -632,6 +790,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for peoe vsa length.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/vsa.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_peoe_vsa_length() {
         let v = calc_float_vec(&PeoeVsa, "CCO");
         assert_eq!(v.len(), 14, "PEOE_VSA should have 14 bins");
@@ -640,6 +802,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for peoe vsa formaldehyde.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/vsa.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_peoe_vsa_formaldehyde() {
         // C=O: O is more electronegative → negative charge, C → positive
         let v = calc_float_vec(&PeoeVsa, "C=O");
@@ -659,6 +825,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for peoe vsa sum.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/vsa.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_peoe_vsa_sum() {
         for smi in &["CCO", "CC(=O)O", "c1ccccc1", "CCCCCC"] {
             let peoe = calc_float_vec(&PeoeVsa, smi);

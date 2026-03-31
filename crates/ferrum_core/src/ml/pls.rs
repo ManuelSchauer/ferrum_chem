@@ -2,6 +2,40 @@
 //!
 //! Handles collinearity in the mega-vector of descriptors.
 
+
+//! ## File guide: Pls
+//!
+//! This file belongs to FerrumChem's **machine-learning pipeline layer**.
+//!
+//! What to learn here:
+//! - Which chemistry/ML concern this file owns in the pipeline.
+//! - How Rust types and control-flow encode that concern.
+//! - Which public symbols are the best entry points for reading/debugging.
+//!
+//! Key symbols in this file:
+//! - `struct PlsRegression`
+//! - `fn fit`
+//! - `fn compute_coefficients`
+//! - `fn predict`
+//! - `fn predict_one`
+//!
+//! Suggested reading workflow:
+//! 1. Read top-level type definitions and public APIs.
+//! 2. Trace helper functions used in hot/critical paths.
+//! 3. Cross-reference tests/examples that exercise this file.
+
+//!
+//! ### Algorithmic assumptions for this file
+//! - `Pls` assumes `ndarray` row-major sample layout (`n_samples x n_features`) throughout fit/predict paths.
+//! - `Pls` prioritizes reproducibility via explicit seeds and deterministic iteration order where applicable.
+//! - Model quality metrics for `Pls` depend on consistent preprocessing choices (scaling, splitting, and leakage control).
+//! - Specific scope anchor: `crates/ferrum_core/src/ml/pls.rs` defines pls behavior and should be updated together with its direct tests.
+//! ### Chemistry/ML references
+//! - Canonical ML literature for `Pls` algorithm family (statistical learning and validation texts).
+//! - scikit-learn/RDKit-style API ergonomics that inform `Pls` fit/transform/predict contracts.
+//! - OECD QSAR validation principles where `Pls` is used in predictive chemistry contexts.
+//! - Code-local source of truth: symbols and tests declared in `crates/ferrum_core/src/ml/pls.rs`.
+
 use ndarray::{Array1, Array2, Axis, Zip};
 use serde::{Deserialize, Serialize};
 
@@ -114,6 +148,10 @@ impl PlsRegression {
         }
     }
 
+    /// Computes coefficients.
+    ///
+    /// Function context: `crates/ferrum_core/src/ml/pls.rs`.
+    /// ML-layer note: numerical stability and reproducibility are important for comparable model evaluation.
     fn compute_coefficients(
         w: &Array2<f64>,
         p: &Array2<f64>,
@@ -175,6 +213,10 @@ mod tests {
     use ndarray::{Array1, Array2, array};
 
     #[test]
+    /// Runs regression test for pls linear.
+    ///
+    /// Function context: `crates/ferrum_core/src/ml/pls.rs`.
+    /// ML-layer note: numerical stability and reproducibility are important for comparable model evaluation.
     fn test_pls_linear() {
         // y = 2*x1 + 3*x2
         let features = Array2::from_shape_vec(
@@ -203,6 +245,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for pls collinear.
+    ///
+    /// Function context: `crates/ferrum_core/src/ml/pls.rs`.
+    /// ML-layer note: numerical stability and reproducibility are important for comparable model evaluation.
     fn test_pls_collinear() {
         // x2 = 2*x1, y = x1 (collinear features)
         let features = Array2::from_shape_vec(
@@ -218,6 +264,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for pls n components.
+    ///
+    /// Function context: `crates/ferrum_core/src/ml/pls.rs`.
+    /// ML-layer note: numerical stability and reproducibility are important for comparable model evaluation.
     fn test_pls_n_components() {
         let features = Array2::from_shape_vec(
             (6, 3),

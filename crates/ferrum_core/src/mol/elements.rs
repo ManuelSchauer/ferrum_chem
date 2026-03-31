@@ -1,3 +1,37 @@
+
+//! ## File guide: Elements
+//!
+//! This file belongs to FerrumChem's **molecular graph model layer**.
+//!
+//! What to learn here:
+//! - Which chemistry/ML concern this file owns in the pipeline.
+//! - How Rust types and control-flow encode that concern.
+//! - Which public symbols are the best entry points for reading/debugging.
+//!
+//! Key symbols in this file:
+//! - `fn symbol_to_atomic_number`
+//! - `fn is_aromatic_symbol`
+//! - `mod tests`
+//! - `fn test_atomic_masses`
+//! - `fn test_symbol_lookup`
+//!
+//! Suggested reading workflow:
+//! 1. Read top-level type definitions and public APIs.
+//! 2. Trace helper functions used in hot/critical paths.
+//! 3. Cross-reference tests/examples that exercise this file.
+
+//!
+//! ### Algorithmic assumptions for this file
+//! - `Elements` encodes graph primitives with compact integer indices to keep memory predictable on large CSV batches.
+//! - `Elements` expects topology invariants (bond endpoints, adjacency symmetry) to hold after all mutating operations.
+//! - Bitflag/state fields in `Elements` are treated as cached derivations and must be invalidated after structural edits.
+//! - Specific scope anchor: `crates/ferrum_core/src/mol/elements.rs` defines elements behavior and should be updated together with its direct tests.
+//! ### Chemistry/ML references
+//! - Graph-based cheminformatics data-model conventions for atom/bond/molecule containers.
+//! - IUPAC element/valence background relevant to `Elements` typed fields.
+//! - Rust ownership/borrowing patterns for safe high-performance molecular graph manipulation.
+//! - Code-local source of truth: symbols and tests declared in `crates/ferrum_core/src/mol/elements.rs`.
+
 /// Element data lookup tables for high-performance atomic operations.
 /// Uses const arrays indexed by atomic number for zero-cost abstractions.
 
@@ -441,6 +475,10 @@ mod tests {
     use super::*;
 
     #[test]
+    /// Runs regression test for atomic masses.
+    ///
+    /// Function context: `crates/ferrum_core/src/mol/elements.rs`.
+    /// Molecule-model note: preserve atom/bond index invariants and cached-property invalidation rules.
     fn test_atomic_masses() {
         assert_eq!(ATOMIC_MASSES[1], 1.008); // H
         assert_eq!(ATOMIC_MASSES[6], 12.011); // C
@@ -448,6 +486,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for symbol lookup.
+    ///
+    /// Function context: `crates/ferrum_core/src/mol/elements.rs`.
+    /// Molecule-model note: preserve atom/bond index invariants and cached-property invalidation rules.
     fn test_symbol_lookup() {
         assert_eq!(symbol_to_atomic_number("C"), Some(6));
         assert_eq!(symbol_to_atomic_number("N"), Some(7));
@@ -458,6 +500,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for valences.
+    ///
+    /// Function context: `crates/ferrum_core/src/mol/elements.rs`.
+    /// Molecule-model note: preserve atom/bond index invariants and cached-property invalidation rules.
     fn test_valences() {
         assert_eq!(get_valences(6), &[4]); // C
         assert_eq!(get_valences(7), &[3, 5]); // N

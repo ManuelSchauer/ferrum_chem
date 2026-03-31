@@ -1,3 +1,47 @@
+//! I/O module: Smiles.
+//!
+//! This module handles external data interchange (SMILES/SMARTS/CSV/SDF) and
+//! conversion into FerrumChem graph types. It is the boundary between textual
+//! chemical formats and internal, typed molecular structures.
+//!
+//! Learning focus:
+//! - Parser/state-machine techniques in Rust.
+//! - Error-aware ingestion pipelines for large datasets.
+
+
+//! ## File guide: Smiles
+//!
+//! This file belongs to FerrumChem's **input/output parsing layer**.
+//!
+//! What to learn here:
+//! - Which chemistry/ML concern this file owns in the pipeline.
+//! - How Rust types and control-flow encode that concern.
+//! - Which public symbols are the best entry points for reading/debugging.
+//!
+//! Key symbols in this file:
+//! - `fn parse_smiles`
+//! - `struct SmilesParser`
+//! - `fn new`
+//! - `fn parse`
+//! - `fn parse_token`
+//!
+//! Suggested reading workflow:
+//! 1. Read top-level type definitions and public APIs.
+//! 2. Trace helper functions used in hot/critical paths.
+//! 3. Cross-reference tests/examples that exercise this file.
+
+//!
+//! ### Algorithmic assumptions for this file
+//! - `Smiles` treats textual chemistry formats as untrusted input and prefers explicit parse errors over silent repair.
+//! - `Smiles` must preserve deterministic tokenization so repeated reads produce identical molecule/query graphs.
+//! - Format-specific edge cases in `Smiles` are validated against toolkit-compatible semantics where possible.
+//! - Specific scope anchor: `crates/ferrum_core/src/io/smiles.rs` defines smiles behavior and should be updated together with its direct tests.
+//! ### Chemistry/ML references
+//! - SMILES/SMARTS/CTfile family specifications relevant to `Smiles` parser or reader behavior.
+//! - RDKit parsing behavior used as external compatibility reference for `Smiles`.
+//! - Rust parser/state-machine patterns for reliable streaming and error reporting.
+//! - Code-local source of truth: symbols and tests declared in `crates/ferrum_core/src/io/smiles.rs`.
+
 use crate::error::{FerrumError, Result};
 use crate::mol::elements::{is_aromatic_symbol, symbol_to_atomic_number};
 use crate::mol::molecule::Molecule;
@@ -98,6 +142,10 @@ struct SmilesParser<'a> {
 }
 
 impl<'a> SmilesParser<'a> {
+    /// Creates a new value with the defaults and invariants required by this module.
+    ///
+    /// Function context: `crates/ferrum_core/src/io/smiles.rs`.
+    /// I/O-layer note: parsing/ingestion should surface explicit errors instead of silently repairing malformed input.
     fn new(input: &'a str) -> Self {
         let capacity = input.len();
         Self {
@@ -113,6 +161,10 @@ impl<'a> SmilesParser<'a> {
         }
     }
 
+    /// Parses the behavior encoded by this function.
+    ///
+    /// Function context: `crates/ferrum_core/src/io/smiles.rs`.
+    /// I/O-layer note: parsing/ingestion should surface explicit errors instead of silently repairing malformed input.
     fn parse(&mut self) -> Result<Molecule> {
         while self.pos < self.bytes.len() {
             self.parse_token()?;
@@ -131,6 +183,10 @@ impl<'a> SmilesParser<'a> {
         Ok(std::mem::take(&mut self.mol))
     }
 
+    /// Parses token.
+    ///
+    /// Function context: `crates/ferrum_core/src/io/smiles.rs`.
+    /// I/O-layer note: parsing/ingestion should surface explicit errors instead of silently repairing malformed input.
     fn parse_token(&mut self) -> Result<()> {
         let c = self.current_byte()?;
 
@@ -229,6 +285,10 @@ impl<'a> SmilesParser<'a> {
     }
 
     #[inline]
+    /// Implements atomic number.
+    ///
+    /// Function context: `crates/ferrum_core/src/io/smiles.rs`.
+    /// I/O-layer note: parsing/ingestion should surface explicit errors instead of silently repairing malformed input.
     fn organic_atomic_number(token: u8) -> Option<u8> {
         match token {
             b'B' | b'b' => Some(5),
@@ -243,6 +303,10 @@ impl<'a> SmilesParser<'a> {
         }
     }
 
+    /// Parses organic atom.
+    ///
+    /// Function context: `crates/ferrum_core/src/io/smiles.rs`.
+    /// I/O-layer note: parsing/ingestion should surface explicit errors instead of silently repairing malformed input.
     fn parse_organic_atom(&mut self) -> Result<()> {
         let first = self.current_byte()?;
         let is_aromatic = is_aromatic_symbol(first as char);
@@ -283,6 +347,10 @@ impl<'a> SmilesParser<'a> {
         Ok(())
     }
 
+    /// Parses bracket atom.
+    ///
+    /// Function context: `crates/ferrum_core/src/io/smiles.rs`.
+    /// I/O-layer note: parsing/ingestion should surface explicit errors instead of silently repairing malformed input.
     fn parse_bracket_atom(&mut self) -> Result<()> {
         self.pos += 1; // skip '['
 
@@ -384,6 +452,10 @@ impl<'a> SmilesParser<'a> {
         Ok(())
     }
 
+    /// Implements atom.
+    ///
+    /// Function context: `crates/ferrum_core/src/io/smiles.rs`.
+    /// I/O-layer note: parsing/ingestion should surface explicit errors instead of silently repairing malformed input.
     fn add_atom(
         &mut self,
         atomic_num: u8,
@@ -439,6 +511,10 @@ impl<'a> SmilesParser<'a> {
         Ok(())
     }
 
+    /// Parses single digit ring.
+    ///
+    /// Function context: `crates/ferrum_core/src/io/smiles.rs`.
+    /// I/O-layer note: parsing/ingestion should surface explicit errors instead of silently repairing malformed input.
     fn parse_single_digit_ring(&mut self) -> Result<usize> {
         // SMILES spec: single digit ring closures are 0-9
         // They must NOT be parsed greedily - '12' is two closures: '1' and '2'
@@ -453,6 +529,10 @@ impl<'a> SmilesParser<'a> {
         Ok((c - b'0') as usize)
     }
 
+    /// Parses multi digit ring.
+    ///
+    /// Function context: `crates/ferrum_core/src/io/smiles.rs`.
+    /// I/O-layer note: parsing/ingestion should surface explicit errors instead of silently repairing malformed input.
     fn parse_multi_digit_ring(&mut self) -> Result<usize> {
         // SMILES spec: multi-digit ring closures use % prefix
         // After %, read exactly 2 digits for ring numbers 10-99
@@ -477,6 +557,10 @@ impl<'a> SmilesParser<'a> {
             .map_err(|_| FerrumError::ParseError(format!("Invalid ring number: {}", num_str)))
     }
 
+    /// Implements ring closure.
+    ///
+    /// Function context: `crates/ferrum_core/src/io/smiles.rs`.
+    /// I/O-layer note: parsing/ingestion should surface explicit errors instead of silently repairing malformed input.
     fn handle_ring_closure(&mut self, ring_num: usize) -> Result<()> {
         if ring_num >= 100 {
             return Err(FerrumError::ParseError(format!(
@@ -529,6 +613,10 @@ impl<'a> SmilesParser<'a> {
     }
 
     #[inline]
+    /// Implements byte.
+    ///
+    /// Function context: `crates/ferrum_core/src/io/smiles.rs`.
+    /// I/O-layer note: parsing/ingestion should surface explicit errors instead of silently repairing malformed input.
     fn current_byte(&self) -> Result<u8> {
         self.bytes
             .get(self.pos)
@@ -536,6 +624,10 @@ impl<'a> SmilesParser<'a> {
             .ok_or_else(|| FerrumError::ParseError("Unexpected end of input".to_string()))
     }
 
+    /// Implements two letter element.
+    ///
+    /// Function context: `crates/ferrum_core/src/io/smiles.rs`.
+    /// I/O-layer note: parsing/ingestion should surface explicit errors instead of silently repairing malformed input.
     fn peek_two_letter_element(&self) -> bool {
         self.pos + 1 < self.bytes.len()
             && ((self.bytes[self.pos] == b'B' && self.bytes[self.pos + 1] == b'r')
@@ -548,6 +640,10 @@ mod tests {
     use super::*;
 
     #[test]
+    /// Runs regression test for simple smiles.
+    ///
+    /// Function context: `crates/ferrum_core/src/io/smiles.rs`.
+    /// I/O-layer note: parsing/ingestion should surface explicit errors instead of silently repairing malformed input.
     fn test_simple_smiles() {
         // Methane: C
         let mol = parse_smiles("C").unwrap();
@@ -561,6 +657,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for benzene.
+    ///
+    /// Function context: `crates/ferrum_core/src/io/smiles.rs`.
+    /// I/O-layer note: parsing/ingestion should surface explicit errors instead of silently repairing malformed input.
     fn test_benzene() {
         // Benzene: c1ccccc1
         let mol = parse_smiles("c1ccccc1").unwrap();
@@ -574,6 +674,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for branches.
+    ///
+    /// Function context: `crates/ferrum_core/src/io/smiles.rs`.
+    /// I/O-layer note: parsing/ingestion should surface explicit errors instead of silently repairing malformed input.
     fn test_branches() {
         // Isobutane: CC(C)C
         let mol = parse_smiles("CC(C)C").unwrap();
@@ -582,6 +686,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for double bond.
+    ///
+    /// Function context: `crates/ferrum_core/src/io/smiles.rs`.
+    /// I/O-layer note: parsing/ingestion should surface explicit errors instead of silently repairing malformed input.
     fn test_double_bond() {
         // Ethene: C=C
         let mol = parse_smiles("C=C").unwrap();
@@ -591,6 +699,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for bracket atom.
+    ///
+    /// Function context: `crates/ferrum_core/src/io/smiles.rs`.
+    /// I/O-layer note: parsing/ingestion should surface explicit errors instead of silently repairing malformed input.
     fn test_bracket_atom() {
         // Sodium ion: [Na+]
         let mol = parse_smiles("[Na+]").unwrap();
@@ -616,6 +728,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for explicit hydrogens.
+    ///
+    /// Function context: `crates/ferrum_core/src/io/smiles.rs`.
+    /// I/O-layer note: parsing/ingestion should surface explicit errors instead of silently repairing malformed input.
     fn test_explicit_hydrogens() {
         // Methane with explicit H: [CH4]
         let mol = parse_smiles("[CH4]").unwrap();
@@ -624,6 +740,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for ring closure bond consistency.
+    ///
+    /// Function context: `crates/ferrum_core/src/io/smiles.rs`.
+    /// I/O-layer note: parsing/ingestion should surface explicit errors instead of silently repairing malformed input.
     fn test_ring_closure_bond_consistency() {
         // Ring opening and closing specify different explicit bond types.
         // RDKit rejects this and we should too.

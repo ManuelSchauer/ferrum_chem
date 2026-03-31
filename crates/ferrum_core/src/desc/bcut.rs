@@ -10,6 +10,38 @@
 //! Reference: Pearlman, R.S. & Smith, K.M. (1999) "Metric Validation and
 //!            the Receptor-Relevant Subspace Concept", JCICS 39, 28-35.
 
+
+//! ## File guide: Bcut
+//!
+//! This file belongs to FerrumChem's **descriptor/fingerprint feature layer**.
+//!
+//! What to learn here:
+//! - Which chemistry/ML concern this file owns in the pipeline.
+//! - How Rust types and control-flow encode that concern.
+//! - Which public symbols are the best entry points for reading/debugging.
+//!
+//! Key symbols in this file:
+//! - `fn fill_burden_matrix`
+//! - `fn burden_bond_value`
+//! - `struct BcutWorkspace`
+//! - `fn with_size`
+//! - `fn reset_uniform_start`
+//!
+//! Suggested reading workflow:
+//! 1. Read top-level type definitions and public APIs.
+//! 2. Trace helper functions used in hot/critical paths.
+//! 3. Cross-reference tests/examples that exercise this file.
+
+//!
+//! ### Algorithmic assumptions for this file
+//! - BCUT uses exact eigendecomposition on small matrices and power-iteration approximations on larger matrices.
+//! - Burden matrix operator form assumes sparse bond deltas over constant off-diagonal baseline for performance.
+//! - Relative-error checks (not strict absolute) are used to keep large-magnitude eigenvalue comparisons stable.
+//! ### Chemistry/ML references
+//! - Burden, F. (1989). Molecular identification number for substructure searches (Burden eigenvalues).
+//! - Pearlman et al. BCUT descriptor literature for weighted adjacency eigenvalue descriptors.
+//! - RDKit BCUT2D behavior used for parity and tolerance calibration.
+
 use super::atomic_props::{
     atomic_mass, burden_polarizability, burden_vdw_volume, pauling_electronegativity,
 };
@@ -53,6 +85,10 @@ fn fill_burden_matrix(mol: &Molecule, weight_fn: fn(u8) -> f64, mat: &mut [f64])
 }
 
 #[inline]
+/// Implements bond value.
+///
+/// Function context: `crates/ferrum_core/src/desc/bcut.rs`.
+/// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
 fn burden_bond_value(bond_type: crate::types::BondType) -> f64 {
     let bo = match bond_type {
         crate::types::BondType::Single => 1.0,
@@ -71,6 +107,10 @@ struct BcutWorkspace {
 }
 
 impl BcutWorkspace {
+    /// Implements size.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/bcut.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn with_size(n: usize) -> Self {
         Self {
             x: vec![0.0; n],
@@ -79,6 +119,10 @@ impl BcutWorkspace {
         }
     }
 
+    /// Implements uniform start.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/bcut.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn reset_uniform_start(&mut self) {
         let n = self.x.len();
         if n == 0 {
@@ -98,6 +142,10 @@ struct BurdenLinearOperator {
 }
 
 impl BurdenLinearOperator {
+    /// Constructs molecule between representations.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/bcut.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn from_molecule(mol: &Molecule, weight_fn: fn(u8) -> f64) -> Self {
         let n = mol.num_atoms();
         let mut diag = Vec::with_capacity(n);
@@ -122,6 +170,10 @@ impl BurdenLinearOperator {
     }
 
     #[inline]
+    /// Implements the behavior encoded by this function.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/bcut.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn matvec(&self, x: &[f64], y: &mut [f64]) {
         debug_assert_eq!(x.len(), self.n);
         debug_assert_eq!(y.len(), self.n);
@@ -135,6 +187,10 @@ impl BurdenLinearOperator {
         }
     }
 
+    /// Implements row abs sum.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/bcut.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn max_row_abs_sum(&self) -> f64 {
         let c_abs = BURDEN_OFF_DIAG_BASE.abs();
         let mut max_row = 0.0f64;
@@ -153,6 +209,10 @@ impl BurdenLinearOperator {
     }
 }
 
+/// Implements diagonalize in place.
+///
+/// Function context: `crates/ferrum_core/src/desc/bcut.rs`.
+/// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
 fn jacobi_diagonalize_in_place(a: &mut [f64], n: usize) {
     let max_iter = 100 * n * n;
 
@@ -210,6 +270,10 @@ fn jacobi_diagonalize_in_place(a: &mut [f64], n: usize) {
     }
 }
 
+/// Implements in place.
+///
+/// Function context: `crates/ferrum_core/src/desc/bcut.rs`.
+/// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
 fn normalize_in_place(v: &mut [f64]) -> f64 {
     let norm = v.iter().map(|x| x * x).sum::<f64>().sqrt().max(1e-15);
     for value in v.iter_mut() {
@@ -218,6 +282,10 @@ fn normalize_in_place(v: &mut [f64]) -> f64 {
     norm
 }
 
+/// Implements eigenvalue power.
+///
+/// Function context: `crates/ferrum_core/src/desc/bcut.rs`.
+/// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
 fn largest_eigenvalue_power(a: &[f64], n: usize, max_iters: usize, tol: f64) -> f64 {
     debug_assert_eq!(a.len(), n * n);
     if n == 0 {
@@ -251,6 +319,10 @@ fn largest_eigenvalue_power(a: &[f64], n: usize, max_iters: usize, tol: f64) -> 
     lambda
 }
 
+/// Implements eigenvalue shifted power.
+///
+/// Function context: `crates/ferrum_core/src/desc/bcut.rs`.
+/// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
 fn largest_eigenvalue_shifted_power(
     a: &[f64],
     n: usize,
@@ -291,6 +363,10 @@ fn largest_eigenvalue_shifted_power(
     lambda
 }
 
+/// Implements eigenvalue power operator.
+///
+/// Function context: `crates/ferrum_core/src/desc/bcut.rs`.
+/// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
 fn largest_eigenvalue_power_operator(
     op: &BurdenLinearOperator,
     ws: &mut BcutWorkspace,
@@ -328,6 +404,10 @@ fn largest_eigenvalue_power_operator(
     lambda
 }
 
+/// Implements eigenvalue shifted power operator.
+///
+/// Function context: `crates/ferrum_core/src/desc/bcut.rs`.
+/// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
 fn largest_eigenvalue_shifted_power_operator(
     op: &BurdenLinearOperator,
     ws: &mut BcutWorkspace,
@@ -370,6 +450,10 @@ fn largest_eigenvalue_shifted_power_operator(
     lambda
 }
 
+/// Implements bounds burden operator.
+///
+/// Function context: `crates/ferrum_core/src/desc/bcut.rs`.
+/// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
 fn eigenvalue_bounds_burden_operator(op: &BurdenLinearOperator, ws: &mut BcutWorkspace) -> (f64, f64) {
     debug_assert!(op.n > 0);
     if op.n == 1 {
@@ -395,6 +479,10 @@ fn eigenvalue_bounds_burden_operator(op: &BurdenLinearOperator, ws: &mut BcutWor
     }
 }
 
+/// Implements bounds if exact.
+///
+/// Function context: `crates/ferrum_core/src/desc/bcut.rs`.
+/// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
 fn diagonal_bounds_if_exact(matrix: &[f64], n: usize) -> Option<(f64, f64)> {
     let mut min_diag = matrix[0];
     let mut max_diag = matrix[0];
@@ -418,6 +506,10 @@ fn diagonal_bounds_if_exact(matrix: &[f64], n: usize) -> Option<(f64, f64)> {
     Some((min_diag, max_diag))
 }
 
+/// Implements bounds symmetric inplace.
+///
+/// Function context: `crates/ferrum_core/src/desc/bcut.rs`.
+/// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
 fn eigenvalue_bounds_symmetric_inplace(matrix: &mut [f64], n: usize) -> (f64, f64) {
     debug_assert!(n > 0);
     if n == 1 {
@@ -517,10 +609,18 @@ fn eigenvalues_symmetric(matrix: &[f64], n: usize) -> Vec<f64> {
 pub struct BCUT;
 
 impl Descriptor for BCUT {
+    /// Implements the behavior encoded by this function.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/bcut.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn name(&self) -> &str {
         "BCUT"
     }
 
+    /// Calculates the behavior encoded by this function.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/bcut.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn calculate(&self, mol: &mut Molecule, ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
         let mut values = vec![0.0f32; 8];
 
@@ -566,6 +666,10 @@ impl Descriptor for BCUT {
 }
 
 const _: () = {
+    /// Asserts send sync to guard invariants.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/bcut.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     const fn assert_send_sync<T: Send + Sync>() {}
     let _ = assert_send_sync::<BCUT>;
 };
@@ -576,6 +680,10 @@ mod tests {
     use super::*;
     use crate::io::smiles::parse_smiles;
 
+    /// Implements bcut.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/bcut.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn calc_bcut(smiles: &str) -> Vec<f32> {
         let mut mol = parse_smiles(smiles).expect("valid SMILES");
         match BCUT.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()) {
@@ -584,6 +692,10 @@ mod tests {
         }
     }
 
+    /// Implements bounds.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/bcut.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn exact_bounds(mol: &Molecule, weight_fn: fn(u8) -> f64) -> (f64, f64) {
         let n = mol.num_atoms();
         let mut mat = vec![0.0; n * n];
@@ -593,18 +705,30 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for bcut len.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/bcut.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_bcut_len() {
         let b = calc_bcut("CC");
         assert_eq!(b.len(), 8);
     }
 
     #[test]
+    /// Runs regression test for bcut ethane.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/bcut.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_bcut_ethane() {
         let b = calc_bcut("CC");
         assert!(b[1] > 0.0, "mass high > 0");
     }
 
     #[test]
+    /// Runs regression test for bcut ethanol different from ethane.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/bcut.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_bcut_ethanol_different_from_ethane() {
         let ethane = calc_bcut("CC");
         let ethanol = calc_bcut("CCO");
@@ -612,6 +736,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for bcut high ge low.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/bcut.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_bcut_high_ge_low() {
         let b = calc_bcut("c1ccccc1");
         for i in 0..4 {
@@ -626,6 +754,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for bcut deterministic.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/bcut.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_bcut_deterministic() {
         let b1 = calc_bcut("CCCC");
         let b2 = calc_bcut("CCCC");
@@ -633,6 +765,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for bcut single atom.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/bcut.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_bcut_single_atom() {
         let b = calc_bcut("C");
         assert!(b[0] > 0.0);
@@ -640,12 +776,20 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for bcut aspirin.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/bcut.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_bcut_aspirin() {
         let b = calc_bcut("CC(=O)Oc1ccccc1C(=O)O");
         assert!(b[1] > b[0], "mass: high > low for mixed atoms");
     }
 
     #[test]
+    /// Runs regression test for eigenvalues 2x2.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/bcut.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_eigenvalues_2x2() {
         let mat = vec![4.0, 1.0, 1.0, 4.0];
         let eigs = eigenvalues_symmetric(&mat, 2);
@@ -654,6 +798,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for eigenvalues identity.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/bcut.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_eigenvalues_identity() {
         let mat = vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0];
         let eigs = eigenvalues_symmetric(&mat, 3);
@@ -663,6 +811,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for eigenvalue bounds large diagonal uses fast path.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/bcut.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_eigenvalue_bounds_large_diagonal_uses_fast_path() {
         let n = JACOBI_EXACT_MAX_N + 16;
         let mut mat = vec![0.0; n * n];
@@ -676,6 +828,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for burden operator matches matrix bounds.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/bcut.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_burden_operator_matches_matrix_bounds() {
         let mut mol = parse_smiles(&"C".repeat(80)).expect("valid long alkane");
         let n = mol.num_atoms();
@@ -693,6 +849,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for bcut large molecule guardrail against exact jacobi.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/bcut.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_bcut_large_molecule_guardrail_against_exact_jacobi() {
         let smiles = "CCO".repeat(14);
         let mut mol = parse_smiles(&smiles).expect("valid large mixed-element chain");

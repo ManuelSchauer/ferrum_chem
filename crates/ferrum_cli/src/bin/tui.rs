@@ -1,3 +1,35 @@
+
+//! ## File guide: Tui
+//!
+//! This file belongs to FerrumChem's **CLI/demo/benchmark executable layer**.
+//!
+//! What to learn here:
+//! - Which chemistry/ML concern this file owns in the pipeline.
+//! - How Rust types and control-flow encode that concern.
+//! - Which public symbols are the best entry points for reading/debugging.
+//!
+//! Key symbols in this file:
+//! - `enum AppState`
+//! - `enum BrowserPurpose`
+//! - `enum MlAlgorithm`
+//! - `fn all`
+//! - `fn label`
+//!
+//! Suggested reading workflow:
+//! 1. Read top-level type definitions and public APIs.
+//! 2. Trace helper functions used in hot/critical paths.
+//! 3. Cross-reference tests/examples that exercise this file.
+
+//!
+//! ### Algorithmic assumptions for this file
+//! - TUI requires an interactive TTY and crossterm raw-mode lifecycle to be initialized successfully.
+//! - Main-thread rendering and worker-thread compute channels assume message ordering without shared mutable UI state.
+//! - Long-running operations must report progress/cancellation cooperatively to avoid perceived stalls in tab workflows.
+//! ### Chemistry/ML references
+//! - ratatui and crossterm terminal UI architecture/documentation.
+//! - Rust std::sync::mpsc channel patterns for single-producer/single-consumer UI worker designs.
+//! - FerrumChem usability learnings from descriptor-parity and 75% progress stall investigations.
+
 #![allow(clippy::module_name_repetitions)]
 
 //! FerrumChem interactive TUI.
@@ -114,6 +146,10 @@ enum MlAlgorithm {
 }
 
 impl MlAlgorithm {
+    /// Implements the behavior encoded by this function.
+    ///
+    /// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+    /// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
     fn all() -> [Self; 5] {
         [
             Self::AutoQsar,
@@ -124,6 +160,10 @@ impl MlAlgorithm {
         ]
     }
 
+    /// Implements the behavior encoded by this function.
+    ///
+    /// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+    /// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
     fn label(self) -> &'static str {
         match self {
             Self::AutoQsar => "AutoQsar",
@@ -134,6 +174,10 @@ impl MlAlgorithm {
         }
     }
 
+    /// Implements the behavior encoded by this function.
+    ///
+    /// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+    /// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
     fn cycle(self, delta: isize) -> Self {
         let all = Self::all();
         let idx = all
@@ -144,14 +188,26 @@ impl MlAlgorithm {
         all[next]
     }
 
+    /// Implements all.
+    ///
+    /// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+    /// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
     fn manual_all() -> [Self; 4] {
         [Self::RandomForest, Self::Knn, Self::Pls, Self::ElasticNet]
     }
 
+    /// Checks whether manual.
+    ///
+    /// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+    /// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
     fn is_manual(self) -> bool {
         self != Self::AutoQsar
     }
 
+    /// Implements cycle.
+    ///
+    /// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+    /// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
     fn manual_cycle(self, delta: isize) -> Self {
         let all = Self::manual_all();
         let idx = all.iter().position(|candidate| *candidate == self).unwrap_or(0);
@@ -168,6 +224,10 @@ enum MlMode {
 }
 
 impl MlMode {
+    /// Implements the behavior encoded by this function.
+    ///
+    /// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+    /// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
     fn toggle(self) -> Self {
         match self {
             Self::AutoQsar => Self::Art2a,
@@ -176,6 +236,10 @@ impl MlMode {
         }
     }
 
+    /// Implements the behavior encoded by this function.
+    ///
+    /// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+    /// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
     fn label(self) -> &'static str {
         match self {
             Self::AutoQsar => "AutoQsar",
@@ -192,6 +256,10 @@ enum MlScalerChoice {
 }
 
 impl MlScalerChoice {
+    /// Implements the behavior encoded by this function.
+    ///
+    /// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+    /// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
     fn label(self) -> &'static str {
         match self {
             Self::Standard => "StandardScaler",
@@ -199,6 +267,10 @@ impl MlScalerChoice {
         }
     }
 
+    /// Implements the behavior encoded by this function.
+    ///
+    /// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+    /// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
     fn toggle(self) -> Self {
         match self {
             Self::Standard => Self::MinMax,
@@ -215,6 +287,10 @@ enum SplitStrategy {
 }
 
 impl SplitStrategy {
+    /// Implements the behavior encoded by this function.
+    ///
+    /// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+    /// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
     fn cycle(self) -> Self {
         match self {
             Self::Random => Self::Stratified,
@@ -223,6 +299,10 @@ impl SplitStrategy {
         }
     }
 
+    /// Implements the behavior encoded by this function.
+    ///
+    /// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+    /// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
     fn label(self) -> &'static str {
         match self {
             Self::Random => "Random",
@@ -241,6 +321,10 @@ enum VisualizationColorMode {
 }
 
 impl VisualizationColorMode {
+    /// Implements the behavior encoded by this function.
+    ///
+    /// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+    /// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
     fn cycle(self) -> Self {
         match self {
             Self::Uniform => Self::TargetOverlay,
@@ -250,6 +334,10 @@ impl VisualizationColorMode {
         }
     }
 
+    /// Implements the behavior encoded by this function.
+    ///
+    /// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+    /// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
     fn label(self) -> &'static str {
         match self {
             Self::Uniform => "uniform",
@@ -301,6 +389,10 @@ struct MlTrainingConfig {
 }
 
 impl Default for MlTrainingConfig {
+    /// Builds the default value for this type.
+    ///
+    /// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+    /// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
     fn default() -> Self {
         Self {
             algorithm: MlAlgorithm::AutoQsar,
@@ -343,12 +435,20 @@ struct FeatureMatrix {
 }
 
 impl FeatureMatrix {
+    /// Implements the behavior encoded by this function.
+    ///
+    /// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+    /// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
     fn row(&self, idx: usize) -> &[f64] {
         debug_assert!(idx < self.rows);
         let start = idx * self.cols;
         &self.data[start..start + self.cols]
     }
 
+    /// Converts payload between representations.
+    ///
+    /// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+    /// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
     fn to_payload(&self) -> FeatureMatrixPayload {
         FeatureMatrixPayload {
             rows: self.rows,
@@ -360,6 +460,10 @@ impl FeatureMatrix {
         }
     }
 
+    /// Constructs payload between representations.
+    ///
+    /// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+    /// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
     fn from_payload(payload: FeatureMatrixPayload) -> Self {
         Self {
             rows: payload.rows,
@@ -636,6 +740,10 @@ struct App {
 }
 
 impl App {
+    /// Creates a new value with the defaults and invariants required by this module.
+    ///
+    /// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+    /// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
     fn new(worker_tx: Sender<WorkerRequest>, worker_rx: Receiver<WorkerResponse>) -> Self {
         let mut descriptor_list_state = ListState::default();
         descriptor_list_state.select(Some(0));
@@ -721,12 +829,20 @@ impl App {
         }
     }
 
+    /// Implements the behavior encoded by this function.
+    ///
+    /// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+    /// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
     fn tick(&mut self) {
         if matches!(self.state, AppState::Computing(_)) {
             self.spinner_frame = (self.spinner_frame + 1) % SPINNER_FRAMES.len();
         }
     }
 
+    /// Implements descriptors.
+    ///
+    /// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+    /// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
     fn selected_descriptors(&self) -> Vec<BatchDescriptor> {
         self.available_descriptors
             .iter()
@@ -734,6 +850,10 @@ impl App {
             .collect()
     }
 
+    /// Implements selected target.
+    ///
+    /// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+    /// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
     fn primary_selected_target(&self) -> Option<&str> {
         self.target_columns
             .iter()
@@ -741,6 +861,10 @@ impl App {
             .map(|name| name.as_str())
     }
 
+    /// Implements targets in order.
+    ///
+    /// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+    /// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
     fn selected_targets_in_order(&self) -> Vec<String> {
         self.target_columns
             .iter()
@@ -749,6 +873,10 @@ impl App {
             .collect()
     }
 
+    /// Implements target overlay cache.
+    ///
+    /// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+    /// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
     fn refresh_target_overlay_cache(&mut self) {
         let Some(target_column) = self.primary_selected_target().map(str::to_string) else {
             self.target_overlay_values = None;
@@ -767,6 +895,10 @@ impl App {
         }
     }
 
+    /// Implements mode summary.
+    ///
+    /// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+    /// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
     fn ml_mode_summary(&self) -> String {
         let selected = self.selected_targets_in_order();
         if selected.is_empty() {
@@ -805,6 +937,10 @@ impl App {
         format!("Mode: Target pending validation ('{}')", primary)
     }
 
+    /// Implements target columns.
+    ///
+    /// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+    /// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
     fn rebuild_target_columns(&mut self) {
         let mut stats: BTreeMap<String, (usize, usize)> = BTreeMap::new();
         for row in &self.loaded_properties {
@@ -845,6 +981,10 @@ impl App {
         self.refresh_target_overlay_cache();
     }
 
+    /// Implements target selection popup.
+    ///
+    /// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+    /// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
     fn open_target_selection_popup(&mut self) {
         if self.target_columns.is_empty() {
             self.status_message =
@@ -860,6 +1000,10 @@ impl App {
         self.state = AppState::TargetSelectionOpen;
     }
 
+    /// Implements selected target column.
+    ///
+    /// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+    /// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
     fn toggle_selected_target_column(&mut self) {
         let Some(selected) = self.target_column_list_state.selected() else {
             return;
@@ -875,6 +1019,10 @@ impl App {
         self.refresh_target_overlay_cache();
     }
 
+    /// Sets all target columns.
+    ///
+    /// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+    /// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
     fn set_all_target_columns(&mut self, enabled: bool) {
         self.selected_target_columns.clear();
         if enabled {
@@ -885,6 +1033,10 @@ impl App {
         self.refresh_target_overlay_cache();
     }
 
+    /// Implements target selection key.
+    ///
+    /// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+    /// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
     fn handle_target_selection_key(&mut self, key: KeyEvent) {
         match key.code {
             KeyCode::Esc | KeyCode::Enter => {
@@ -930,6 +1082,10 @@ impl App {
         }
     }
 
+    /// Checks whether valid target for supervised.
+    ///
+    /// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+    /// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
     fn has_valid_target_for_supervised(&self) -> bool {
         if self.selected_target_columns.is_empty() {
             return false;
@@ -943,6 +1099,10 @@ impl App {
         values.len() == matrix.rows
     }
 
+    /// Checks whether target for stratified split.
+    ///
+    /// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+    /// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
     fn has_target_for_stratified_split(&self) -> bool {
         if self.selected_target_columns.is_empty() {
             return false;
@@ -959,6 +1119,10 @@ impl App {
         true
     }
 
+    /// Implements stratified when target unavailable.
+    ///
+    /// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+    /// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
     fn fallback_stratified_when_target_unavailable(&mut self) -> bool {
         if self.training_config.split_strategy == SplitStrategy::Stratified
             && !self.has_target_for_stratified_split()
@@ -969,6 +1133,10 @@ impl App {
         false
     }
 
+    /// Implements algorithm.
+    ///
+    /// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+    /// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
     fn active_algorithm(&self) -> MlAlgorithm {
         match self.selected_ml_mode {
             MlMode::AutoQsar => MlAlgorithm::AutoQsar,
@@ -977,6 +1145,10 @@ impl App {
         }
     }
 
+    /// Implements param page count.
+    ///
+    /// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+    /// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
     fn ml_param_page_count(&self) -> usize {
         match self.selected_ml_mode {
             MlMode::AutoQsar | MlMode::Art2a => 1,
@@ -987,6 +1159,10 @@ impl App {
         }
     }
 
+    /// Implements ml param page.
+    ///
+    /// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+    /// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
     fn cycle_ml_param_page(&mut self, delta: isize) {
         let page_count = self.ml_param_page_count();
         if page_count <= 1 {
@@ -999,6 +1175,10 @@ impl App {
         self.status_message = format!("Hyperparameter page {}/{}.", next + 1, page_count);
     }
 
+    /// Implements param entries.
+    ///
+    /// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+    /// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
     fn ml_param_entries(&self) -> Vec<MlParamEntry> {
         let page_count = self.ml_param_page_count();
         let page = self.ml_param_page.min(page_count.saturating_sub(1));
@@ -1131,6 +1311,10 @@ impl App {
         entries
     }
 
+    /// Implements editing ml param.
+    ///
+    /// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+    /// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
     fn begin_editing_ml_param(&mut self, key: MlParamKey) {
         let value = match key {
             MlParamKey::CvFolds => self.training_config.cv_folds.to_string(),
@@ -1156,6 +1340,10 @@ impl App {
         self.ml_param_input = Input::default().with_value(value);
     }
 
+    /// Implements editing ml param.
+    ///
+    /// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+    /// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
     fn commit_editing_ml_param(&mut self) {
         let Some(param) = self.editing_ml_param else {
             return;
@@ -1252,22 +1440,38 @@ impl App {
         self.status_message = "Hyperparameter updated.".to_string();
     }
 
+    /// Sets error.
+    ///
+    /// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+    /// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
     fn set_error(&mut self, message: String) {
         self.progress_percent = 0.0;
         self.state = AppState::ErrorPopup(message);
     }
 
+    /// Implements computing.
+    ///
+    /// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+    /// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
     fn begin_computing(&mut self, message: String) {
         self.progress_percent = -1.0;
         self.state = AppState::Computing(message);
     }
 
+    /// Implements worker.
+    ///
+    /// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+    /// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
     fn send_worker(&mut self, request: WorkerRequest) {
         if let Err(error) = self.worker_tx.send(request) {
             self.set_error(format!("Worker channel error: {}", error));
         }
     }
 
+    /// Implements descriptor error and continue.
+    ///
+    /// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+    /// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
     fn log_descriptor_error_and_continue(&mut self, message: &str) {
         if let Err(log_error) = append_descriptor_error_log(message) {
             self.status_message = format!(
@@ -1286,10 +1490,18 @@ impl App {
         self.state = AppState::Idle;
     }
 
+    /// Implements tab.
+    ///
+    /// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+    /// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
     fn next_tab(&mut self) {
         self.active_tab = (self.active_tab + 1) % TAB_TITLES.len();
     }
 
+    /// Implements tab.
+    ///
+    /// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+    /// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
     fn prev_tab(&mut self) {
         if self.active_tab == 0 {
             self.active_tab = TAB_TITLES.len() - 1;
@@ -1298,6 +1510,10 @@ impl App {
         }
     }
 
+    /// Updates descriptor selection.
+    ///
+    /// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+    /// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
     fn update_descriptor_selection(&mut self, delta: isize) {
         let len = self.available_descriptors.len();
         if len == 0 {
@@ -1308,6 +1524,10 @@ impl App {
         self.descriptor_list_state.select(Some(next));
     }
 
+    /// Implements selected descriptor.
+    ///
+    /// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+    /// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
     fn toggle_selected_descriptor(&mut self) {
         let Some(index) = self.descriptor_list_state.selected() else {
             return;
@@ -1317,12 +1537,20 @@ impl App {
         }
     }
 
+    /// Sets all descriptors.
+    ///
+    /// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+    /// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
     fn set_all_descriptors(&mut self, enabled: bool) {
         for (_, flag) in &mut self.available_descriptors {
             *flag = enabled;
         }
     }
 
+    /// Implements file browser.
+    ///
+    /// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+    /// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
     fn open_file_browser(&mut self, purpose: BrowserPurpose) {
         let fallback_dir = env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
         let start_dir = match purpose {
@@ -1350,6 +1578,10 @@ impl App {
         }
     }
 
+    /// Implements browser to.
+    ///
+    /// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+    /// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
     fn navigate_browser_to(&mut self, dir: PathBuf) {
         match read_browser_entries(&dir) {
             Ok(entries) => {
@@ -1362,11 +1594,19 @@ impl App {
         }
     }
 
+    /// Implements dataset load.
+    ///
+    /// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+    /// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
     fn request_dataset_load(&mut self, path: PathBuf) {
         self.begin_computing(format!("Loading molecules from '{}'", path.display()));
         self.send_worker(WorkerRequest::LoadDataset(path));
     }
 
+    /// Implements descriptor calculation.
+    ///
+    /// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+    /// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
     fn request_descriptor_calculation(&mut self) {
         if self.loaded_molecules.is_empty() {
             self.set_error(
@@ -1391,6 +1631,10 @@ impl App {
         });
     }
 
+    /// Implements descriptor cancellation.
+    ///
+    /// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+    /// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
     fn request_descriptor_cancellation(&mut self) {
         if self.descriptor_cancel_requested {
             self.status_message = "Descriptor cancellation already requested; waiting for worker to stop.".to_string();
@@ -1401,6 +1645,10 @@ impl App {
         self.send_worker(WorkerRequest::CancelDescriptors);
     }
 
+    /// Implements variance filter.
+    ///
+    /// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+    /// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
     fn request_variance_filter(&mut self) {
         let payload = {
             let Some(matrix) = &self.feature_matrix else {
@@ -1423,6 +1671,10 @@ impl App {
         });
     }
 
+    /// Implements correlation filter.
+    ///
+    /// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+    /// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
     fn request_correlation_filter(&mut self) {
         let payload = {
             let Some(matrix) = &self.feature_matrix else {
@@ -1445,6 +1697,10 @@ impl App {
         });
     }
 
+    /// Implements export feature matrix.
+    ///
+    /// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+    /// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
     fn request_export_feature_matrix(&mut self) {
         let payload = {
             let Some(matrix) = &self.feature_matrix else {
@@ -1485,6 +1741,10 @@ impl App {
         });
     }
 
+    /// Implements training.
+    ///
+    /// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+    /// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
     fn request_training(&mut self) {
         if self.feature_matrix.is_none() {
             self.set_error("Calculate descriptors first in Tab 2 (Descriptor).".to_string());
@@ -1562,6 +1822,10 @@ impl App {
         });
     }
 
+    /// Implements art2a clustering.
+    ///
+    /// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+    /// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
     fn request_art2a_clustering(&mut self) {
         let matrix_payload = {
             let Some(matrix) = &self.feature_matrix else {
@@ -1587,6 +1851,10 @@ impl App {
         });
     }
 
+    /// Implements prediction.
+    ///
+    /// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+    /// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
     fn request_prediction(&mut self, path: PathBuf) {
         if self.pipeline_bundle_bytes.is_none() && self.art2a_model_bytes.is_none() {
             self.set_error(
@@ -1625,6 +1893,10 @@ impl App {
         });
     }
 
+    /// Implements export predictions.
+    ///
+    /// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+    /// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
     fn request_export_predictions(&mut self) {
         if self.prediction_rows.is_empty() {
             self.set_error("No predictions available to export.".to_string());
@@ -1652,6 +1924,10 @@ impl App {
         });
     }
 
+    /// Implements file browser key.
+    ///
+    /// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+    /// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
     fn handle_file_browser_key(&mut self, key: KeyEvent) {
         let current_dir = match &self.state {
             AppState::FileBrowserOpen(path) => path.clone(),
@@ -1708,6 +1984,10 @@ impl App {
         }
     }
 
+    /// Implements import key.
+    ///
+    /// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+    /// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
     fn handle_import_key(&mut self, key: KeyEvent) {
         match key.code {
             KeyCode::Char('f') => self.open_file_browser(BrowserPurpose::Dataset),
@@ -1715,6 +1995,10 @@ impl App {
         }
     }
 
+    /// Implements descriptor key.
+    ///
+    /// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+    /// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
     fn handle_descriptor_key(&mut self, key: KeyEvent) {
         match key.code {
             KeyCode::Up | KeyCode::Char('k') => self.update_descriptor_selection(-1),
@@ -1731,6 +2015,10 @@ impl App {
         }
     }
 
+    /// Implements model select key.
+    ///
+    /// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+    /// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
     fn handle_model_select_key(&mut self, key: KeyEvent) {
         match key.code {
             KeyCode::Char('t') => {
@@ -1790,6 +2078,10 @@ impl App {
         }
     }
 
+    /// Implements param key.
+    ///
+    /// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+    /// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
     fn handle_param_key(&mut self, key: KeyEvent) {
         if self.editing_ml_param.is_some() {
             match key.code {
@@ -1877,6 +2169,10 @@ impl App {
         }
     }
 
+    /// Implements analyze key.
+    ///
+    /// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+    /// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
     fn handle_analyze_key(&mut self, key: KeyEvent) {
         let max_offset = self
             .descriptor_profiles
@@ -1915,6 +2211,10 @@ impl App {
         }
     }
 
+    /// Implements key.
+    ///
+    /// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+    /// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
     fn handle_key(&mut self, key: KeyEvent) -> bool {
         if let KeyCode::Char('q') = key.code {
             return true;
@@ -1978,6 +2278,10 @@ impl App {
         false
     }
 
+    /// Implements worker messages.
+    ///
+    /// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+    /// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
     fn drain_worker_messages(&mut self) {
         loop {
             match self.worker_rx.try_recv() {
@@ -1991,6 +2295,10 @@ impl App {
         }
     }
 
+    /// Implements worker response.
+    ///
+    /// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+    /// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
     fn apply_worker_response(&mut self, response: WorkerResponse) {
         match response {
             WorkerResponse::Progress(progress) => {
@@ -2317,6 +2625,10 @@ impl App {
     }
 }
 
+/// Runs this executable entrypoint and orchestrates its top-level workflow.
+///
+/// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+/// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut terminal = setup_terminal()?;
     let (worker_tx, worker_rx, worker_handle) = spawn_worker();
@@ -2332,6 +2644,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+/// Implements terminal.
+///
+/// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+/// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
 fn setup_terminal() -> io::Result<Terminal<CrosstermBackend<io::Stdout>>> {
     enable_raw_mode()?;
     let mut stdout = io::stdout();
@@ -2340,12 +2656,20 @@ fn setup_terminal() -> io::Result<Terminal<CrosstermBackend<io::Stdout>>> {
     Terminal::new(backend)
 }
 
+/// Implements terminal.
+///
+/// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+/// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
 fn restore_terminal(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> io::Result<()> {
     disable_raw_mode()?;
     execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
     terminal.show_cursor()
 }
 
+/// Runs app.
+///
+/// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+/// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
 fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, app: &mut App) -> io::Result<()> {
     loop {
         app.drain_worker_messages();
@@ -2370,6 +2694,10 @@ fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, app: &mut App)
     }
 }
 
+/// Implements the behavior encoded by this function.
+///
+/// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+/// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
 fn render(frame: &mut Frame, app: &App) {
     let [header, body, footer] = Layout::vertical([
         Constraint::Length(4),
@@ -2408,6 +2736,10 @@ fn render(frame: &mut Frame, app: &App) {
     }
 }
 
+/// Implements header.
+///
+/// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+/// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
 fn render_header(frame: &mut Frame, area: Rect, app: &App) {
     let [title_area, tabs_area] =
         Layout::vertical([Constraint::Length(1), Constraint::Length(3)]).areas(area);
@@ -2436,6 +2768,10 @@ fn render_header(frame: &mut Frame, area: Rect, app: &App) {
     frame.render_widget(tabs, tabs_area);
 }
 
+/// Implements footer.
+///
+/// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+/// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
 fn render_footer(frame: &mut Frame, area: Rect, app: &App) {
     let tab_help = match app.active_tab {
         0 => "Import: f=open file browser (.csv/.smi)",
@@ -2460,6 +2796,10 @@ fn render_footer(frame: &mut Frame, area: Rect, app: &App) {
     frame.render_widget(footer, area);
 }
 
+/// Implements import tab.
+///
+/// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+/// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
 fn render_import_tab(frame: &mut Frame, area: Rect, app: &App) {
     let [top, middle, bottom] = Layout::vertical([
         Constraint::Length(5),
@@ -2515,6 +2855,10 @@ fn render_import_tab(frame: &mut Frame, area: Rect, app: &App) {
     frame.render_widget(preview, bottom);
 }
 
+/// Implements descriptor tab.
+///
+/// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+/// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
 fn render_descriptor_tab(frame: &mut Frame, area: Rect, app: &App) {
     let [left, right] =
         Layout::horizontal([Constraint::Percentage(38), Constraint::Percentage(62)]).areas(area);
@@ -2621,6 +2965,10 @@ fn render_descriptor_tab(frame: &mut Frame, area: Rect, app: &App) {
     }
 }
 
+/// Implements model selection tab.
+///
+/// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+/// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
 fn render_model_selection_tab(frame: &mut Frame, area: Rect, app: &App) {
     let [card_auto, card_art2a, card_manual] = Layout::horizontal([
         Constraint::Percentage(33),
@@ -2700,6 +3048,10 @@ fn render_model_selection_tab(frame: &mut Frame, area: Rect, app: &App) {
     frame.render_widget(info, overlay);
 }
 
+/// Implements hyperparameter tab.
+///
+/// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+/// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
 fn render_hyperparameter_tab(frame: &mut Frame, area: Rect, app: &App) {
     let [top, bottom] =
         Layout::vertical([Constraint::Length(6), Constraint::Min(8)]).areas(area);
@@ -2752,6 +3104,10 @@ fn render_hyperparameter_tab(frame: &mut Frame, area: Rect, app: &App) {
     }
 }
 
+/// Implements predict visual tab.
+///
+/// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+/// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
 fn render_predict_visual_tab(frame: &mut Frame, area: Rect, app: &App) {
     let [top, bottom] =
         Layout::vertical([Constraint::Percentage(58), Constraint::Percentage(42)]).areas(area);
@@ -2775,6 +3131,10 @@ fn render_predict_visual_tab(frame: &mut Frame, area: Rect, app: &App) {
     render_art2a_cluster_summary(frame, cluster_area, app);
 }
 
+/// Implements pca panel.
+///
+/// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+/// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
 fn render_pca_panel(frame: &mut Frame, area: Rect, app: &App) {
     if let Some(projection) = &app.projection {
         let [canvas_area, info_area] =
@@ -2937,6 +3297,10 @@ fn render_pca_panel(frame: &mut Frame, area: Rect, app: &App) {
     }
 }
 
+/// Implements regression diagnostics panel.
+///
+/// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+/// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
 fn render_regression_diagnostics_panel(frame: &mut Frame, area: Rect, app: &App) {
     if app.train_actuals.is_empty() || app.train_actuals.len() != app.training_predictions.len() {
         let placeholder = Paragraph::new(
@@ -3122,6 +3486,10 @@ fn render_regression_diagnostics_panel(frame: &mut Frame, area: Rect, app: &App)
     frame.render_widget(table, bins_area);
 }
 
+/// Implements feature importance panel.
+///
+/// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+/// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
 fn render_feature_importance_panel(frame: &mut Frame, area: Rect, app: &App) {
     if app.top_feature_importances.is_empty() {
         let placeholder = Paragraph::new(
@@ -3180,6 +3548,10 @@ fn render_feature_importance_panel(frame: &mut Frame, area: Rect, app: &App) {
     frame.render_widget(table, area);
 }
 
+/// Implements descriptor profile table.
+///
+/// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+/// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
 fn render_descriptor_profile_table(frame: &mut Frame, area: Rect, app: &App) {
     if app.descriptor_profiles.is_empty() {
         let placeholder = Paragraph::new(
@@ -3263,6 +3635,10 @@ fn render_descriptor_profile_table(frame: &mut Frame, area: Rect, app: &App) {
     frame.render_widget(table, area);
 }
 
+/// Implements progress popup.
+///
+/// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+/// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
 fn render_progress_popup(frame: &mut Frame, app: &App, message: &str, spinner: char) {
     let area = centered_rect(60, 28, frame.area());
     frame.render_widget(Clear, area);
@@ -3300,6 +3676,10 @@ fn render_progress_popup(frame: &mut Frame, app: &App, message: &str, spinner: c
     frame.render_widget(gauge, gauge_area);
 }
 
+/// Implements error popup.
+///
+/// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+/// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
 fn render_error_popup(frame: &mut Frame, message: &str) {
     let area = centered_rect(66, 30, frame.area());
     frame.render_widget(Clear, area);
@@ -3317,6 +3697,10 @@ fn render_error_popup(frame: &mut Frame, message: &str) {
     frame.render_widget(popup, area);
 }
 
+/// Implements file browser popup.
+///
+/// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+/// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
 fn render_file_browser_popup(frame: &mut Frame, app: &App, current_path: &Path) {
     let area = centered_rect(74, 70, frame.area());
     frame.render_widget(Clear, area);
@@ -3382,6 +3766,10 @@ fn render_file_browser_popup(frame: &mut Frame, app: &App, current_path: &Path) 
     frame.render_widget(footer_widget, footer);
 }
 
+/// Implements target selection popup.
+///
+/// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+/// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
 fn render_target_selection_popup(frame: &mut Frame, app: &App) {
     let area = centered_rect(62, 62, frame.area());
     frame.render_widget(Clear, area);
@@ -3440,6 +3828,10 @@ fn render_target_selection_popup(frame: &mut Frame, app: &App) {
     frame.render_widget(footer_widget, footer);
 }
 
+/// Implements art2a cluster summary.
+///
+/// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+/// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
 fn render_art2a_cluster_summary(frame: &mut Frame, area: Rect, app: &App) {
     if app.cluster_summaries.is_empty() {
         let placeholder = Paragraph::new(
@@ -3490,6 +3882,10 @@ fn render_art2a_cluster_summary(frame: &mut Frame, area: Rect, app: &App) {
     frame.render_widget(table, area);
 }
 
+/// Implements prediction summary panel.
+///
+/// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+/// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
 fn render_prediction_summary_panel(frame: &mut Frame, area: Rect, app: &App) {
     if app.prediction_rows.is_empty() {
         let placeholder = Paragraph::new(
@@ -3539,6 +3935,10 @@ fn render_prediction_summary_panel(frame: &mut Frame, area: Rect, app: &App) {
     frame.render_widget(widget, area);
 }
 
+/// Implements rect.
+///
+/// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+/// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
 fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
     let [top, middle, _bottom] = Layout::vertical([
         Constraint::Percentage((100 - percent_y) / 2),
@@ -3558,6 +3958,10 @@ fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
     center
 }
 
+/// Implements descriptor error log.
+///
+/// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+/// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
 fn append_descriptor_error_log(message: &str) -> Result<(), String> {
     let mut file = fs::OpenOptions::new()
         .create(true)
@@ -3577,6 +3981,10 @@ fn append_descriptor_error_log(message: &str) -> Result<(), String> {
     .map_err(|error| format!("write {} failed: {}", DESCRIPTOR_ERROR_LOG_PATH, error))
 }
 
+/// Implements worker.
+///
+/// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+/// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
 fn spawn_worker() -> (
     Sender<WorkerRequest>,
     Receiver<WorkerResponse>,
@@ -3591,6 +3999,10 @@ fn spawn_worker() -> (
     (request_tx, response_rx, handle)
 }
 
+/// Implements loop.
+///
+/// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+/// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
 fn worker_loop(
     request_rx: Receiver<WorkerRequest>,
     response_tx: Sender<WorkerResponse>,
@@ -3714,6 +4126,10 @@ fn worker_loop(
     }
 }
 
+/// Implements load dataset.
+///
+/// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+/// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
 fn handle_load_dataset(path: PathBuf) -> Result<WorkerResponse, String> {
     let extension = path
         .extension()
@@ -3747,6 +4163,10 @@ fn handle_load_dataset(path: PathBuf) -> Result<WorkerResponse, String> {
     })
 }
 
+/// Implements calculate descriptors.
+///
+/// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+/// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
 fn handle_calculate_descriptors(
     mut molecules: Vec<Molecule>,
     descriptors: Vec<BatchDescriptor>,
@@ -3810,6 +4230,10 @@ fn handle_calculate_descriptors(
     })
 }
 
+/// Implements train model.
+///
+/// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+/// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
 fn handle_train_model(
     matrix: FeatureMatrixPayload,
     target_series: Vec<(String, Vec<f64>)>,
@@ -3979,6 +4403,10 @@ fn handle_train_model(
     })
 }
 
+/// Implements art2a clustering.
+///
+/// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+/// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
 fn handle_art2a_clustering(
     matrix: FeatureMatrixPayload,
     config: Art2aConfig,
@@ -4066,6 +4494,10 @@ fn handle_art2a_clustering(
     })
 }
 
+/// Implements predict file.
+///
+/// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+/// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
 fn handle_predict_file(
     path: PathBuf,
     pipeline_bundle_bytes: Option<Vec<u8>>,
@@ -4252,6 +4684,10 @@ fn handle_predict_file(
     })
 }
 
+/// Implements pipeline bundle.
+///
+/// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+/// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
 fn decode_pipeline_bundle(
     bytes: &[u8],
     primary_target: &str,
@@ -4270,6 +4706,10 @@ fn decode_pipeline_bundle(
     Ok(bundle[0].1.clone())
 }
 
+/// Trains pipeline.
+///
+/// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+/// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
 fn train_pipeline(data: &QsarDataset, config: &MlTrainingConfig) -> Result<QsarPipeline, String> {
     if data.n_samples() < 3 {
         return Err("Need at least 3 samples for training.".to_string());
@@ -4311,6 +4751,10 @@ fn train_pipeline(data: &QsarDataset, config: &MlTrainingConfig) -> Result<QsarP
     }
 }
 
+/// Implements dataset.
+///
+/// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+/// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
 fn split_dataset(
     data: &QsarDataset,
     smiles: &[String],
@@ -4341,6 +4785,10 @@ fn split_dataset(
     Ok(split)
 }
 
+/// Implements keys for molecules.
+///
+/// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+/// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
 fn scaffold_keys_for_molecules(molecules: &[Molecule]) -> Vec<String> {
     molecules
         .iter()
@@ -4379,6 +4827,10 @@ fn scaffold_keys_for_molecules(molecules: &[Molecule]) -> Vec<String> {
         .collect()
 }
 
+/// Trains rf pipeline.
+///
+/// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+/// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
 fn train_rf_pipeline(
     data: &QsarDataset,
     scaled: Array2<f64>,
@@ -4438,6 +4890,10 @@ fn train_rf_pipeline(
     })
 }
 
+/// Trains knn pipeline.
+///
+/// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+/// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
 fn train_knn_pipeline(
     data: &QsarDataset,
     scaled: Array2<f64>,
@@ -4489,6 +4945,10 @@ fn train_knn_pipeline(
     })
 }
 
+/// Trains pls pipeline.
+///
+/// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+/// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
 fn train_pls_pipeline(
     data: &QsarDataset,
     scaled: Array2<f64>,
@@ -4531,6 +4991,10 @@ fn train_pls_pipeline(
     })
 }
 
+/// Trains elastic net pipeline.
+///
+/// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+/// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
 fn train_elastic_net_pipeline(
     data: &QsarDataset,
     scaled: Array2<f64>,
@@ -4574,6 +5038,10 @@ fn train_elastic_net_pipeline(
     })
 }
 
+/// Implements regression q2 configurable.
+///
+/// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+/// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
 fn cv_regression_q2_configurable<F>(
     features: &Array2<f64>,
     targets: &Array1<f64>,
@@ -4612,6 +5080,10 @@ where
     metrics::q_squared(&target_values, &all_preds)
 }
 
+/// Implements correlation.
+///
+/// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+/// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
 fn pearson_correlation(actual: &[f64], predicted: &[f64]) -> f64 {
     if actual.len() != predicted.len() || actual.is_empty() {
         return 0.0;
@@ -4633,6 +5105,10 @@ fn pearson_correlation(actual: &[f64], predicted: &[f64]) -> f64 {
     if denom <= 1e-15 { 0.0 } else { num / denom }
 }
 
+/// Implements export predictions.
+///
+/// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+/// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
 fn handle_export_predictions(
     path: PathBuf,
     target_names: Vec<String>,
@@ -4681,6 +5157,10 @@ fn handle_export_predictions(
     })
 }
 
+/// Implements apply variance filter.
+///
+/// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+/// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
 fn handle_apply_variance_filter(
     matrix: FeatureMatrixPayload,
     threshold: f64,
@@ -4722,6 +5202,10 @@ fn handle_apply_variance_filter(
     })
 }
 
+/// Implements apply correlation filter.
+///
+/// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+/// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
 fn handle_apply_correlation_filter(
     matrix: FeatureMatrixPayload,
     threshold: f64,
@@ -4766,6 +5250,10 @@ fn handle_apply_correlation_filter(
     })
 }
 
+/// Implements export feature matrix.
+///
+/// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+/// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
 fn handle_export_feature_matrix(
     path: PathBuf,
     smiles: Vec<String>,
@@ -4808,6 +5296,10 @@ fn handle_export_feature_matrix(
     })
 }
 
+/// Implements feature columns.
+///
+/// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+/// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
 fn select_feature_columns(
     matrix: FeatureMatrixPayload,
     keep: &[usize],
@@ -4858,6 +5350,10 @@ fn select_feature_columns(
     })
 }
 
+/// Implements feature subset to flat.
+///
+/// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+/// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
 fn apply_feature_subset_to_flat(
     matrix: &FlatDescriptorMatrix,
     selected_feature_indices: &[usize],
@@ -4885,6 +5381,10 @@ fn apply_feature_subset_to_flat(
     })
 }
 
+/// Loads dataset from csv.
+///
+/// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+/// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
 fn load_dataset_from_csv(
     path: &Path,
 ) -> Result<
@@ -4920,6 +5420,10 @@ fn load_dataset_from_csv(
     Ok((molecules, smiles_vec, properties_vec, failed_rows))
 }
 
+/// Loads dataset from smi.
+///
+/// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+/// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
 fn load_dataset_from_smi(
     path: &Path,
 ) -> Result<
@@ -4969,6 +5473,10 @@ fn load_dataset_from_smi(
     Ok((molecules, smiles_vec, properties_vec, failed_rows))
 }
 
+/// Implements feature names.
+///
+/// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+/// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
 fn descriptor_feature_names(descriptors: &[BatchDescriptor]) -> Vec<String> {
     let mut names = Vec::new();
     for descriptor in descriptors {
@@ -4984,6 +5492,10 @@ fn descriptor_feature_names(descriptors: &[BatchDescriptor]) -> Vec<String> {
     names
 }
 
+/// Implements targets.
+///
+/// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+/// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
 fn extract_targets(
     properties: &[Vec<(String, String)>],
     target_column: &str,
@@ -5024,6 +5536,10 @@ fn extract_targets(
     Ok(targets)
 }
 
+/// Builds profiles.
+///
+/// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+/// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
 fn build_profiles(matrix: &FeatureMatrixPayload) -> Vec<DescriptorProfileRow> {
     if matrix.rows == 0 || matrix.cols == 0 {
         return Vec::new();
@@ -5069,6 +5585,10 @@ fn build_profiles(matrix: &FeatureMatrixPayload) -> Vec<DescriptorProfileRow> {
     output
 }
 
+/// Builds projection.
+///
+/// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+/// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
 fn build_projection(matrix: &FeatureMatrixPayload) -> Option<ProjectionData> {
     if matrix.rows < 3 || matrix.cols < 2 {
         return None;
@@ -5101,6 +5621,10 @@ fn build_projection(matrix: &FeatureMatrixPayload) -> Option<ProjectionData> {
     })
 }
 
+/// Implements points by values.
+///
+/// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+/// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
 fn bucket_points_by_values(
     points: &[(f64, f64)],
     values: &[f64],
@@ -5136,6 +5660,10 @@ fn bucket_points_by_values(
     Some((low, mid, high))
 }
 
+/// Implements param label.
+///
+/// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+/// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
 fn ml_param_label(param: MlParamKey) -> &'static str {
     match param {
         MlParamKey::CvFolds => "CV folds",
@@ -5157,6 +5685,10 @@ fn ml_param_label(param: MlParamKey) -> &'static str {
     }
 }
 
+/// Implements rows.
+///
+/// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+/// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
 fn select_rows(data: &Array2<f64>, indices: &[usize]) -> Array2<f64> {
     let ncols = data.ncols();
     let mut result = Array2::<f64>::zeros((indices.len(), ncols));
@@ -5166,10 +5698,18 @@ fn select_rows(data: &Array2<f64>, indices: &[usize]) -> Array2<f64> {
     result
 }
 
+/// Implements elements.
+///
+/// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+/// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
 fn select_elements(data: &Array1<f64>, indices: &[usize]) -> Array1<f64> {
     Array1::from_vec(indices.iter().map(|&i| data[i]).collect())
 }
 
+/// Implements points by clusters.
+///
+/// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+/// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
 fn bucket_points_by_clusters(
     points: &[(f64, f64)],
     labels: &[usize],
@@ -5209,6 +5749,10 @@ fn bucket_points_by_clusters(
     Some(kept)
 }
 
+/// Implements points by binary flags.
+///
+/// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+/// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
 fn bucket_points_by_binary_flags(
     points: &[(f64, f64)],
     flags: &[bool],
@@ -5228,6 +5772,10 @@ fn bucket_points_by_binary_flags(
     Some((in_domain, out_domain))
 }
 
+/// Implements top feature importances.
+///
+/// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+/// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
 fn extract_top_feature_importances(
     pipeline: &QsarPipeline,
     feature_names: &[String],
@@ -5270,6 +5818,10 @@ fn extract_top_feature_importances(
     indexed.into_iter().take(top_n).collect()
 }
 
+/// Implements distribution bins.
+///
+/// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+/// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
 fn residual_distribution_bins(
     residuals: &[f64],
     mean: f64,
@@ -5311,6 +5863,10 @@ fn residual_distribution_bins(
     ]
 }
 
+/// Implements label.
+///
+/// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+/// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
 fn truncate_label(input: &str, max_len: usize) -> String {
     if input.chars().count() <= max_len {
         return input.to_string();
@@ -5324,6 +5880,10 @@ fn truncate_label(input: &str, max_len: usize) -> String {
     out
 }
 
+/// Reads browser entries.
+///
+/// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+/// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
 fn read_browser_entries(dir: &Path) -> io::Result<Vec<PathBuf>> {
     let mut entries = Vec::new();
 
@@ -5355,6 +5915,10 @@ fn read_browser_entries(dir: &Path) -> io::Result<Vec<PathBuf>> {
     Ok(entries)
 }
 
+/// Checks whether supported data file.
+///
+/// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+/// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
 fn is_supported_data_file(path: &Path) -> bool {
     matches!(
         path.extension().and_then(|ext| ext.to_str()),

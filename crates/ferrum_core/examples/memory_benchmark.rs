@@ -2,11 +2,46 @@
 //!
 //! Demonstrates memory-efficient bit-packed fingerprints.
 
+
+//! ## File guide: Memory Benchmark
+//!
+//! This file belongs to FerrumChem's **library support layer**.
+//!
+//! What to learn here:
+//! - Which chemistry/ML concern this file owns in the pipeline.
+//! - How Rust types and control-flow encode that concern.
+//! - Which public symbols are the best entry points for reading/debugging.
+//!
+//! Key symbols in this file:
+//! - `fn main`
+//! - `fn format_number`
+//!
+//! Suggested reading workflow:
+//! 1. Read top-level type definitions and public APIs.
+//! 2. Trace helper functions used in hot/critical paths.
+//! 3. Cross-reference tests/examples that exercise this file.
+
+//!
+//! ### Algorithmic assumptions for this file
+//! - `Memory Benchmark` is a task-focused executable; CLI environment variables are part of the stable workflow contract.
+//! - `Memory Benchmark` should keep parse/descriptor/model behavior aligned with `ferrum_core` defaults to avoid demo drift.
+//! - Benchmark/demo paths in `Memory Benchmark` prefer deterministic setup to keep measurements comparable over time.
+//! - Specific scope anchor: `crates/ferrum_core/examples/memory_benchmark.rs` defines memory benchmark behavior and should be updated together with its direct tests.
+//! ### Chemistry/ML references
+//! - Rust CLI patterns (argument/env handling, structured errors, stdout diagnostics) reflected by `Memory Benchmark`.
+//! - FerrumChem benchmark/parity methodology documents referenced by `Memory Benchmark` scripts.
+//! - Terminal UX libraries (where applicable) used by `Memory Benchmark` for interactive workflows.
+//! - Code-local source of truth: symbols and tests declared in `crates/ferrum_core/examples/memory_benchmark.rs`.
+
 use ferrum_core::algo::aromaticity::perceive_aromaticity;
 use ferrum_core::desc::maccs::MaccsKeys;
 use ferrum_core::desc::typed::Descriptor;
 use ferrum_core::io::smiles::parse_smiles;
 
+/// Runs this executable entrypoint and orchestrates its top-level workflow.
+///
+/// Function context: `crates/ferrum_core/examples/memory_benchmark.rs`.
+/// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
 fn main() {
     println!("═══════════════════════════════════════════════════════════════");
     println!("  FerrumChem Memory Benchmark: Bit-Packed Fingerprints");
@@ -84,6 +119,10 @@ fn main() {
     println!("═══════════════════════════════════════════════════════════════");
 }
 
+/// Implements number.
+///
+/// Function context: `crates/ferrum_core/examples/memory_benchmark.rs`.
+/// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
 fn format_number(n: usize) -> String {
     if n >= 1_000_000 {
         format!("{}M", n / 1_000_000)

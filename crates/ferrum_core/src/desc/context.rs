@@ -1,3 +1,45 @@
+//! Descriptor module: Context.
+//!
+//! This file implements one descriptor family (or supporting descriptor glue)
+//! used in QSAR pipelines. Descriptors convert molecular structure into typed
+//! numerical or binary features consumed by ML and analytics layers.
+//!
+//! Learning focus:
+//! - Implementing stateless descriptor structs in Rust.
+//! - Mapping chemistry concepts to reproducible numeric features.
+
+
+//! ## File guide: Context
+//!
+//! This file belongs to FerrumChem's **descriptor/fingerprint feature layer**.
+//!
+//! What to learn here:
+//! - Which chemistry/ML concern this file owns in the pipeline.
+//! - How Rust types and control-flow encode that concern.
+//! - Which public symbols are the best entry points for reading/debugging.
+//!
+//! Key symbols in this file:
+//! - `struct CalculationContext`
+//! - `fn new`
+//! - `fn reset_for_new_molecule`
+//!
+//! Suggested reading workflow:
+//! 1. Read top-level type definitions and public APIs.
+//! 2. Trace helper functions used in hot/critical paths.
+//! 3. Cross-reference tests/examples that exercise this file.
+
+//!
+//! ### Algorithmic assumptions for this file
+//! - `Context` assumes molecule preprocessing (implicit hydrogens, aromaticity flags, and ring annotations) is current before calculation.
+//! - `Context` remains deterministic for identical atom/bond indexing so batch and single-molecule runs agree bit-for-bit.
+//! - Typed `DescriptorValue` output is part of the contract; downstream ML code should not rely on ad-hoc coercions.
+//! - Specific scope anchor: `crates/ferrum_core/src/desc/context.rs` defines context behavior and should be updated together with its direct tests.
+//! ### Chemistry/ML references
+//! - Todeschini & Consonni. Handbook of Molecular Descriptors (general descriptor taxonomy).
+//! - RDKit descriptor/fingerprint APIs used as practical parity baselines for `Context` workflows.
+//! - Repository unit and parity tests covering `Context` behavior and edge molecules.
+//! - Code-local source of truth: symbols and tests declared in `crates/ferrum_core/src/desc/context.rs`.
+
 use crate::mol::molecule::Molecule;
 use smallvec::SmallVec;
 
@@ -30,6 +72,10 @@ pub struct CalculationContext {
 }
 
 impl CalculationContext {
+    /// Creates a new value with the defaults and invariants required by this module.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/context.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     pub fn new() -> Self {
         Self {
             dist_u8: Vec::new(),
@@ -52,6 +98,10 @@ impl CalculationContext {
         }
     }
 
+    /// Implements for new molecule.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/context.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     pub fn reset_for_new_molecule(&mut self) {
         self.has_dist_u8 = false;
         self.has_dist_bo = false;

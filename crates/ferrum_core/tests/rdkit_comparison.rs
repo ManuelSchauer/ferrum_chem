@@ -6,6 +6,38 @@
 //! This test is diagnostic: it prints a detailed comparison report showing which
 //! descriptors match RDKit and which differ, with tolerance levels.
 
+
+//! ## File guide: Rdkit Comparison
+//!
+//! This file belongs to FerrumChem's **integration/diagnostic validation layer**.
+//!
+//! What to learn here:
+//! - Which chemistry/ML concern this file owns in the pipeline.
+//! - How Rust types and control-flow encode that concern.
+//! - Which public symbols are the best entry points for reading/debugging.
+//!
+//! Key symbols in this file:
+//! - `struct ScalarCheck`
+//! - `enum ExtractKind`
+//! - `struct CompResult`
+//! - `fn reference_row_limit`
+//! - `fn load_reference`
+//!
+//! Suggested reading workflow:
+//! 1. Read top-level type definitions and public APIs.
+//! 2. Trace helper functions used in hot/critical paths.
+//! 3. Cross-reference tests/examples that exercise this file.
+
+//!
+//! ### Algorithmic assumptions for this file
+//! - CSV fixture columns are treated as authoritative RDKit ground truth for mapped descriptor families.
+//! - Per-family tolerances (`TIGHT_TOL`, `MEDIUM_TOL`, etc.) represent acceptable numeric drift, not exact equality.
+//! - Failures should remain diagnostic (print-rich) so parity regressions can be triaged descriptor-by-descriptor.
+//! ### Chemistry/ML references
+//! - RDKit descriptor implementations and generated reference CSV from `scripts/generate_rdkit_reference.py`.
+//! - Floating-point comparison best practices for scientific software regression testing.
+//! - Repository parity-policy decisions documented in test constants and fixture generation scripts.
+
 use ferrum_core::desc::typed::{Descriptor, DescriptorValue};
 use ferrum_core::io::smiles::parse_smiles;
 
@@ -70,6 +102,10 @@ struct CompResult {
 
 const DEFAULT_MAX_REFERENCE_ROWS: usize = 500;
 
+/// Implements row limit.
+///
+/// Function context: `crates/ferrum_core/tests/rdkit_comparison.rs`.
+/// Test-layer note: this assertion path pins expected behavior to prevent regressions.
 fn reference_row_limit() -> usize {
     env::var("FERRUM_RDKIT_REFERENCE_ROWS")
         .ok()
@@ -78,6 +114,10 @@ fn reference_row_limit() -> usize {
         .unwrap_or(DEFAULT_MAX_REFERENCE_ROWS)
 }
 
+/// Loads reference.
+///
+/// Function context: `crates/ferrum_core/tests/rdkit_comparison.rs`.
+/// Test-layer note: this assertion path pins expected behavior to prevent regressions.
 fn load_reference() -> Vec<(String, String, HashMap<String, String>)> {
     let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/rdkit_reference_coconut.csv");
     let mut rdr = csv::Reader::from_path(&path)
@@ -106,6 +146,10 @@ fn load_reference() -> Vec<(String, String, HashMap<String, String>)> {
     out
 }
 
+/// Parses csv f64.
+///
+/// Function context: `crates/ferrum_core/tests/rdkit_comparison.rs`.
+/// Test-layer note: this assertion path pins expected behavior to prevent regressions.
 fn parse_csv_f64(s: &str) -> Option<f64> {
     if s == "NaN" || s.is_empty() {
         None
@@ -116,6 +160,10 @@ fn parse_csv_f64(s: &str) -> Option<f64> {
 
 // ── Scalar Descriptor List ──────────────────────────────────────────────────
 
+/// Implements checks.
+///
+/// Function context: `crates/ferrum_core/tests/rdkit_comparison.rs`.
+/// Test-layer note: this assertion path pins expected behavior to prevent regressions.
 fn scalar_checks() -> Vec<ScalarCheck> {
     vec![
         ScalarCheck {
@@ -277,6 +325,10 @@ fn scalar_checks() -> Vec<ScalarCheck> {
 
 // ── Reporting Helpers ───────────────────────────────────────────────────────
 
+/// Implements separator.
+///
+/// Function context: `crates/ferrum_core/tests/rdkit_comparison.rs`.
+/// Test-layer note: this assertion path pins expected behavior to prevent regressions.
 fn print_separator(title: &str) {
     let sep = "=".repeat(90);
     eprintln!("\n{sep}");
@@ -284,6 +336,10 @@ fn print_separator(title: &str) {
     eprintln!("{sep}");
 }
 
+/// Implements summary.
+///
+/// Function context: `crates/ferrum_core/tests/rdkit_comparison.rs`.
+/// Test-layer note: this assertion path pins expected behavior to prevent regressions.
 fn print_summary(results: &[CompResult], section: &str) {
     let total = results.len();
     let passed = results.iter().filter(|r| r.passed).count();
@@ -370,6 +426,10 @@ fn print_summary(results: &[CompResult], section: &str) {
 // ── Test: Scalar Descriptors ────────────────────────────────────────────────
 
 #[test]
+/// Runs regression test for rdkit scalar descriptors.
+///
+/// Function context: `crates/ferrum_core/tests/rdkit_comparison.rs`.
+/// Test-layer note: this assertion path pins expected behavior to prevent regressions.
 fn rdkit_scalar_descriptors() {
     let reference = load_reference();
     let checks = scalar_checks();
@@ -437,6 +497,10 @@ fn rdkit_scalar_descriptors() {
 
 // ── Test: VSA Descriptors ───────────────────────────────────────────────────
 
+/// Implements vec.
+///
+/// Function context: `crates/ferrum_core/tests/rdkit_comparison.rs`.
+/// Test-layer note: this assertion path pins expected behavior to prevent regressions.
 fn compare_vec(
     desc: &dyn Descriptor,
     smiles: &str,
@@ -484,6 +548,10 @@ fn compare_vec(
 }
 
 #[test]
+/// Runs regression test for rdkit vsa descriptors.
+///
+/// Function context: `crates/ferrum_core/tests/rdkit_comparison.rs`.
+/// Test-layer note: this assertion path pins expected behavior to prevent regressions.
 fn rdkit_vsa_descriptors() {
     let reference = load_reference();
     let slogp_cols: Vec<String> = (1..=12).map(|i| format!("SlogP_VSA{i}")).collect();
@@ -516,6 +584,10 @@ fn rdkit_vsa_descriptors() {
 // ── Test: Chi & Kappa Indices ───────────────────────────────────────────────
 
 #[test]
+/// Runs regression test for rdkit chi kappa indices.
+///
+/// Function context: `crates/ferrum_core/tests/rdkit_comparison.rs`.
+/// Test-layer note: this assertion path pins expected behavior to prevent regressions.
 fn rdkit_chi_kappa_indices() {
     let reference = load_reference();
 
@@ -583,6 +655,10 @@ fn rdkit_chi_kappa_indices() {
 // ── Test: Ring Descriptors ──────────────────────────────────────────────────
 
 #[test]
+/// Runs regression test for rdkit ring descriptors.
+///
+/// Function context: `crates/ferrum_core/tests/rdkit_comparison.rs`.
+/// Test-layer note: this assertion path pins expected behavior to prevent regressions.
 fn rdkit_ring_descriptors() {
     let reference = load_reference();
     let mut results = Vec::new();

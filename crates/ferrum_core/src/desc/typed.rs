@@ -40,6 +40,40 @@
 //! }
 //! ```
 
+
+//! ## File guide: Typed
+//!
+//! This file belongs to FerrumChem's **descriptor/fingerprint feature layer**.
+//!
+//! What to learn here:
+//! - Which chemistry/ML concern this file owns in the pipeline.
+//! - How Rust types and control-flow encode that concern.
+//! - Which public symbols are the best entry points for reading/debugging.
+//!
+//! Key symbols in this file:
+//! - `type BitVector`
+//! - `enum DescriptorValue`
+//! - `fn to_floats`
+//! - `fn len`
+//! - `fn is_empty`
+//!
+//! Suggested reading workflow:
+//! 1. Read top-level type definitions and public APIs.
+//! 2. Trace helper functions used in hot/critical paths.
+//! 3. Cross-reference tests/examples that exercise this file.
+
+//!
+//! ### Algorithmic assumptions for this file
+//! - `Typed` assumes molecule preprocessing (implicit hydrogens, aromaticity flags, and ring annotations) is current before calculation.
+//! - `Typed` remains deterministic for identical atom/bond indexing so batch and single-molecule runs agree bit-for-bit.
+//! - Typed `DescriptorValue` output is part of the contract; downstream ML code should not rely on ad-hoc coercions.
+//! - Specific scope anchor: `crates/ferrum_core/src/desc/typed.rs` defines typed behavior and should be updated together with its direct tests.
+//! ### Chemistry/ML references
+//! - Todeschini & Consonni. Handbook of Molecular Descriptors (general descriptor taxonomy).
+//! - RDKit descriptor/fingerprint APIs used as practical parity baselines for `Typed` workflows.
+//! - Repository unit and parity tests covering `Typed` behavior and edge molecules.
+//! - Code-local source of truth: symbols and tests declared in `crates/ferrum_core/src/desc/typed.rs`.
+
 use crate::mol::molecule::Molecule;
 use bitvec::prelude::*;
 
@@ -353,6 +387,10 @@ pub fn build_ml_vectors_parallel(
 // ---------------------------------------------------------------------------
 
 const _: () = {
+    /// Asserts send sync to guard invariants.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/typed.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     const fn assert_send_sync<T: Send + Sync>() {}
     let _ = assert_send_sync::<DescriptorValue>;
 };
@@ -366,6 +404,10 @@ mod tests {
     use super::*;
 
     #[test]
+    /// Runs regression test for int to floats.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/typed.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_int_to_floats() {
         let value = DescriptorValue::Int(42);
         let mut vec = Vec::new();
@@ -375,6 +417,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for float to floats.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/typed.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_float_to_floats() {
         let value = DescriptorValue::Float(3.14);
         let mut vec = Vec::new();
@@ -384,6 +430,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for int vec to floats.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/typed.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_int_vec_to_floats() {
         let value = DescriptorValue::IntVec(vec![1, 2, 3]);
         let mut vec = Vec::new();
@@ -393,6 +443,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for float vec to floats.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/typed.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_float_vec_to_floats() {
         let value = DescriptorValue::FloatVec(vec![1.1, 2.2, 3.3]);
         let mut vec = Vec::new();
@@ -402,6 +456,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for binary to floats.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/typed.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_binary_to_floats() {
         let bv = bitvec![u8, Lsb0; 1, 0, 1, 1, 0];
         let value = DescriptorValue::Binary(bv);
@@ -412,6 +470,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for from bits.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/typed.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_from_bits() {
         let bits = vec![true, false, true];
         let value = DescriptorValue::from_bits(&bits);
@@ -427,30 +489,50 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for extract int.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/typed.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_extract_int() {
         let value = DescriptorValue::Int(99);
         assert_eq!(value.as_int(), 99);
     }
 
     #[test]
+    /// Runs regression test for extract float.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/typed.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_extract_float() {
         let value = DescriptorValue::Float(1.23);
         assert_eq!(value.as_float(), 1.23);
     }
 
     #[test]
+    /// Runs regression test for extract int vec.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/typed.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_extract_int_vec() {
         let value = DescriptorValue::IntVec(vec![1, 2, 3]);
         assert_eq!(value.as_int_vec(), &[1, 2, 3]);
     }
 
     #[test]
+    /// Runs regression test for extract float vec.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/typed.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_extract_float_vec() {
         let value = DescriptorValue::FloatVec(vec![1.1, 2.2]);
         assert_eq!(value.as_float_vec(), &[1.1, 2.2]);
     }
 
     #[test]
+    /// Runs regression test for extract binary.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/typed.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_extract_binary() {
         let bv = bitvec![u8, Lsb0; 1, 0, 1];
         let value = DescriptorValue::Binary(bv.clone());
@@ -458,6 +540,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for is empty.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/typed.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_is_empty() {
         assert!(!DescriptorValue::Int(1).is_empty());
         assert!(!DescriptorValue::Binary(bitvec![u8, Lsb0; 1]).is_empty());
@@ -466,6 +552,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for binary memory efficiency.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/typed.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_binary_memory_efficiency() {
         // 166 bits (MACCS size)
         let bv = bitvec![u8, Lsb0; 0; 166];
@@ -487,16 +577,28 @@ mod tests {
     struct ExampleDescriptor;
 
     impl Descriptor for ExampleDescriptor {
+        /// Implements the behavior encoded by this function.
+        ///
+        /// Function context: `crates/ferrum_core/src/desc/typed.rs`.
+        /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
         fn name(&self) -> &str {
             "Example"
         }
 
+        /// Calculates the behavior encoded by this function.
+        ///
+        /// Function context: `crates/ferrum_core/src/desc/typed.rs`.
+        /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
         fn calculate(&self, mol: &mut Molecule, ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
             DescriptorValue::Int(mol.num_atoms() as u32)
         }
     }
 
     #[test]
+    /// Runs regression test for descriptor trait.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/typed.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_descriptor_trait() {
         use crate::io::smiles::parse_smiles;
 
@@ -509,6 +611,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for build ml vector.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/typed.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_build_ml_vector() {
         use crate::io::smiles::parse_smiles;
 

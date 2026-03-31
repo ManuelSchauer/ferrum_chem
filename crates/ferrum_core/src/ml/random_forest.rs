@@ -3,6 +3,40 @@
 //! Supports both regression and classification.
 //! Optimized for binary fingerprint features.
 
+
+//! ## File guide: Random Forest
+//!
+//! This file belongs to FerrumChem's **machine-learning pipeline layer**.
+//!
+//! What to learn here:
+//! - Which chemistry/ML concern this file owns in the pipeline.
+//! - How Rust types and control-flow encode that concern.
+//! - Which public symbols are the best entry points for reading/debugging.
+//!
+//! Key symbols in this file:
+//! - `enum TreeNode`
+//! - `fn predict`
+//! - `struct DecisionTreeBuilder`
+//! - `fn build`
+//! - `fn leaf_value`
+//!
+//! Suggested reading workflow:
+//! 1. Read top-level type definitions and public APIs.
+//! 2. Trace helper functions used in hot/critical paths.
+//! 3. Cross-reference tests/examples that exercise this file.
+
+//!
+//! ### Algorithmic assumptions for this file
+//! - `Random Forest` assumes `ndarray` row-major sample layout (`n_samples x n_features`) throughout fit/predict paths.
+//! - `Random Forest` prioritizes reproducibility via explicit seeds and deterministic iteration order where applicable.
+//! - Model quality metrics for `Random Forest` depend on consistent preprocessing choices (scaling, splitting, and leakage control).
+//! - Specific scope anchor: `crates/ferrum_core/src/ml/random_forest.rs` defines random forest behavior and should be updated together with its direct tests.
+//! ### Chemistry/ML references
+//! - Canonical ML literature for `Random Forest` algorithm family (statistical learning and validation texts).
+//! - scikit-learn/RDKit-style API ergonomics that inform `Random Forest` fit/transform/predict contracts.
+//! - OECD QSAR validation principles where `Random Forest` is used in predictive chemistry contexts.
+//! - Code-local source of truth: symbols and tests declared in `crates/ferrum_core/src/ml/random_forest.rs`.
+
 use ndarray::{Array1, Array2};
 use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
@@ -28,6 +62,10 @@ enum TreeNode {
 }
 
 impl TreeNode {
+    /// Predicts the behavior encoded by this function.
+    ///
+    /// Function context: `crates/ferrum_core/src/ml/random_forest.rs`.
+    /// ML-layer note: numerical stability and reproducibility are important for comparable model evaluation.
     fn predict(&self, sample: &[f64]) -> f64 {
         match self {
             TreeNode::Leaf { value } => *value,
@@ -60,6 +98,10 @@ struct DecisionTreeBuilder {
 }
 
 impl DecisionTreeBuilder {
+    /// Builds the behavior encoded by this function.
+    ///
+    /// Function context: `crates/ferrum_core/src/ml/random_forest.rs`.
+    /// ML-layer note: numerical stability and reproducibility are important for comparable model evaluation.
     fn build(
         &self,
         features: &Array2<f64>,
@@ -241,6 +283,10 @@ impl DecisionTreeBuilder {
         }
     }
 
+    /// Implements value.
+    ///
+    /// Function context: `crates/ferrum_core/src/ml/random_forest.rs`.
+    /// ML-layer note: numerical stability and reproducibility are important for comparable model evaluation.
     fn leaf_value(&self, targets: &[f64], indices: &[usize]) -> f64 {
         if indices.is_empty() {
             return 0.0;
@@ -453,6 +499,10 @@ impl RandomForestClassifier {
     }
 }
 
+/// Implements tree seed.
+///
+/// Function context: `crates/ferrum_core/src/ml/random_forest.rs`.
+/// ML-layer note: numerical stability and reproducibility are important for comparable model evaluation.
 fn derive_tree_seed(base_seed: u64, tree_idx: usize) -> u64 {
     let mut z = base_seed ^ ((tree_idx as u64).wrapping_add(0x9E37_79B9_7F4A_7C15));
     z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
@@ -483,6 +533,10 @@ mod tests {
     use ndarray::{Array2, array};
 
     #[test]
+    /// Runs regression test for rf regressor basic.
+    ///
+    /// Function context: `crates/ferrum_core/src/ml/random_forest.rs`.
+    /// ML-layer note: numerical stability and reproducibility are important for comparable model evaluation.
     fn test_rf_regressor_basic() {
         // Simple linear relationship: y = x
         let features =
@@ -500,6 +554,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for rf classifier basic.
+    ///
+    /// Function context: `crates/ferrum_core/src/ml/random_forest.rs`.
+    /// ML-layer note: numerical stability and reproducibility are important for comparable model evaluation.
     fn test_rf_classifier_basic() {
         // Two clusters
         let mut feat_data = Vec::new();
@@ -519,6 +577,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for rf feature importances.
+    ///
+    /// Function context: `crates/ferrum_core/src/ml/random_forest.rs`.
+    /// ML-layer note: numerical stability and reproducibility are important for comparable model evaluation.
     fn test_rf_feature_importances() {
         // Feature 0 is informative, feature 1 is noise
         let n = 50;
@@ -543,6 +605,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for rf batch predict.
+    ///
+    /// Function context: `crates/ferrum_core/src/ml/random_forest.rs`.
+    /// ML-layer note: numerical stability and reproducibility are important for comparable model evaluation.
     fn test_rf_batch_predict() {
         let features =
             Array2::from_shape_vec((10, 1), (0..10).map(|i| i as f64).collect()).unwrap();
@@ -560,6 +626,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for rf classifier probability.
+    ///
+    /// Function context: `crates/ferrum_core/src/ml/random_forest.rs`.
+    /// ML-layer note: numerical stability and reproducibility are important for comparable model evaluation.
     fn test_rf_classifier_probability() {
         let mut feat = Vec::new();
         let mut tgt = Vec::new();

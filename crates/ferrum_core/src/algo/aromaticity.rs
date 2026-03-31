@@ -1,3 +1,47 @@
+//! Aromaticity algorithms.
+//!
+//! This module contains core cheminformatics graph logic used by parsers and
+//! descriptors. The implementations prioritize determinism, correctness, and
+//! predictable performance on large molecular batches.
+//!
+//! Learning focus:
+//! - Graph traversal and indexing patterns over atom/bond adjacency.
+//! - Performance-oriented Rust design in numerically heavy code paths.
+
+
+//! ## File guide: Aromaticity
+//!
+//! This file belongs to FerrumChem's **cheminformatics algorithm layer**.
+//!
+//! What to learn here:
+//! - Which chemistry/ML concern this file owns in the pipeline.
+//! - How Rust types and control-flow encode that concern.
+//! - Which public symbols are the best entry points for reading/debugging.
+//!
+//! Key symbols in this file:
+//! - `enum RingDedupKey`
+//! - `fn perceive_aromaticity`
+//! - `struct KekulizedPerimeter`
+//! - `fn ring_set_key`
+//! - `fn ring_dedup_key`
+//!
+//! Suggested reading workflow:
+//! 1. Read top-level type definitions and public APIs.
+//! 2. Trace helper functions used in hot/critical paths.
+//! 3. Cross-reference tests/examples that exercise this file.
+
+//!
+//! ### Algorithmic assumptions for this file
+//! - `Aromaticity` operates on 2D molecular graphs (atoms/bonds) and does not consume conformer geometry.
+//! - `Aromaticity` relies on stable `AtomIdx`/`BondIdx` semantics and adjacency invariants from `mol::molecule`.
+//! - Performance paths in `Aromaticity` prefer deterministic pruning/caching over probabilistic heuristics.
+//! - Specific scope anchor: `crates/ferrum_core/src/algo/aromaticity.rs` defines aromaticity behavior and should be updated together with its direct tests.
+//! ### Chemistry/ML references
+//! - Core graph algorithm literature relevant to `Aromaticity` (traversal, cycle, isomorphism, or canonicalization topics).
+//! - Cheminformatics toolkit conventions (RDKit/CDK/OpenBabel) mirrored by `Aromaticity` decisions.
+//! - FerrumChem regression tests that pin `Aromaticity` behavior on representative molecules.
+//! - Code-local source of truth: symbols and tests declared in `crates/ferrum_core/src/algo/aromaticity.rs`.
+
 use crate::algo::rings::find_sssr;
 use crate::mol::molecule::Molecule;
 use crate::types::{AtomIdx, BondType};
@@ -176,6 +220,10 @@ struct KekulizedPerimeter {
     chord_bond_idx: usize,
 }
 
+/// Implements set key.
+///
+/// Function context: `crates/ferrum_core/src/algo/aromaticity.rs`.
+/// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
 fn ring_set_key(ring: &[AtomIdx]) -> Vec<AtomIdx> {
     let mut key = ring.to_vec();
     key.sort_unstable();
@@ -183,6 +231,10 @@ fn ring_set_key(ring: &[AtomIdx]) -> Vec<AtomIdx> {
     key
 }
 
+/// Implements dedup key.
+///
+/// Function context: `crates/ferrum_core/src/algo/aromaticity.rs`.
+/// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
 fn ring_dedup_key(ring: &[AtomIdx]) -> RingDedupKey {
     let mut mask = 0u128;
     for &idx in ring {
@@ -194,6 +246,10 @@ fn ring_dedup_key(ring: &[AtomIdx]) -> RingDedupKey {
     RingDedupKey::Small(mask)
 }
 
+/// Implements aromaticity ring candidates.
+///
+/// Function context: `crates/ferrum_core/src/algo/aromaticity.rs`.
+/// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
 fn collect_aromaticity_ring_candidates(mol: &mut Molecule) -> Vec<Vec<AtomIdx>> {
     // Seed from legacy SSSR to preserve current behavior and ring flags.
     let sssr_rings = find_sssr(mol);
@@ -248,6 +304,10 @@ fn find_local_cycles(mol: &Molecule, min_len: usize, max_len: usize) -> Vec<Vec<
     out
 }
 
+/// Implements path excluding bond.
+///
+/// Function context: `crates/ferrum_core/src/algo/aromaticity.rs`.
+/// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
 fn shortest_path_excluding_bond(
     mol: &Molecule,
     start: usize,
@@ -360,6 +420,10 @@ fn find_dfs_cycles(
 }
 
 #[allow(clippy::too_many_arguments)]
+/// Implements cycle from.
+///
+/// Function context: `crates/ferrum_core/src/algo/aromaticity.rs`.
+/// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
 fn dfs_cycle_from(
     mol: &Molecule,
     start: AtomIdx,
@@ -589,6 +653,10 @@ fn is_ring_aromatic(mol: &Molecule, ring: &[AtomIdx]) -> bool {
     false
 }
 
+/// Checks whether cycle chord.
+///
+/// Function context: `crates/ferrum_core/src/algo/aromaticity.rs`.
+/// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
 fn has_cycle_chord(mol: &Molecule, ring: &[AtomIdx]) -> bool {
     let mut consecutive = HashSet::with_capacity(ring.len() * 2);
     for i in 0..ring.len() {
@@ -620,6 +688,10 @@ fn has_cycle_chord(mol: &Molecule, ring: &[AtomIdx]) -> bool {
     false
 }
 
+/// Implements quinonoid perimeter.
+///
+/// Function context: `crates/ferrum_core/src/algo/aromaticity.rs`.
+/// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
 fn fused_quinonoid_perimeter(mol: &Molecule, ring: &[AtomIdx]) -> Option<KekulizedPerimeter> {
     if ring.len() != 9 && ring.len() != 10 {
         return None;
@@ -738,6 +810,10 @@ fn canonical_cycle_order_excluding_chord(
     Some(order)
 }
 
+/// Implements cycle chord.
+///
+/// Function context: `crates/ferrum_core/src/algo/aromaticity.rs`.
+/// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
 fn unique_cycle_chord(mol: &Molecule, ring: &[AtomIdx]) -> Option<(AtomIdx, AtomIdx, usize)> {
     for i in 0..ring.len() {
         for j in i + 1..ring.len() {
@@ -797,18 +873,30 @@ fn unique_cycle_chord(mol: &Molecule, ring: &[AtomIdx]) -> Option<(AtomIdx, Atom
         })
 }
 
+/// Implements ring.
+///
+/// Function context: `crates/ferrum_core/src/algo/aromaticity.rs`.
+/// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
 fn rotate_ring(ring: &[AtomIdx], start: usize) -> Vec<AtomIdx> {
     (0..ring.len())
         .map(|offset| ring[(start + offset) % ring.len()])
         .collect()
 }
 
+/// Implements ring.
+///
+/// Function context: `crates/ferrum_core/src/algo/aromaticity.rs`.
+/// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
 fn reverse_ring(ring: &[AtomIdx]) -> Vec<AtomIdx> {
     let mut reversed = ring.to_vec();
     reversed.reverse();
     reversed
 }
 
+/// Implements fused quinonoid perimeter.
+///
+/// Function context: `crates/ferrum_core/src/algo/aromaticity.rs`.
+/// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
 fn match_fused_quinonoid_perimeter(
     mol: &Molecule,
     ring: &[AtomIdx],
@@ -903,6 +991,10 @@ fn match_fused_quinonoid_perimeter(
     })
 }
 
+/// Implements fused aza quinonoid perimeter.
+///
+/// Function context: `crates/ferrum_core/src/algo/aromaticity.rs`.
+/// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
 fn match_fused_aza_quinonoid_perimeter(
     mol: &Molecule,
     ring: &[AtomIdx],
@@ -995,6 +1087,10 @@ fn match_fused_aza_quinonoid_perimeter(
     })
 }
 
+/// Implements fused aza bridge perimeter.
+///
+/// Function context: `crates/ferrum_core/src/algo/aromaticity.rs`.
+/// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
 fn match_fused_aza_bridge_perimeter(
     mol: &Molecule,
     ring: &[AtomIdx],
@@ -1087,11 +1183,19 @@ fn match_fused_aza_bridge_perimeter(
     })
 }
 
+/// Checks whether neutral ring donor hetero.
+///
+/// Function context: `crates/ferrum_core/src/algo/aromaticity.rs`.
+/// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
 fn is_neutral_ring_donor_hetero(mol: &Molecule, atom_idx: AtomIdx) -> bool {
     let atom = &mol.atoms[atom_idx as usize];
     matches!(atom.atomic_number, 8 | 16) && atom.formal_charge <= 0 && mol.get_degree(atom_idx) == 2
 }
 
+/// Checks whether neutral degree3 ring donor nitrogen.
+///
+/// Function context: `crates/ferrum_core/src/algo/aromaticity.rs`.
+/// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
 fn is_neutral_degree3_ring_donor_nitrogen(
     mol: &Molecule,
     atom_idx: AtomIdx,
@@ -1105,6 +1209,10 @@ fn is_neutral_degree3_ring_donor_nitrogen(
         && has_ring_pi_bond(mol, atom_idx, ring)
 }
 
+/// Checks whether neutral degree3 ring nitrogen.
+///
+/// Function context: `crates/ferrum_core/src/algo/aromaticity.rs`.
+/// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
 fn is_neutral_degree3_ring_nitrogen(mol: &Molecule, atom_idx: AtomIdx) -> bool {
     let atom = &mol.atoms[atom_idx as usize];
     atom.atomic_number == 7
@@ -1113,12 +1221,20 @@ fn is_neutral_degree3_ring_nitrogen(mol: &Molecule, atom_idx: AtomIdx) -> bool {
         && mol.get_degree(atom_idx) >= 3
 }
 
+/// Implements matches.
+///
+/// Function context: `crates/ferrum_core/src/algo/aromaticity.rs`.
+/// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
 fn bond_matches(mol: &Molecule, a: AtomIdx, b: AtomIdx, allowed: &[BondType]) -> bool {
     find_bond_between(mol, a, b)
         .map(|bond_idx| allowed.contains(&mol.bonds[bond_idx].bond_type))
         .unwrap_or(false)
 }
 
+/// Checks whether ring pi bond.
+///
+/// Function context: `crates/ferrum_core/src/algo/aromaticity.rs`.
+/// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
 fn has_ring_pi_bond(mol: &Molecule, atom_idx: AtomIdx, ring: &[AtomIdx]) -> bool {
     mol.adjacency[atom_idx as usize].iter().any(|&bond_idx| {
         let bond = &mol.bonds[bond_idx as usize];
@@ -1134,6 +1250,10 @@ fn has_ring_pi_bond(mol: &Molecule, atom_idx: AtomIdx, ring: &[AtomIdx]) -> bool
     })
 }
 
+/// Checks whether exocyclic hetero double.
+///
+/// Function context: `crates/ferrum_core/src/algo/aromaticity.rs`.
+/// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
 fn has_exocyclic_hetero_double(mol: &Molecule, atom_idx: AtomIdx, ring: &[AtomIdx]) -> bool {
     mol.adjacency[atom_idx as usize].iter().any(|&bond_idx| {
         let bond = &mol.bonds[bond_idx as usize];
@@ -1149,6 +1269,10 @@ fn has_exocyclic_hetero_double(mol: &Molecule, atom_idx: AtomIdx, ring: &[AtomId
     })
 }
 
+/// Checks whether exocyclic imine double.
+///
+/// Function context: `crates/ferrum_core/src/algo/aromaticity.rs`.
+/// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
 fn has_exocyclic_imine_double(mol: &Molecule, atom_idx: AtomIdx, ring: &[AtomIdx]) -> bool {
     mol.adjacency[atom_idx as usize].iter().any(|&bond_idx| {
         let bond = &mol.bonds[bond_idx as usize];
@@ -1164,6 +1288,10 @@ fn has_exocyclic_imine_double(mol: &Molecule, atom_idx: AtomIdx, ring: &[AtomIdx
     })
 }
 
+/// Implements exocyclic hetero double count.
+///
+/// Function context: `crates/ferrum_core/src/algo/aromaticity.rs`.
+/// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
 fn ring_exocyclic_hetero_double_count(mol: &Molecule, ring: &[AtomIdx]) -> usize {
     ring.iter()
         .filter(|&&atom_idx| {
@@ -1173,6 +1301,10 @@ fn ring_exocyclic_hetero_double_count(mol: &Molecule, ring: &[AtomIdx]) -> usize
         .count()
 }
 
+/// Checks whether exocyclic hetero single.
+///
+/// Function context: `crates/ferrum_core/src/algo/aromaticity.rs`.
+/// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
 fn has_exocyclic_hetero_single(mol: &Molecule, atom_idx: AtomIdx, ring: &[AtomIdx]) -> bool {
     mol.adjacency[atom_idx as usize].iter().any(|&bond_idx| {
         let bond = &mol.bonds[bond_idx as usize];
@@ -1188,6 +1320,10 @@ fn has_exocyclic_hetero_single(mol: &Molecule, atom_idx: AtomIdx, ring: &[AtomId
     })
 }
 
+/// Checks whether fused exocyclic imine carbon.
+///
+/// Function context: `crates/ferrum_core/src/algo/aromaticity.rs`.
+/// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
 fn is_fused_exocyclic_imine_carbon(mol: &Molecule, atom_idx: AtomIdx, ring: &[AtomIdx]) -> bool {
     let atom = &mol.atoms[atom_idx as usize];
     if atom.atomic_number != 6
@@ -1230,6 +1366,10 @@ fn is_fused_exocyclic_imine_carbon(mol: &Molecule, atom_idx: AtomIdx, ring: &[At
     })
 }
 
+/// Checks whether fused conjugated ring neighbors.
+///
+/// Function context: `crates/ferrum_core/src/algo/aromaticity.rs`.
+/// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
 fn has_fused_conjugated_ring_neighbors(
     mol: &Molecule,
     atom_idx: AtomIdx,
@@ -1260,6 +1400,10 @@ fn has_fused_conjugated_ring_neighbors(
             .all(|&nbr| ring_neighbor_is_sp2_capable(mol, nbr, ring))
 }
 
+/// Implements neighbor is sp2 capable.
+///
+/// Function context: `crates/ferrum_core/src/algo/aromaticity.rs`.
+/// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
 fn ring_neighbor_is_sp2_capable(mol: &Molecule, atom_idx: AtomIdx, ring: &[AtomIdx]) -> bool {
     let atom = &mol.atoms[atom_idx as usize];
     atom.is_aromatic()
@@ -1268,6 +1412,10 @@ fn ring_neighbor_is_sp2_capable(mol: &Molecule, atom_idx: AtomIdx, ring: &[AtomI
         || has_ring_pi_bond(mol, atom_idx, ring)
 }
 
+/// Implements gap carbons.
+///
+/// Function context: `crates/ferrum_core/src/algo/aromaticity.rs`.
+/// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
 fn quinonoid_gap_carbons(mol: &Molecule, ring: &[AtomIdx]) -> Option<[AtomIdx; 2]> {
     if ring.len() != 6 {
         return None;
@@ -1307,6 +1455,10 @@ fn quinonoid_gap_carbons(mol: &Molecule, ring: &[AtomIdx]) -> Option<[AtomIdx; 2
     None
 }
 
+/// Checks whether fused aza annulated ring.
+///
+/// Function context: `crates/ferrum_core/src/algo/aromaticity.rs`.
+/// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
 fn is_fused_aza_annulated_ring(mol: &Molecule, ring: &[AtomIdx]) -> bool {
     if ring.len() != 6 {
         return false;
@@ -1327,6 +1479,10 @@ fn is_fused_aza_annulated_ring(mol: &Molecule, ring: &[AtomIdx]) -> bool {
     false
 }
 
+/// Checks whether fused bis quinonoid ring.
+///
+/// Function context: `crates/ferrum_core/src/algo/aromaticity.rs`.
+/// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
 fn is_fused_bis_quinonoid_ring(mol: &Molecule, ring: &[AtomIdx]) -> bool {
     if ring.len() != 6 {
         return false;
@@ -1347,6 +1503,10 @@ fn is_fused_bis_quinonoid_ring(mol: &Molecule, ring: &[AtomIdx]) -> bool {
     false
 }
 
+/// Implements fused aza annulated ring.
+///
+/// Function context: `crates/ferrum_core/src/algo/aromaticity.rs`.
+/// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
 fn match_fused_aza_annulated_ring(mol: &Molecule, ordered: &[AtomIdx], ring: &[AtomIdx]) -> bool {
     let gap1 = ordered[0];
     let pi1 = ordered[1];
@@ -1401,6 +1561,10 @@ fn match_fused_aza_annulated_ring(mol: &Molecule, ordered: &[AtomIdx], ring: &[A
     )
 }
 
+/// Implements fused bis quinonoid ring.
+///
+/// Function context: `crates/ferrum_core/src/algo/aromaticity.rs`.
+/// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
 fn match_fused_bis_quinonoid_ring(mol: &Molecule, ordered: &[AtomIdx], ring: &[AtomIdx]) -> bool {
     let carbonyl1 = ordered[0];
     let flank1 = ordered[1];
@@ -1447,10 +1611,18 @@ fn match_fused_bis_quinonoid_ring(mol: &Molecule, ordered: &[AtomIdx], ring: &[A
         >= 2
 }
 
+/// Implements ring index.
+///
+/// Function context: `crates/ferrum_core/src/algo/aromaticity.rs`.
+/// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
 fn wrap_ring_index(idx: isize, len: usize) -> usize {
     idx.rem_euclid(len as isize) as usize
 }
 
+/// Checks whether quinonoid gap carbon.
+///
+/// Function context: `crates/ferrum_core/src/algo/aromaticity.rs`.
+/// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
 fn is_quinonoid_gap_carbon(mol: &Molecule, atom_idx: AtomIdx, ring: &[AtomIdx]) -> bool {
     let atom = &mol.atoms[atom_idx as usize];
     atom.atomic_number == 6
@@ -1460,6 +1632,10 @@ fn is_quinonoid_gap_carbon(mol: &Molecule, atom_idx: AtomIdx, ring: &[AtomIdx]) 
         && !has_non_ring_pi_bond(mol, atom_idx, ring)
 }
 
+/// Checks whether annulated aza gap carbon.
+///
+/// Function context: `crates/ferrum_core/src/algo/aromaticity.rs`.
+/// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
 fn is_annulated_aza_gap_carbon(mol: &Molecule, atom_idx: AtomIdx, ring: &[AtomIdx]) -> bool {
     let atom = &mol.atoms[atom_idx as usize];
     atom.atomic_number == 6
@@ -1469,6 +1645,10 @@ fn is_annulated_aza_gap_carbon(mol: &Molecule, atom_idx: AtomIdx, ring: &[AtomId
         && !has_non_ring_pi_bond(mol, atom_idx, ring)
 }
 
+/// Implements has annulated support.
+///
+/// Function context: `crates/ferrum_core/src/algo/aromaticity.rs`.
+/// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
 fn carbonyl_has_annulated_support(
     mol: &Molecule,
     carbonyl: AtomIdx,
@@ -1501,6 +1681,10 @@ fn carbonyl_has_annulated_support(
             == 1
 }
 
+/// Checks whether supported annulated flank path.
+///
+/// Function context: `crates/ferrum_core/src/algo/aromaticity.rs`.
+/// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
 fn has_supported_annulated_flank_path(
     mol: &Molecule,
     start: AtomIdx,
@@ -1555,11 +1739,19 @@ fn has_supported_annulated_flank_path(
     false
 }
 
+/// Checks whether annulated path support atom.
+///
+/// Function context: `crates/ferrum_core/src/algo/aromaticity.rs`.
+/// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
 fn is_annulated_path_support_atom(mol: &Molecule, atom_idx: AtomIdx) -> bool {
     let atom = &mol.atoms[atom_idx as usize];
     atom.is_aromatic() && (atom.atomic_number != 6 || aromatic_bond_degree(mol, atom_idx) >= 3)
 }
 
+/// Implements bond degree.
+///
+/// Function context: `crates/ferrum_core/src/algo/aromaticity.rs`.
+/// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
 fn aromatic_bond_degree(mol: &Molecule, atom_idx: AtomIdx) -> usize {
     mol.adjacency[atom_idx as usize]
         .iter()
@@ -1567,6 +1759,10 @@ fn aromatic_bond_degree(mol: &Molecule, atom_idx: AtomIdx) -> usize {
         .count()
 }
 
+/// Implements external aromatic neighbor.
+///
+/// Function context: `crates/ferrum_core/src/algo/aromaticity.rs`.
+/// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
 fn unique_external_aromatic_neighbor<F>(
     mol: &Molecule,
     atom_idx: AtomIdx,
@@ -1599,6 +1795,10 @@ where
     }
 }
 
+/// Checks whether short aromatic path excluding ring.
+///
+/// Function context: `crates/ferrum_core/src/algo/aromaticity.rs`.
+/// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
 fn has_short_aromatic_path_excluding_ring(
     mol: &Molecule,
     start: AtomIdx,
@@ -1640,6 +1840,10 @@ fn has_short_aromatic_path_excluding_ring(
     false
 }
 
+/// Checks whether delocalized ring donor.
+///
+/// Function context: `crates/ferrum_core/src/algo/aromaticity.rs`.
+/// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
 fn is_delocalized_ring_donor(mol: &Molecule, atom_idx: AtomIdx, ring: &[AtomIdx]) -> bool {
     let atom = &mol.atoms[atom_idx as usize];
     match atom.atomic_number {
@@ -1654,11 +1858,19 @@ fn is_delocalized_ring_donor(mol: &Molecule, atom_idx: AtomIdx, ring: &[AtomIdx]
     }
 }
 
+/// Checks whether aromatic anchor carbon.
+///
+/// Function context: `crates/ferrum_core/src/algo/aromaticity.rs`.
+/// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
 fn is_aromatic_anchor_carbon(mol: &Molecule, atom_idx: AtomIdx) -> bool {
     let atom = &mol.atoms[atom_idx as usize];
     atom.atomic_number == 6 && atom.formal_charge == 0 && atom.is_aromatic()
 }
 
+/// Checks whether any pi bond.
+///
+/// Function context: `crates/ferrum_core/src/algo/aromaticity.rs`.
+/// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
 fn has_any_pi_bond(mol: &Molecule, atom_idx: AtomIdx) -> bool {
     mol.adjacency[atom_idx as usize].iter().any(|&bond_idx| {
         let bond = &mol.bonds[bond_idx as usize];
@@ -1666,6 +1878,10 @@ fn has_any_pi_bond(mol: &Molecule, atom_idx: AtomIdx) -> bool {
     })
 }
 
+/// Checks whether non ring pi bond.
+///
+/// Function context: `crates/ferrum_core/src/algo/aromaticity.rs`.
+/// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
 fn has_non_ring_pi_bond(mol: &Molecule, atom_idx: AtomIdx, ring: &[AtomIdx]) -> bool {
     mol.adjacency[atom_idx as usize].iter().any(|&bond_idx| {
         let bond = &mol.bonds[bond_idx as usize];
@@ -1868,6 +2084,10 @@ fn mark_ring_aromatic(mol: &mut Molecule, ring: &[AtomIdx]) {
     }
 }
 
+/// Implements kekulized perimeter aromatic.
+///
+/// Function context: `crates/ferrum_core/src/algo/aromaticity.rs`.
+/// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
 fn mark_kekulized_perimeter_aromatic(mol: &mut Molecule, perimeter: &KekulizedPerimeter) {
     for &atom_idx in &perimeter.ring {
         mol.atoms[atom_idx as usize].set_aromatic(true);
@@ -1886,6 +2106,10 @@ fn mark_kekulized_perimeter_aromatic(mol: &mut Molecule, perimeter: &KekulizedPe
     mol.bonds[perimeter.chord_bond_idx].set_aromatic(false);
 }
 
+/// Implements fused bridge bonds.
+///
+/// Function context: `crates/ferrum_core/src/algo/aromaticity.rs`.
+/// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
 fn suppress_fused_bridge_bonds(mol: &mut Molecule, aromatic_rings: &[Vec<AtomIdx>]) {
     let mut bonds_to_kekulize = Vec::new();
 
@@ -1904,6 +2128,10 @@ fn suppress_fused_bridge_bonds(mol: &mut Molecule, aromatic_rings: &[Vec<AtomIdx
     }
 }
 
+/// Implements fused bridge ring bond aromaticity.
+///
+/// Function context: `crates/ferrum_core/src/algo/aromaticity.rs`.
+/// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
 fn suppress_fused_bridge_ring_bond_aromaticity(mol: &mut Molecule, aromatic_rings: &[Vec<AtomIdx>]) {
     let mut atoms_to_mark = Vec::new();
     let mut bonds_to_aromaticize = Vec::new();
@@ -1945,6 +2173,10 @@ fn suppress_fused_bridge_ring_bond_aromaticity(mol: &mut Molecule, aromatic_ring
     }
 }
 
+/// Implements diaza dicarbonyl bridge bond.
+///
+/// Function context: `crates/ferrum_core/src/algo/aromaticity.rs`.
+/// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
 fn fused_diaza_dicarbonyl_bridge_bond(mol: &Molecule, ring: &[AtomIdx]) -> Option<usize> {
     if ring.len() != 6 {
         return None;
@@ -2070,6 +2302,10 @@ fn fused_diaza_dicarbonyl_bridge_bond(mol: &Molecule, ring: &[AtomIdx]) -> Optio
     Some(bridge_bond_idx)
 }
 
+/// Implements path excluding edge.
+///
+/// Function context: `crates/ferrum_core/src/algo/aromaticity.rs`.
+/// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
 fn ring_path_excluding_edge(
     mol: &Molecule,
     ring: &[AtomIdx],
@@ -2128,6 +2364,10 @@ fn ring_path_excluding_edge(
     Some(path)
 }
 
+/// Implements bridge bond to kekulize.
+///
+/// Function context: `crates/ferrum_core/src/algo/aromaticity.rs`.
+/// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
 fn fused_bridge_bond_to_kekulize(mol: &Molecule, ring: &[AtomIdx]) -> Option<usize> {
     if ring.len() != 6 {
         return None;
@@ -2194,6 +2434,10 @@ fn fused_bridge_bond_to_kekulize(mol: &Molecule, ring: &[AtomIdx]) -> Option<usi
     mol.bonds[bond_idx].is_aromatic().then_some(bond_idx)
 }
 
+/// Checks whether neutral ring pi nitrogen.
+///
+/// Function context: `crates/ferrum_core/src/algo/aromaticity.rs`.
+/// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
 fn is_neutral_ring_pi_nitrogen(mol: &Molecule, atom_idx: AtomIdx, ring: &[AtomIdx]) -> bool {
     let atom = &mol.atoms[atom_idx as usize];
     atom.atomic_number == 7
@@ -2202,11 +2446,19 @@ fn is_neutral_ring_pi_nitrogen(mol: &Molecule, atom_idx: AtomIdx, ring: &[AtomId
         && has_ring_pi_bond(mol, atom_idx, ring)
 }
 
+/// Checks whether neutral ring carbon.
+///
+/// Function context: `crates/ferrum_core/src/algo/aromaticity.rs`.
+/// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
 fn is_neutral_ring_carbon(mol: &Molecule, atom_idx: AtomIdx) -> bool {
     let atom = &mol.atoms[atom_idx as usize];
     atom.atomic_number == 6 && atom.formal_charge == 0
 }
 
+/// Implements ring neighbor pos.
+///
+/// Function context: `crates/ferrum_core/src/algo/aromaticity.rs`.
+/// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
 fn other_ring_neighbor_pos(pos: usize, excluded_neighbor: usize, len: usize) -> Option<usize> {
     let prev = (pos + len - 1) % len;
     let next = (pos + 1) % len;
@@ -2220,6 +2472,10 @@ fn other_ring_neighbor_pos(pos: usize, excluded_neighbor: usize, len: usize) -> 
 }
 
 // Alias for backwards compatibility
+/// Implements hueckel.
+///
+/// Function context: `crates/ferrum_core/src/algo/aromaticity.rs`.
+/// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
 pub fn apply_hueckel(mol: &mut Molecule) {
     perceive_aromaticity(mol);
 }
@@ -2230,6 +2486,10 @@ mod tests {
     use crate::io::smiles::parse_smiles;
 
     #[test]
+    /// Runs regression test for benzene aromatic.
+    ///
+    /// Function context: `crates/ferrum_core/src/algo/aromaticity.rs`.
+    /// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
     fn test_benzene_aromatic() {
         // Benzene: c1ccccc1 (6 π electrons)
         let mut mol = parse_smiles("c1ccccc1").unwrap();
@@ -2242,6 +2502,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for pyridine aromatic.
+    ///
+    /// Function context: `crates/ferrum_core/src/algo/aromaticity.rs`.
+    /// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
     fn test_pyridine_aromatic() {
         // Pyridine: c1ccncc1 (6 π electrons: 5 C + 1 N)
         let mut mol = parse_smiles("c1ccncc1").unwrap();
@@ -2254,6 +2518,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for cyclohexane not aromatic.
+    ///
+    /// Function context: `crates/ferrum_core/src/algo/aromaticity.rs`.
+    /// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
     fn test_cyclohexane_not_aromatic() {
         // Cyclohexane: C1CCCCC1 (0 π electrons, all single bonds)
         let mut mol = parse_smiles("C1CCCCC1").unwrap();
@@ -2266,6 +2534,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for toluene aromatic.
+    ///
+    /// Function context: `crates/ferrum_core/src/algo/aromaticity.rs`.
+    /// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
     fn test_toluene_aromatic() {
         // Toluene: Cc1ccccc1 (benzene ring with methyl)
         let mut mol = parse_smiles("Cc1ccccc1").unwrap();
@@ -2287,6 +2559,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for huckel rule.
+    ///
+    /// Function context: `crates/ferrum_core/src/algo/aromaticity.rs`.
+    /// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
     fn test_huckel_rule() {
         // Test Hückel 4n+2 rule directly
         assert!(is_huckel_aromatic(2)); // n=0: 4(0)+2 = 2
@@ -2301,6 +2577,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for pyrrole 5 ring aromatic.
+    ///
+    /// Function context: `crates/ferrum_core/src/algo/aromaticity.rs`.
+    /// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
     fn test_pyrrole_5_ring_aromatic() {
         // Pyrrole: [nH]1cccc1 (6 π electrons in 5-membered ring)
         // N contributes 2 π electrons (lone pair), C contributes 1 each
@@ -2317,6 +2597,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for furan 5 ring aromatic.
+    ///
+    /// Function context: `crates/ferrum_core/src/algo/aromaticity.rs`.
+    /// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
     fn test_furan_5_ring_aromatic() {
         // Furan: o1cccc1 (6 π electrons in 5-membered ring)
         // O contributes 2 π electrons (lone pair), C contributes 1 each
@@ -2333,6 +2617,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for cyclopentadiene not aromatic.
+    ///
+    /// Function context: `crates/ferrum_core/src/algo/aromaticity.rs`.
+    /// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
     fn test_cyclopentadiene_not_aromatic() {
         // Cyclopentadiene: C1=CC=CC1 (4 π electrons - anti-aromatic!)
         // This should NOT be aromatic (fails 4n+2 rule, has 4π which is 4n)
@@ -2349,6 +2637,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for cyclopentadienyl anion aromatic.
+    ///
+    /// Function context: `crates/ferrum_core/src/algo/aromaticity.rs`.
+    /// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
     fn test_cyclopentadienyl_anion_aromatic() {
         // Cyclopentadienyl anion: [cH-]1cccc1 (6 π electrons: 4C×1 + C⁻×2)
         let mut mol = parse_smiles("[cH-]1cccc1").unwrap();
@@ -2365,6 +2657,10 @@ mod tests {
     // ── Fused ring aromaticity (key regression tests for the junction-carbon fix) ──
 
     #[test]
+    /// Runs regression test for indole aromatic smiles.
+    ///
+    /// Function context: `crates/ferrum_core/src/algo/aromaticity.rs`.
+    /// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
     fn test_indole_aromatic_smiles() {
         // Indole aromatic SMILES: all 9 ring atoms must be aromatic.
         let mut mol = parse_smiles("c1ccc2[nH]ccc2c1").unwrap();
@@ -2375,6 +2671,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for indole kekulized aromatic.
+    ///
+    /// Function context: `crates/ferrum_core/src/algo/aromaticity.rs`.
+    /// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
     fn test_indole_kekulized_aromatic() {
         // Indole in Kekulized form: junction carbons have their pi bond in the
         // 6-membered ring, so the old has_ring_pi_bond check wrongly gave them
@@ -2390,6 +2690,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for benzofuran aromatic smiles.
+    ///
+    /// Function context: `crates/ferrum_core/src/algo/aromaticity.rs`.
+    /// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
     fn test_benzofuran_aromatic_smiles() {
         // Benzofuran aromatic SMILES: all 9 atoms aromatic.
         let mut mol = parse_smiles("c1ccc2occc2c1").unwrap();
@@ -2400,6 +2704,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for benzofuran kekulized aromatic.
+    ///
+    /// Function context: `crates/ferrum_core/src/algo/aromaticity.rs`.
+    /// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
     fn test_benzofuran_kekulized_aromatic() {
         // Kekulized benzofuran: O in 5-ring, junction carbons carry their double
         // bond in the 6-ring (C3=C4 and C7=C8 in the 6-ring, ring-closures back
@@ -2414,6 +2722,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for benzothiophene kekulized aromatic.
+    ///
+    /// Function context: `crates/ferrum_core/src/algo/aromaticity.rs`.
+    /// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
     fn test_benzothiophene_kekulized_aromatic() {
         // Kekulized benzothiophene: S in 5-ring.  Same junction-carbon situation.
         let mut mol = parse_smiles("C1=CSC2=CC=CC=C12").unwrap();
@@ -2426,6 +2738,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for fused thiophene benzofuran kekulized aromatic.
+    ///
+    /// Function context: `crates/ferrum_core/src/algo/aromaticity.rs`.
+    /// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
     fn test_fused_thiophene_benzofuran_kekulized_aromatic() {
         // CNP0317527-like fragment: benzofuran fused core in Kekulized SMILES.
         // COC(=O)C1=C(C)OC2=CC=C(...)C=C12  – the C1=...OC2=...C=C12 part is a
@@ -2444,6 +2760,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for cyclohexadiene not aromatic.
+    ///
+    /// Function context: `crates/ferrum_core/src/algo/aromaticity.rs`.
+    /// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
     fn test_cyclohexadiene_not_aromatic() {
         // 1,3-cyclohexadiene has alternating double bonds but only 4 pi electrons
         // in the ring → NOT aromatic (Hückel requires 4n+2).
@@ -2455,6 +2775,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for naphthalene all aromatic.
+    ///
+    /// Function context: `crates/ferrum_core/src/algo/aromaticity.rs`.
+    /// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
     fn test_naphthalene_all_aromatic() {
         // Naphthalene: two fused 6-membered rings, 10 π electrons total.
         // All 10 carbons must be aromatic.
@@ -2468,6 +2792,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for caffeine aromatic smiles.
+    ///
+    /// Function context: `crates/ferrum_core/src/algo/aromaticity.rs`.
+    /// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
     fn test_caffeine_aromatic_smiles() {
         // Aromatic caffeine SMILES uses neutral degree-3 aromatic nitrogens for the
         // methylated ring nitrogens. These still donate 2π electrons and must remain
@@ -2482,6 +2810,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for large macrocycle aromaticity.
+    ///
+    /// Function context: `crates/ferrum_core/src/algo/aromaticity.rs`.
+    /// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
     fn test_large_macrocycle_aromaticity() {
         let mut mol = parse_smiles(
             "CCCCCCCCCCCCCCCCCCOC(=O)CC[C@@H]1C2=NC(=C(C)C3=C(C)C([C@@H](C)O)=C(C=C4N=C(C=C5NC6=C2CC(=O)C6=C5C)C(CC)=C4C)N3)[C@H]1C",
@@ -2496,6 +2828,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for flavylium fused ring detected and aromatic.
+    ///
+    /// Function context: `crates/ferrum_core/src/algo/aromaticity.rs`.
+    /// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
     fn test_flavylium_fused_ring_detected_and_aromatic() {
         let mut mol = parse_smiles(
             "OC[C@H]1O[C@H](OC2=CC(O)=CC3=[O+]C(C4=CC=C(O)C=C4)=C(O)C=C23)[C@H](O)[C@@H](O)[C@H]1O",
@@ -2517,6 +2853,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for flavylium system reaches three aromatic rings.
+    ///
+    /// Function context: `crates/ferrum_core/src/algo/aromaticity.rs`.
+    /// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
     fn test_flavylium_system_reaches_three_aromatic_rings() {
         let mol = parse_smiles(
             "OC[C@H]1O[C@H](OC2=CC(O)=CC3=[O+]C(C4=CC=C(O)C=C4)=C(O)C=C23)[C@H](O)[C@@H](O)[C@H]1O",
@@ -2530,6 +2870,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for polycyclic quinonoid system reaches rdkit aromatic atom count.
+    ///
+    /// Function context: `crates/ferrum_core/src/algo/aromaticity.rs`.
+    /// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
     fn test_polycyclic_quinonoid_system_reaches_rdkit_aromatic_atom_count() {
         let mol = parse_smiles("CC1=CC(O)=C2C(=O)C3=C(C(=O)C2=C1)C1=C(O3)C2=C(C=C1C)C(=O)C=CC2=O")
             .unwrap();
@@ -2541,6 +2885,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for chromone gap pattern detected.
+    ///
+    /// Function context: `crates/ferrum_core/src/algo/aromaticity.rs`.
+    /// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
     fn test_chromone_gap_pattern_detected() {
         let mol = parse_smiles("CC(C)(C)C1=CC=C(C2=CC(=O)C3=CC=C(NC(=O)C4=CC=CC=C4Cl)C=C3O2)C=C1")
             .unwrap();
@@ -2551,6 +2899,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for quinolone gap pattern detected.
+    ///
+    /// Function context: `crates/ferrum_core/src/algo/aromaticity.rs`.
+    /// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
     fn test_quinolone_gap_pattern_detected() {
         let mol = parse_smiles(
             "CN1C(O)=C(C(=O)C[C@@H](NC2=CC=C(N)C=C2)C2=C(O)C=CC3=CC=CC=C23)C(=O)C2=CC=CC=C21",
@@ -2563,6 +2915,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for flavanone gap pattern rejected.
+    ///
+    /// Function context: `crates/ferrum_core/src/algo/aromaticity.rs`.
+    /// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
     fn test_flavanone_gap_pattern_rejected() {
         let mol = parse_smiles("O=C1CC(C2=CC(O)=CC(O)=C2)OC2=CC=CC=C12").unwrap();
         let ring = vec![12, 3, 2, 1, 18, 13];
@@ -2574,6 +2930,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for glycosylated chromanone gap pattern rejected.
+    ///
+    /// Function context: `crates/ferrum_core/src/algo/aromaticity.rs`.
+    /// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
     fn test_glycosylated_chromanone_gap_pattern_rejected() {
         let mol = parse_smiles(
             "O=C(C=CC1=CC=C(O)C=C1)OC[C@@H]1O[C@@H](O[C@H]2C(=O)C3=C(O)C=C(O[C@@H]4O[C@@H](CO)[C@H](O)[C@@H](O)[C@@H]4O)C=C3O[C@H]2C2=CC=C(O)C=C2)[C@H](O)[C@@H](O)[C@@H]1O",
@@ -2588,6 +2948,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for bis quinone bridge ring rejected.
+    ///
+    /// Function context: `crates/ferrum_core/src/algo/aromaticity.rs`.
+    /// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
     fn test_bis_quinone_bridge_ring_rejected() {
         let mol = parse_smiles(
             "C/C1=C/[C@H](C)[C@@H](O)[C@@H](C)/C=C/[C@@H](O)C/C=C(\\C)C(=O)C[C@@H](O)[C@@H](C)C=C/C=C/C=C\\C(=O)NC2=CC(=O)C3=C(C=C(C)C(O)=C3C1=O)C2=O",
@@ -2609,6 +2973,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for xanthone bridge ring is aromatic.
+    ///
+    /// Function context: `crates/ferrum_core/src/algo/aromaticity.rs`.
+    /// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
     fn test_xanthone_bridge_ring_is_aromatic() {
         let mol = parse_smiles("COC1=CC(O)=C2C(=O)C3=CC=C(O)C(OC)=C3OC2=C1").unwrap();
         let ring = vec![6, 7, 9, 17, 18, 19];
@@ -2621,6 +2989,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for fused aza annulated ring is aromatic.
+    ///
+    /// Function context: `crates/ferrum_core/src/algo/aromaticity.rs`.
+    /// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
     fn test_fused_aza_annulated_ring_is_aromatic() {
         let mol =
             parse_smiles("CC1=CC2=[N+](CC(=O)C3=CC=C([N+](=O)[O-])C=C3)C(C)=CN2C=C1").unwrap();
@@ -2629,6 +3001,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for cnp0331134 left bis quinonoid ring is aromatic.
+    ///
+    /// Function context: `crates/ferrum_core/src/algo/aromaticity.rs`.
+    /// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
     fn test_cnp0331134_left_bis_quinonoid_ring_is_aromatic() {
         let mol = parse_smiles("CC1=CC(O)=C2C(=O)C3=C(C(=O)C2=C1)C1=C(O3)C2=C(C=C1C)C(=O)C=CC2=O")
             .unwrap();
@@ -2637,6 +3013,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for cnp0331134 right bis quinonoid ring is aromatic.
+    ///
+    /// Function context: `crates/ferrum_core/src/algo/aromaticity.rs`.
+    /// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
     fn test_cnp0331134_right_bis_quinonoid_ring_is_aromatic() {
         let mol = parse_smiles("CC1=CC(O)=C2C(=O)C3=C(C(=O)C2=C1)C1=C(O3)C2=C(C=C1C)C(=O)C=CC2=O")
             .unwrap();
@@ -2645,6 +3025,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for anthraquinone bridge ring rejected by bis quinonoid guard.
+    ///
+    /// Function context: `crates/ferrum_core/src/algo/aromaticity.rs`.
+    /// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
     fn test_anthraquinone_bridge_ring_rejected_by_bis_quinonoid_guard() {
         let mol = parse_smiles(
             "CC1=CC(O)=C2C(=O)C3=C(O[C@@H]4O[C@@H](COC(=O)CC(=O)O)[C@@H](O)[C@@H](O)[C@H]4O)C=CC=C3C(=O)C2=C1",
@@ -2658,6 +3042,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for cycle search finds chromone gap ring.
+    ///
+    /// Function context: `crates/ferrum_core/src/algo/aromaticity.rs`.
+    /// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
     fn test_cycle_search_finds_chromone_gap_ring() {
         let mut mol =
             parse_smiles("CC(C)(C)C1=CC=C(C2=CC(=O)C3=CC=C(NC(=O)C4=CC=CC=C4Cl)C=C3O2)C=C1")
@@ -2687,6 +3075,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for cycle search finds quinolone gap ring.
+    ///
+    /// Function context: `crates/ferrum_core/src/algo/aromaticity.rs`.
+    /// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
     fn test_cycle_search_finds_quinolone_gap_ring() {
         let mut mol = parse_smiles(
             "CN1C(O)=C(C(=O)C[C@@H](NC2=CC=C(N)C=C2)C2=C(O)C=CC3=CC=CC=C23)C(=O)C2=CC=CC=C21",
@@ -2717,6 +3109,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for second aromaticity pass recovers chromone gap ring.
+    ///
+    /// Function context: `crates/ferrum_core/src/algo/aromaticity.rs`.
+    /// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
     fn test_second_aromaticity_pass_recovers_chromone_gap_ring() {
         let mut mol =
             parse_smiles("CC(C)(C)C1=CC=C(C2=CC(=O)C3=CC=C(NC(=O)C4=CC=CC=C4Cl)C=C3O2)C=C1")
@@ -2731,6 +3127,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for second aromaticity pass recovers quinolone gap ring.
+    ///
+    /// Function context: `crates/ferrum_core/src/algo/aromaticity.rs`.
+    /// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
     fn test_second_aromaticity_pass_recovers_quinolone_gap_ring() {
         let mut mol = parse_smiles(
             "CN1C(O)=C(C(=O)C[C@@H](NC2=CC=C(N)C=C2)C2=C(O)C=CC3=CC=CC=C23)C(=O)C2=CC=CC=C21",
@@ -2746,6 +3146,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for current aromaticity scan sees chromone gap ring.
+    ///
+    /// Function context: `crates/ferrum_core/src/algo/aromaticity.rs`.
+    /// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
     fn test_current_aromaticity_scan_sees_chromone_gap_ring() {
         let mut mol =
             parse_smiles("CC(C)(C)C1=CC=C(C2=CC(=O)C3=CC=C(NC(=O)C4=CC=CC=C4Cl)C=C3O2)C=C1")
@@ -2774,6 +3178,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for cnp0449381 fused quinonoid perimeters detected.
+    ///
+    /// Function context: `crates/ferrum_core/src/algo/aromaticity.rs`.
+    /// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
     fn test_cnp0449381_fused_quinonoid_perimeters_detected() {
         let mut mol = parse_smiles(
             "CC1=CC(O)=C2C(=CC3=CC(OS(=O)(=O)O)=C(C4=C(OS(=O)(=O)O)C=C(O)C5=C4C=C4OC(C)=CC(O)=C4C5=O)C(O)=C3C2=O)O1",
@@ -2804,6 +3212,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for cnp0449381 matches rdkit aromatic targets.
+    ///
+    /// Function context: `crates/ferrum_core/src/algo/aromaticity.rs`.
+    /// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
     fn test_cnp0449381_matches_rdkit_aromatic_targets() {
         let mol = parse_smiles(
             "CC1=CC(O)=C2C(=CC3=CC(OS(=O)(=O)O)=C(C4=C(OS(=O)(=O)O)C=C(O)C5=C4C=C4OC(C)=CC(O)=C4C5=O)C(O)=C3C2=O)O1",
@@ -2826,6 +3238,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for cnp0515307 fused aza perimeter detected.
+    ///
+    /// Function context: `crates/ferrum_core/src/algo/aromaticity.rs`.
+    /// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
     fn test_cnp0515307_fused_aza_perimeter_detected() {
         let mut mol = parse_smiles(
             "CC1=CC2=C(C=C1C)N(C[C@H](O)[C@H](O)[C@H](O)COP(=O)(O)OP(=O)(O)OC[C@H]1O[C@@H](N3C=NC4=C(N)N=CN=C43)[C@H](O)[C@@H]1O)C1=NC(=O)N=C(O)C1=N2",
@@ -2852,6 +3268,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for cnp0515307 matches rdkit aromatic targets.
+    ///
+    /// Function context: `crates/ferrum_core/src/algo/aromaticity.rs`.
+    /// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
     fn test_cnp0515307_matches_rdkit_aromatic_targets() {
         let mol = parse_smiles(
             "CC1=CC2=C(C=C1C)N(C[C@H](O)[C@H](O)[C@H](O)COP(=O)(O)OP(=O)(O)OC[C@H]1O[C@@H](N3C=NC4=C(N)N=CN=C43)[C@H](O)[C@@H]1O)C1=NC(=O)N=C(O)C1=N2",
@@ -2877,6 +3297,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for cnp0504109 benzene cycle detected in ring search.
+    ///
+    /// Function context: `crates/ferrum_core/src/algo/aromaticity.rs`.
+    /// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
     fn test_cnp0504109_benzene_cycle_detected_in_ring_search() {
         let mut mol = parse_smiles(
             "C/C=C1/CN2C=C(C[C@H](C(=O)OC)[C@H]3C[C@H]4C5=C(CCN4C/C3=C/C)C3=CC=CC=C3N5)C3=C4C=CC=CC4=NC3=C2C[C@@H]1CCO",
@@ -2903,6 +3327,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for cnp0504109 benzene cycle is aromatic.
+    ///
+    /// Function context: `crates/ferrum_core/src/algo/aromaticity.rs`.
+    /// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
     fn test_cnp0504109_benzene_cycle_is_aromatic() {
         let mut mol = parse_smiles(
             "C/C=C1/CN2C=C(C[C@H](C(=O)OC)[C@H]3C[C@H]4C5=C(CCN4C/C3=C/C)C3=CC=CC=C3N5)C3=C4C=CC=CC4=NC3=C2C[C@@H]1CCO",
@@ -2929,6 +3357,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for cnp0504109 fused aza bridge perimeter detected.
+    ///
+    /// Function context: `crates/ferrum_core/src/algo/aromaticity.rs`.
+    /// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
     fn test_cnp0504109_fused_aza_bridge_perimeter_detected() {
         let mut mol = parse_smiles(
             "C/C=C1/CN2C=C(C[C@H](C(=O)OC)[C@H]3C[C@H]4C5=C(CCN4C/C3=C/C)C3=CC=CC=C3N5)C3=C4C=CC=CC4=NC3=C2C[C@@H]1CCO",
@@ -2960,6 +3392,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for cnp0504109 matches rdkit aromatic targets.
+    ///
+    /// Function context: `crates/ferrum_core/src/algo/aromaticity.rs`.
+    /// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
     fn test_cnp0504109_matches_rdkit_aromatic_targets() {
         let mol = parse_smiles(
             "C/C=C1/CN2C=C(C[C@H](C(=O)OC)[C@H]3C[C@H]4C5=C(CCN4C/C3=C/C)C3=CC=CC=C3N5)C3=C4C=CC=CC4=NC3=C2C[C@@H]1CCO",
@@ -2984,6 +3420,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for cnp0042975 matches rdkit aromatic targets.
+    ///
+    /// Function context: `crates/ferrum_core/src/algo/aromaticity.rs`.
+    /// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
     fn test_cnp0042975_matches_rdkit_aromatic_targets() {
         let mol = parse_smiles("O=C1CC(C2=CC(O)=CC(O)=C2)OC2=CC=CC=C12").unwrap();
         let aromatic_count = mol.atoms.iter().filter(|atom| atom.is_aromatic()).count();
@@ -3001,6 +3441,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for cnp0296962 matches rdkit aromatic targets.
+    ///
+    /// Function context: `crates/ferrum_core/src/algo/aromaticity.rs`.
+    /// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
     fn test_cnp0296962_matches_rdkit_aromatic_targets() {
         let mol = parse_smiles(
             "O=C(C=CC1=CC=C(O)C=C1)OC[C@@H]1O[C@@H](O[C@H]2C(=O)C3=C(O)C=C(O[C@@H]4O[C@@H](CO)[C@H](O)[C@@H](O)[C@@H]4O)C=C3O[C@H]2C2=CC=C(O)C=C2)[C@H](O)[C@@H](O)[C@@H]1O",

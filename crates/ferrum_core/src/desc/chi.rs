@@ -15,6 +15,38 @@
 //! Reference: Kier, L.B. & Hall, L.H. (1986) "Molecular Connectivity in
 //!            Structure-Activity Analysis", Research Studies Press.
 
+
+//! ## File guide: Chi
+//!
+//! This file belongs to FerrumChem's **descriptor/fingerprint feature layer**.
+//!
+//! What to learn here:
+//! - Which chemistry/ML concern this file owns in the pipeline.
+//! - How Rust types and control-flow encode that concern.
+//! - Which public symbols are the best entry points for reading/debugging.
+//!
+//! Key symbols in this file:
+//! - `fn simple_deltas`
+//! - `fn valence_deltas`
+//! - `fn chi0`
+//! - `fn chi1`
+//! - `fn chi_path`
+//!
+//! Suggested reading workflow:
+//! 1. Read top-level type definitions and public APIs.
+//! 2. Trace helper functions used in hot/critical paths.
+//! 3. Cross-reference tests/examples that exercise this file.
+
+//!
+//! ### Algorithmic assumptions for this file
+//! - Visited-bitset DFS enumerates simple paths/clusters without revisiting atoms, preserving Kier-Hall semantics.
+//! - Running-product accumulation assumes numerical stability in f64 for higher-order chi terms.
+//! - Path and cluster caches in `calculate` must remain coherent with each order-specific helper.
+//! ### Chemistry/ML references
+//! - Kier, L. B. & Hall, L. H. Molecular connectivity chi indices.
+//! - Hall/Kier valence-modified connectivity formulations used in cheminformatics toolkits.
+//! - RDKit Chi descriptor outputs used as practical parity targets.
+
 use super::typed::{Descriptor, DescriptorValue};
 use crate::algo::paths::find_all_paths_of_length;
 use crate::mol::elements::outer_electrons;
@@ -128,6 +160,10 @@ fn chi_path(mol: &Molecule, deltas: &[f64], length: usize) -> f64 {
     sum / 2.0
 }
 
+/// Implements path rdkit like.
+///
+/// Function context: `crates/ferrum_core/src/desc/chi.rs`.
+/// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
 fn chi_path_rdkit_like(mol: &Molecule, deltas: &[f64], length: usize) -> f64 {
     let mut sum = 0.0;
     find_all_paths_of_length(mol, length, |path| {
@@ -148,6 +184,10 @@ fn chi_path_rdkit_like(mol: &Molecule, deltas: &[f64], length: usize) -> f64 {
     sum
 }
 
+/// Implements paths acc.
+///
+/// Function context: `crates/ferrum_core/src/desc/chi.rs`.
+/// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
 fn dfs_paths_acc(
     mol: &Molecule,
     deltas: &[f64],
@@ -235,11 +275,19 @@ fn chi_cluster(mol: &Molecule, deltas: &[f64], order: usize) -> f64 {
     sum
 }
 
+/// Accumulates cluster combinations.
+///
+/// Function context: `crates/ferrum_core/src/desc/chi.rs`.
+/// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
 fn sum_cluster_combinations(neighbor_deltas: &[f64], k: usize, center_delta: f64) -> f64 {
     if k == 0 || neighbor_deltas.len() < k || center_delta <= 0.0 {
         return 0.0;
     }
 
+    /// Implements the behavior encoded by this function.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/chi.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn recurse(
         vals: &[f64],
         k: usize,
@@ -537,6 +585,10 @@ mod tests {
     use super::*;
     use crate::io::smiles::parse_smiles;
 
+    /// Implements chi.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/chi.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn calc_chi(smiles: &str) -> Vec<f32> {
         let mut mol = parse_smiles(smiles).expect("valid SMILES");
         match ChiIndices.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()) {
@@ -546,6 +598,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for chi0 ethane.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/chi.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_chi0_ethane() {
         let c = calc_chi("CC");
         // Each C has degree 1: χ⁰ = 1/√1 + 1/√1 = 2
@@ -553,6 +609,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for chi1 ethane.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/chi.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_chi1_ethane() {
         let c = calc_chi("CC");
         // One bond, both degree 1: χ¹ = 1/√(1*1) = 1
@@ -560,6 +620,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for chi0 propane.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/chi.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_chi0_propane() {
         let c = calc_chi("CCC");
         // Degrees: [1, 2, 1] → χ⁰ = 1/1 + 1/√2 + 1/1 = 2 + 0.707 = 2.707
@@ -567,6 +631,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for chi1 propane.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/chi.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_chi1_propane() {
         let c = calc_chi("CCC");
         // Bonds: (1,2) and (2,1): χ¹ = 1/√2 + 1/√2 = 1.414
@@ -574,6 +642,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for chi path butane vs isobutane.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/chi.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_chi_path_butane_vs_isobutane() {
         let lin = calc_chi("CCCC");
         let bra = calc_chi("CC(C)C");
@@ -581,12 +653,20 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for chi2 butane.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/chi.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_chi2_butane() {
         let c = calc_chi("CCCC");
         assert!((c[2] - 1.0).abs() < 0.01, "χ² = {}", c[2]);
     }
 
     #[test]
+    /// Runs regression test for chi benzene.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/chi.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_chi_benzene() {
         let c = calc_chi("c1ccccc1");
         // χ⁰ = 6/√2 = 4.243
@@ -596,12 +676,20 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for chi size.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/chi.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_chi_size() {
         let c = calc_chi("c1ccccc1");
         assert_eq!(c.len(), 26, "chi indices should have 26 values");
     }
 
     #[test]
+    /// Runs regression test for chi valence differs.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/chi.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_chi_valence_differs() {
         // Valence path indices [8..16] should differ from simple path [0..8] for heteroatom molecules
         let c = calc_chi("CCO");
@@ -614,6 +702,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for cluster linear zero.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/chi.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_cluster_linear_zero() {
         let c = calc_chi("CCCCC");
         // χ³c at index 16 should be 0 for linear chain
@@ -621,12 +713,20 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for cluster isobutane.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/chi.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_cluster_isobutane() {
         let c = calc_chi("CC(C)C");
         assert!(c[16] > 0.0, "isobutane should have χ³c > 0: {}", c[16]);
     }
 
     #[test]
+    /// Runs regression test for chain pentane.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/chi.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_chain_pentane() {
         let c = calc_chi("CCCCC");
         // χ³ch at index 18 should equal χ³path at index 3 for linear chain
@@ -639,6 +739,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for pathcluster linear zero.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/chi.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_pathcluster_linear_zero() {
         let c = calc_chi("CCCCCC");
         // χ⁴pc at index 23 should be 0 for linear chain
@@ -646,6 +750,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for pathcluster 2methylpentane.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/chi.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_pathcluster_2methylpentane() {
         let c = calc_chi("CC(C)CCC");
         // χ⁵pc at index 24 should be > 0
@@ -653,18 +761,30 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for chi3v counts three membered ring closure like rdkit.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/chi.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_chi3v_counts_three_membered_ring_closure_like_rdkit() {
         let c = calc_chi("C1CC1");
         assert!((c[11] - 0.35355338).abs() < 1e-5, "χ3v = {}", c[11]);
     }
 
     #[test]
+    /// Runs regression test for chi4v counts four membered ring closure like rdkit.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/chi.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_chi4v_counts_four_membered_ring_closure_like_rdkit() {
         let c = calc_chi("C1CCC1");
         assert!((c[12] - 0.25).abs() < 1e-5, "χ4v = {}", c[12]);
     }
 
     #[test]
+    /// Runs regression test for chi4v bicyclic regression matches rdkit.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/chi.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_chi4v_bicyclic_regression_matches_rdkit() {
         let c = calc_chi("CC1(C)C2CC=CC1C2");
         assert!((c[12] - 2.1899135).abs() < 1e-5, "χ4v = {}", c[12]);
@@ -686,10 +806,18 @@ mod tests {
 pub struct ChiIndices;
 
 impl Descriptor for ChiIndices {
+    /// Implements the behavior encoded by this function.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/chi.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn name(&self) -> &str {
         "ChiIndices"
     }
 
+    /// Calculates the behavior encoded by this function.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/chi.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn calculate(&self, mol: &mut Molecule, ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
         let mut values = Vec::with_capacity(26);
 
@@ -750,6 +878,10 @@ impl Descriptor for ChiIndices {
 }
 
 const _: () = {
+    /// Asserts send sync to guard invariants.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/chi.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     const fn assert_send_sync<T: Send + Sync>() {}
     let _ = assert_send_sync::<ChiIndices>;
 };

@@ -1,3 +1,47 @@
+//! Descriptor module: Small Ring.
+//!
+//! This file implements one descriptor family (or supporting descriptor glue)
+//! used in QSAR pipelines. Descriptors convert molecular structure into typed
+//! numerical or binary features consumed by ML and analytics layers.
+//!
+//! Learning focus:
+//! - Implementing stateless descriptor structs in Rust.
+//! - Mapping chemistry concepts to reproducible numeric features.
+
+
+//! ## File guide: Small Ring
+//!
+//! This file belongs to FerrumChem's **descriptor/fingerprint feature layer**.
+//!
+//! What to learn here:
+//! - Which chemistry/ML concern this file owns in the pipeline.
+//! - How Rust types and control-flow encode that concern.
+//! - Which public symbols are the best entry points for reading/debugging.
+//!
+//! Key symbols in this file:
+//! - `struct SmallRingDescriptor`
+//! - `fn name`
+//! - `fn calculate`
+//! - `fn compute_total_ring_count`
+//! - `fn find_small_rings`
+//!
+//! Suggested reading workflow:
+//! 1. Read top-level type definitions and public APIs.
+//! 2. Trace helper functions used in hot/critical paths.
+//! 3. Cross-reference tests/examples that exercise this file.
+
+//!
+//! ### Algorithmic assumptions for this file
+//! - `Small Ring` assumes molecule preprocessing (implicit hydrogens, aromaticity flags, and ring annotations) is current before calculation.
+//! - `Small Ring` remains deterministic for identical atom/bond indexing so batch and single-molecule runs agree bit-for-bit.
+//! - Typed `DescriptorValue` output is part of the contract; downstream ML code should not rely on ad-hoc coercions.
+//! - Specific scope anchor: `crates/ferrum_core/src/desc/small_ring.rs` defines small ring behavior and should be updated together with its direct tests.
+//! ### Chemistry/ML references
+//! - Todeschini & Consonni. Handbook of Molecular Descriptors (general descriptor taxonomy).
+//! - RDKit descriptor/fingerprint APIs used as practical parity baselines for `Small Ring` workflows.
+//! - Repository unit and parity tests covering `Small Ring` behavior and edge molecules.
+//! - Code-local source of truth: symbols and tests declared in `crates/ferrum_core/src/desc/small_ring.rs`.
+
 use crate::algo::rings::{
     cached_symmetrized_sssr_bonds_ref, ensure_symmetrized_sssr_bonds_cached,
 };
@@ -22,10 +66,18 @@ use std::collections::HashSet;
 pub struct SmallRingDescriptor;
 
 impl Descriptor for SmallRingDescriptor {
+    /// Implements the behavior encoded by this function.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/small_ring.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn name(&self) -> &str {
         "SmallRingDescriptor"
     }
 
+    /// Calculates the behavior encoded by this function.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/small_ring.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn calculate(&self, mol: &mut Molecule, ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
         let mut counts = vec![0u16; 11];
 
@@ -68,10 +120,18 @@ impl Descriptor for SmallRingDescriptor {
 }
 
 const _: () = {
+    /// Asserts send sync to guard invariants.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/small_ring.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     const fn assert_send_sync<T: Send + Sync>() {}
     let _ = assert_send_sync::<SmallRingDescriptor>;
 };
 
+/// Computes total ring count.
+///
+/// Function context: `crates/ferrum_core/src/desc/small_ring.rs`.
+/// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
 fn compute_total_ring_count(mol: &mut Molecule) -> usize {
     ensure_symmetrized_sssr_bonds_cached(mol);
     cached_symmetrized_sssr_bonds_ref(mol)
@@ -390,6 +450,10 @@ mod tests {
     use crate::algo::valency::assign_implicit_hydrogens;
     use crate::io::smiles::parse_smiles;
 
+    /// Implements molecule.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/small_ring.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn prepare_molecule(smiles: &str) -> Molecule {
         let mut mol = parse_smiles(smiles).unwrap();
         assign_implicit_hydrogens(&mut mol).unwrap();
@@ -398,6 +462,10 @@ mod tests {
         mol
     }
 
+    /// Implements small ring.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/small_ring.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn calc_small_ring(smiles: &str) -> Vec<u16> {
         let mut mol = prepare_molecule(smiles);
         match SmallRingDescriptor.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()) {
@@ -407,6 +475,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for benzene.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/small_ring.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_benzene() {
         let output = calc_small_ring("c1ccccc1");
 
@@ -422,6 +494,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for naphthalene.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/small_ring.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_naphthalene() {
         let output = calc_small_ring("c1ccc2ccccc2c1");
 
@@ -432,6 +508,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for cyclohexane.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/small_ring.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_cyclohexane() {
         let output = calc_small_ring("C1CCCCC1");
 
@@ -443,6 +523,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for cyclopropane.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/small_ring.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_cyclopropane() {
         let output = calc_small_ring("C1CC1");
 
@@ -451,6 +535,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for total rings uses symmetrized ring count for cubane.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/small_ring.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_total_rings_uses_symmetrized_ring_count_for_cubane() {
         let output = calc_small_ring("C12C3C4C1C5C2C3C45");
         assert_eq!(
@@ -460,6 +548,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for total rings uses symmetrized ring count for adamantane.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/small_ring.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_total_rings_uses_symmetrized_ring_count_for_adamantane() {
         let output = calc_small_ring("C1C2CC3CC1CC(C2)C3");
         assert_eq!(
@@ -469,6 +561,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for no rings.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/small_ring.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_no_rings() {
         let output = calc_small_ring("CCCC");
 

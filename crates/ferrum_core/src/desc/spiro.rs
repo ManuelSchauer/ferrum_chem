@@ -8,6 +8,40 @@
 //! - Spiro[4.5]decane: 1 spiro atom
 //! - Bicyclo[2.2.1]heptane: 2 bridge atoms, 0 spiro atoms
 
+
+//! ## File guide: Spiro
+//!
+//! This file belongs to FerrumChem's **descriptor/fingerprint feature layer**.
+//!
+//! What to learn here:
+//! - Which chemistry/ML concern this file owns in the pipeline.
+//! - How Rust types and control-flow encode that concern.
+//! - Which public symbols are the best entry points for reading/debugging.
+//!
+//! Key symbols in this file:
+//! - `fn num_spiro_atoms`
+//! - `mod tests`
+//! - `fn parse`
+//! - `fn test_no_rings`
+//! - `fn test_single_ring`
+//!
+//! Suggested reading workflow:
+//! 1. Read top-level type definitions and public APIs.
+//! 2. Trace helper functions used in hot/critical paths.
+//! 3. Cross-reference tests/examples that exercise this file.
+
+//!
+//! ### Algorithmic assumptions for this file
+//! - `Spiro` assumes molecule preprocessing (implicit hydrogens, aromaticity flags, and ring annotations) is current before calculation.
+//! - `Spiro` remains deterministic for identical atom/bond indexing so batch and single-molecule runs agree bit-for-bit.
+//! - Typed `DescriptorValue` output is part of the contract; downstream ML code should not rely on ad-hoc coercions.
+//! - Specific scope anchor: `crates/ferrum_core/src/desc/spiro.rs` defines spiro behavior and should be updated together with its direct tests.
+//! ### Chemistry/ML references
+//! - Todeschini & Consonni. Handbook of Molecular Descriptors (general descriptor taxonomy).
+//! - RDKit descriptor/fingerprint APIs used as practical parity baselines for `Spiro` workflows.
+//! - Repository unit and parity tests covering `Spiro` behavior and edge molecules.
+//! - Code-local source of truth: symbols and tests declared in `crates/ferrum_core/src/desc/spiro.rs`.
+
 use crate::algo::rings::find_sssr;
 use crate::mol::molecule::Molecule;
 
@@ -121,23 +155,39 @@ mod tests {
     use super::*;
     use crate::io::smiles::parse_smiles;
 
+    /// Parses the behavior encoded by this function.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/spiro.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn parse(smiles: &str) -> Molecule {
         parse_smiles(smiles).unwrap()
     }
 
     #[test]
+    /// Runs regression test for no rings.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/spiro.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_no_rings() {
         let mut mol = parse("CCCC");
         assert_eq!(num_spiro_atoms(&mut mol), 0);
     }
 
     #[test]
+    /// Runs regression test for single ring.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/spiro.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_single_ring() {
         let mut mol = parse("C1CCCCC1");
         assert_eq!(num_spiro_atoms(&mut mol), 0);
     }
 
     #[test]
+    /// Runs regression test for fused rings.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/spiro.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_fused_rings() {
         // Naphthalene - fused rings share an edge, not spiro
         let mut mol = parse("c1ccc2ccccc2c1");
@@ -145,6 +195,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for spiro 3 3 heptane.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/spiro.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_spiro_3_3_heptane() {
         // Spiro[3.3]heptane: C1CCC2(C1)CCC2
         let mut mol = parse("C1CCC2(C1)CCC2");
@@ -152,6 +206,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for spiro 4 5 decane.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/spiro.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_spiro_4_5_decane() {
         // Spiro[4.5]decane
         let mut mol = parse("C1CCCC2(C1)CCCCC2");
@@ -159,6 +217,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for bicyclo bridged.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/spiro.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_bicyclo_bridged() {
         // Bicyclo[2.2.1]heptane (norbornane) - bridged, not spiro
         let mut mol = parse("C1CC2CCC1C2");
@@ -166,6 +228,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for double spiro.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/spiro.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_double_spiro() {
         // Dispiro compound should have 2 spiro atoms
         // This is a complex case, may need more examples

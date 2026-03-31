@@ -1,5 +1,39 @@
 //! Feature selection — variance threshold and correlation filter.
 
+
+//! ## File guide: Feature Selection
+//!
+//! This file belongs to FerrumChem's **machine-learning pipeline layer**.
+//!
+//! What to learn here:
+//! - Which chemistry/ML concern this file owns in the pipeline.
+//! - How Rust types and control-flow encode that concern.
+//! - Which public symbols are the best entry points for reading/debugging.
+//!
+//! Key symbols in this file:
+//! - `fn variance_threshold`
+//! - `fn correlation_filter`
+//! - `mod tests`
+//! - `fn test_variance_threshold`
+//! - `fn test_variance_threshold_higher`
+//!
+//! Suggested reading workflow:
+//! 1. Read top-level type definitions and public APIs.
+//! 2. Trace helper functions used in hot/critical paths.
+//! 3. Cross-reference tests/examples that exercise this file.
+
+//!
+//! ### Algorithmic assumptions for this file
+//! - `Feature Selection` assumes `ndarray` row-major sample layout (`n_samples x n_features`) throughout fit/predict paths.
+//! - `Feature Selection` prioritizes reproducibility via explicit seeds and deterministic iteration order where applicable.
+//! - Model quality metrics for `Feature Selection` depend on consistent preprocessing choices (scaling, splitting, and leakage control).
+//! - Specific scope anchor: `crates/ferrum_core/src/ml/feature_selection.rs` defines feature selection behavior and should be updated together with its direct tests.
+//! ### Chemistry/ML references
+//! - Canonical ML literature for `Feature Selection` algorithm family (statistical learning and validation texts).
+//! - scikit-learn/RDKit-style API ergonomics that inform `Feature Selection` fit/transform/predict contracts.
+//! - OECD QSAR validation principles where `Feature Selection` is used in predictive chemistry contexts.
+//! - Code-local source of truth: symbols and tests declared in `crates/ferrum_core/src/ml/feature_selection.rs`.
+
 use ndarray::{Array2, Axis};
 
 /// Remove features with variance below a threshold.
@@ -114,6 +148,10 @@ mod tests {
     use ndarray::Array2;
 
     #[test]
+    /// Runs regression test for variance threshold.
+    ///
+    /// Function context: `crates/ferrum_core/src/ml/feature_selection.rs`.
+    /// ML-layer note: numerical stability and reproducibility are important for comparable model evaluation.
     fn test_variance_threshold() {
         // col 0: constant (var=0), col 1: varies, col 2: varies
         let data = Array2::from_shape_vec(
@@ -128,6 +166,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for variance threshold higher.
+    ///
+    /// Function context: `crates/ferrum_core/src/ml/feature_selection.rs`.
+    /// ML-layer note: numerical stability and reproducibility are important for comparable model evaluation.
     fn test_variance_threshold_higher() {
         let data =
             Array2::from_shape_vec((4, 2), vec![1.0, 100.0, 1.1, 200.0, 0.9, 300.0, 1.0, 400.0])
@@ -139,6 +181,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for correlation filter.
+    ///
+    /// Function context: `crates/ferrum_core/src/ml/feature_selection.rs`.
+    /// ML-layer note: numerical stability and reproducibility are important for comparable model evaluation.
     fn test_correlation_filter() {
         // col 0 and col 1 are perfectly correlated, col 2 is independent
         let data = Array2::from_shape_vec(
@@ -154,6 +200,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for no removal below threshold.
+    ///
+    /// Function context: `crates/ferrum_core/src/ml/feature_selection.rs`.
+    /// ML-layer note: numerical stability and reproducibility are important for comparable model evaluation.
     fn test_no_removal_below_threshold() {
         let data =
             Array2::from_shape_vec((4, 2), vec![1.0, 10.0, 2.0, 5.0, 3.0, 20.0, 4.0, 1.0]).unwrap();

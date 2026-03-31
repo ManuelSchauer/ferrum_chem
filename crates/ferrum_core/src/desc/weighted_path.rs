@@ -9,6 +9,40 @@
 //! Reference: Randić, M. (1993) "Novel graph theoretical approach to
 //!            heteroatoms in QSAR", Chemometrics & Intell. Lab. Systems.
 
+
+//! ## File guide: Weighted Path
+//!
+//! This file belongs to FerrumChem's **descriptor/fingerprint feature layer**.
+//!
+//! What to learn here:
+//! - Which chemistry/ML concern this file owns in the pipeline.
+//! - How Rust types and control-flow encode that concern.
+//! - Which public symbols are the best entry points for reading/debugging.
+//!
+//! Key symbols in this file:
+//! - `fn weighted_paths`
+//! - `fn dfs_wp`
+//! - `struct WeightedPath`
+//! - `fn name`
+//! - `fn calculate`
+//!
+//! Suggested reading workflow:
+//! 1. Read top-level type definitions and public APIs.
+//! 2. Trace helper functions used in hot/critical paths.
+//! 3. Cross-reference tests/examples that exercise this file.
+
+//!
+//! ### Algorithmic assumptions for this file
+//! - `Weighted Path` assumes molecule preprocessing (implicit hydrogens, aromaticity flags, and ring annotations) is current before calculation.
+//! - `Weighted Path` remains deterministic for identical atom/bond indexing so batch and single-molecule runs agree bit-for-bit.
+//! - Typed `DescriptorValue` output is part of the contract; downstream ML code should not rely on ad-hoc coercions.
+//! - Specific scope anchor: `crates/ferrum_core/src/desc/weighted_path.rs` defines weighted path behavior and should be updated together with its direct tests.
+//! ### Chemistry/ML references
+//! - Todeschini & Consonni. Handbook of Molecular Descriptors (general descriptor taxonomy).
+//! - RDKit descriptor/fingerprint APIs used as practical parity baselines for `Weighted Path` workflows.
+//! - Repository unit and parity tests covering `Weighted Path` behavior and edge molecules.
+//! - Code-local source of truth: symbols and tests declared in `crates/ferrum_core/src/desc/weighted_path.rs`.
+
 use super::atomic_props::{atomic_mass, pauling_electronegativity};
 use super::typed::{Descriptor, DescriptorValue};
 use crate::mol::molecule::Molecule;
@@ -42,6 +76,10 @@ fn weighted_paths(mol: &Molecule, weights: &[f64]) -> [f64; MAX_PATH_LEN] {
     wp
 }
 
+/// Implements wp.
+///
+/// Function context: `crates/ferrum_core/src/desc/weighted_path.rs`.
+/// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
 fn dfs_wp(mol: &Molecule, weights: &[f64], path: &mut Vec<AtomIdx>, wp: &mut [f64; MAX_PATH_LEN]) {
     let depth = path.len();
     if depth >= 2 {
@@ -79,10 +117,18 @@ fn dfs_wp(mol: &Molecule, weights: &[f64], path: &mut Vec<AtomIdx>, wp: &mut [f6
 pub struct WeightedPath;
 
 impl Descriptor for WeightedPath {
+    /// Implements the behavior encoded by this function.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/weighted_path.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn name(&self) -> &str {
         "WeightedPath"
     }
 
+    /// Calculates the behavior encoded by this function.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/weighted_path.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn calculate(&self, mol: &mut Molecule, ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
         let mut values = vec![0.0f32; MAX_PATH_LEN * 2];
 
@@ -111,6 +157,10 @@ impl Descriptor for WeightedPath {
 }
 
 const _: () = {
+    /// Asserts send sync to guard invariants.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/weighted_path.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     const fn assert_send_sync<T: Send + Sync>() {}
     let _ = assert_send_sync::<WeightedPath>;
 };
@@ -121,6 +171,10 @@ mod tests {
     use super::*;
     use crate::io::smiles::parse_smiles;
 
+    /// Implements wp.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/weighted_path.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn calc_wp(smiles: &str) -> Vec<f32> {
         let mut mol = parse_smiles(smiles).expect("valid SMILES");
         match WeightedPath.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()) {
@@ -130,6 +184,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for wp ethane.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/weighted_path.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_wp_ethane() {
         let wp = calc_wp("CC");
         assert!(wp[0] > 100.0, "WPm1 = {}", wp[0]);
@@ -137,6 +195,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for wp propane.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/weighted_path.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_wp_propane() {
         let wp = calc_wp("CCC");
         assert!(wp[0] > 0.0, "WPm1 > 0");
@@ -144,6 +206,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for wp ethanol vs ethane.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/weighted_path.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_wp_ethanol_vs_ethane() {
         let ethane = calc_wp("CC");
         let ethanol = calc_wp("CCO");
@@ -151,6 +217,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for wp symmetry.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/weighted_path.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_wp_symmetry() {
         let a = calc_wp("CCC");
         let b = calc_wp("CCC");
@@ -158,6 +228,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for wp single atom.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/weighted_path.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_wp_single_atom() {
         let wp = calc_wp("C");
         for v in &wp {
@@ -166,6 +240,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for wp benzene.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/weighted_path.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_wp_benzene() {
         let wp = calc_wp("c1ccccc1");
         assert!(wp[0] > 0.0);

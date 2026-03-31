@@ -536,6 +536,23 @@ ferrum_chem/
 - [📊 Phase 11 Complete](PHASE_11_REFACTOR_COMPLETE.md) - Typed descriptors: 60 descriptors, 32x memory reduction
 - [🔬 Thread Safety](THREAD_SAFETY.md) - Concurrency guidelines
 
+### Learning the codebase (Rust + cheminformatics)
+
+If your goal is to understand both Rust and cheminformatics internals, read in this order:
+
+1. `crates/ferrum_core/src/lib.rs` — crate architecture and layer boundaries.
+2. `crates/ferrum_core/src/mol/*` — molecular graph data model (`Atom`, `Bond`, `Molecule`).
+3. `crates/ferrum_core/src/io/smiles.rs` and `io/smarts.rs` — parser/state-machine design.
+4. `crates/ferrum_core/src/algo/*` — ring finding, aromaticity, valence, substructure matching.
+5. `crates/ferrum_core/src/desc/typed.rs` then descriptor family modules — feature engineering layer.
+6. `crates/ferrum_core/src/ml/*` — QSAR preprocessing, models, CV, pipeline orchestration.
+7. `crates/ferrum_cli/src/bin/*` — practical examples, benchmarks, and TUI orchestration.
+
+The source files now include module-level rustdoc headers focused on:
+- chemistry intent (what problem is being solved),
+- implementation strategy (how it is solved in Rust),
+- and where each module sits in the end-to-end QSAR pipeline.
+
 ## 🏆 Comparison with Other Tools
 
 See **[PHASE_11_REFACTOR_COMPLETE.md](PHASE_11_REFACTOR_COMPLETE.md)** for detailed API documentation.

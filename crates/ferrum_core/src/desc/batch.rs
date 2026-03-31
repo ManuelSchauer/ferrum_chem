@@ -1,3 +1,47 @@
+//! Descriptor module: Batch.
+//!
+//! This file implements one descriptor family (or supporting descriptor glue)
+//! used in QSAR pipelines. Descriptors convert molecular structure into typed
+//! numerical or binary features consumed by ML and analytics layers.
+//!
+//! Learning focus:
+//! - Implementing stateless descriptor structs in Rust.
+//! - Mapping chemistry concepts to reproducible numeric features.
+
+
+//! ## File guide: Batch
+//!
+//! This file belongs to FerrumChem's **descriptor/fingerprint feature layer**.
+//!
+//! What to learn here:
+//! - Which chemistry/ML concern this file owns in the pipeline.
+//! - How Rust types and control-flow encode that concern.
+//! - Which public symbols are the best entry points for reading/debugging.
+//!
+//! Key symbols in this file:
+//! - `struct FlatDescriptorMatrix`
+//! - `fn shape`
+//! - `fn row`
+//! - `fn into_nested`
+//! - `fn into_shape_vec`
+//!
+//! Suggested reading workflow:
+//! 1. Read top-level type definitions and public APIs.
+//! 2. Trace helper functions used in hot/critical paths.
+//! 3. Cross-reference tests/examples that exercise this file.
+
+//!
+//! ### Algorithmic assumptions for this file
+//! - `Batch` assumes molecule preprocessing (implicit hydrogens, aromaticity flags, and ring annotations) is current before calculation.
+//! - `Batch` remains deterministic for identical atom/bond indexing so batch and single-molecule runs agree bit-for-bit.
+//! - Typed `DescriptorValue` output is part of the contract; downstream ML code should not rely on ad-hoc coercions.
+//! - Specific scope anchor: `crates/ferrum_core/src/desc/batch.rs` defines batch behavior and should be updated together with its direct tests.
+//! ### Chemistry/ML references
+//! - Todeschini & Consonni. Handbook of Molecular Descriptors (general descriptor taxonomy).
+//! - RDKit descriptor/fingerprint APIs used as practical parity baselines for `Batch` workflows.
+//! - Repository unit and parity tests covering `Batch` behavior and edge molecules.
+//! - Code-local source of truth: symbols and tests declared in `crates/ferrum_core/src/desc/batch.rs`.
+
 use super::aromatic_ring_count::AromaticRingCount;
 use super::atom_count::{AromaticAtomCount, AtomCount, ElementCounts, HeavyAtomCount};
 use super::autocorrelation::Autocorrelation;
@@ -59,10 +103,18 @@ pub struct FlatDescriptorMatrix {
 }
 
 impl FlatDescriptorMatrix {
+    /// Implements the behavior encoded by this function.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/batch.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     pub fn shape(&self) -> (usize, usize) {
         (self.rows, self.cols)
     }
 
+    /// Implements the behavior encoded by this function.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/batch.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     pub fn row(&self, idx: usize) -> &[f32] {
         assert!(idx < self.rows, "row index out of bounds");
         if self.cols == 0 {
@@ -72,6 +124,10 @@ impl FlatDescriptorMatrix {
         &self.data[start..start + self.cols]
     }
 
+    /// Implements nested.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/batch.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     pub fn into_nested(self) -> Vec<Vec<f32>> {
         if self.cols == 0 {
             return vec![Vec::new(); self.rows];
@@ -82,6 +138,10 @@ impl FlatDescriptorMatrix {
             .collect()
     }
 
+    /// Implements shape vec.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/batch.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     pub fn into_shape_vec(self) -> ((usize, usize), Vec<f32>) {
         ((self.rows, self.cols), self.data)
     }
@@ -159,6 +219,10 @@ pub enum BatchDescriptor {
 }
 
 impl BatchDescriptor {
+    /// Implements the behavior encoded by this function.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/batch.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     pub fn all() -> &'static [Self] {
         const ALL: [BatchDescriptor; 66] = [
             BatchDescriptor::MolecularWeight,
@@ -231,6 +295,10 @@ impl BatchDescriptor {
         &ALL
     }
 
+    /// Implements the behavior encoded by this function.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/batch.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     pub fn name(self) -> &'static str {
         match self {
             Self::MolecularWeight => "MolecularWeight",
@@ -302,6 +370,10 @@ impl BatchDescriptor {
         }
     }
 
+    /// Calculates the behavior encoded by this function.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/batch.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     pub fn calculate(self, mol: &mut Molecule, ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
         match self {
             Self::MolecularWeight => MolecularWeight.calculate(mol, ctx),
@@ -377,6 +449,10 @@ impl BatchDescriptor {
         }
     }
 
+    /// Implements len.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/batch.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     pub fn feature_len(self) -> usize {
         match self {
             Self::ElementCounts => 12,
@@ -408,6 +484,10 @@ impl BatchDescriptor {
         }
     }
 
+    /// Writes into.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/batch.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     pub fn write_into(self, mol: &mut Molecule, row: &mut [f32], offset: &mut usize, ctx: &mut crate::desc::context::CalculationContext) {
         match self {
             Self::SlogpVsa => {
@@ -430,6 +510,10 @@ impl BatchDescriptor {
     }
 }
 
+/// Writes descriptor value.
+///
+/// Function context: `crates/ferrum_core/src/desc/batch.rs`.
+/// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
 fn write_descriptor_value(value: DescriptorValue, row: &mut [f32], offset: &mut usize) {
     match value {
         DescriptorValue::Int(v) => {
@@ -470,6 +554,10 @@ fn write_descriptor_value(value: DescriptorValue, row: &mut [f32], offset: &mut 
     }
 }
 
+/// Implements cols dyn.
+///
+/// Function context: `crates/ferrum_core/src/desc/batch.rs`.
+/// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
 fn infer_cols_dyn(probe: &mut Molecule, descriptors: &[Box<dyn Descriptor>]) -> usize {
     let mut ctx = crate::desc::context::CalculationContext::new();
     descriptors
@@ -478,10 +566,18 @@ fn infer_cols_dyn(probe: &mut Molecule, descriptors: &[Box<dyn Descriptor>]) -> 
         .sum()
 }
 
+/// Implements cols static.
+///
+/// Function context: `crates/ferrum_core/src/desc/batch.rs`.
+/// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
 fn infer_cols_static(descriptors: &[BatchDescriptor]) -> usize {
     descriptors.iter().map(|desc| desc.feature_len()).sum()
 }
 
+/// Implements row dyn.
+///
+/// Function context: `crates/ferrum_core/src/desc/batch.rs`.
+/// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
 fn fill_row_dyn(row: &mut [f32], mol: &mut Molecule, descriptors: &[Box<dyn Descriptor>], ctx: &mut crate::desc::context::CalculationContext) {
     let mut offset = 0usize;
     for desc in descriptors {
@@ -490,6 +586,10 @@ fn fill_row_dyn(row: &mut [f32], mol: &mut Molecule, descriptors: &[Box<dyn Desc
     debug_assert_eq!(offset, row.len());
 }
 
+/// Implements row static.
+///
+/// Function context: `crates/ferrum_core/src/desc/batch.rs`.
+/// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
 fn fill_row_static(row: &mut [f32], mol: &mut Molecule, descriptors: &[BatchDescriptor], ctx: &mut crate::desc::context::CalculationContext) {
     let mut offset = 0usize;
     for &desc in descriptors {
@@ -748,6 +848,10 @@ mod tests {
     use crate::io::smiles::parse_smiles;
 
     #[test]
+    /// Runs regression test for calculate batch.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/batch.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_calculate_batch() {
         let mut molecules = vec![
             parse_smiles("C").unwrap(),
@@ -763,6 +867,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for calculate batch flat shape.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/batch.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_calculate_batch_flat_shape() {
         let mut molecules = vec![parse_smiles("C").unwrap(), parse_smiles("CC").unwrap()];
         let descriptors: Vec<Box<dyn Descriptor>> = vec![Box::new(MolecularWeight)];
@@ -773,6 +881,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for calculate batch flat static shape.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/batch.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_calculate_batch_flat_static_shape() {
         let mut molecules = vec![parse_smiles("C").unwrap(), parse_smiles("CC").unwrap()];
         let descriptors = [BatchDescriptor::MolecularWeight, BatchDescriptor::AtomCount];
@@ -783,6 +895,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for calculate batch flat static cancellable honors cancel flag.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/batch.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_calculate_batch_flat_static_cancellable_honors_cancel_flag() {
         let mut molecules = vec![parse_smiles("C").unwrap(); 128];
         let descriptors = [BatchDescriptor::MolecularWeight];
@@ -798,6 +914,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for static feature len matches runtime value len on torture set.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/batch.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_static_feature_len_matches_runtime_value_len_on_torture_set() {
         let torture_smiles = [
             "c1ccc2ccccc2c1",
@@ -856,6 +976,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for write csv.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/batch.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_write_csv() {
         let smiles = vec!["C".to_string(), "CC".to_string()];
         let descriptors: Vec<Box<dyn Descriptor>> = vec![Box::new(MolecularWeight)];
@@ -869,6 +993,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for write csv flat.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/batch.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_write_csv_flat() {
         let smiles = vec!["C".to_string(), "CC".to_string()];
         let feature_names = vec!["MolecularWeight".to_string()];

@@ -1,5 +1,39 @@
 //! Cross-validation — K-Fold, Leave-One-Out, Y-randomization.
 
+
+//! ## File guide: Cv
+//!
+//! This file belongs to FerrumChem's **machine-learning pipeline layer**.
+//!
+//! What to learn here:
+//! - Which chemistry/ML concern this file owns in the pipeline.
+//! - How Rust types and control-flow encode that concern.
+//! - Which public symbols are the best entry points for reading/debugging.
+//!
+//! Key symbols in this file:
+//! - `struct KFoldSplits`
+//! - `fn k_fold`
+//! - `fn leave_one_out`
+//! - `fn y_randomization`
+//! - `mod tests`
+//!
+//! Suggested reading workflow:
+//! 1. Read top-level type definitions and public APIs.
+//! 2. Trace helper functions used in hot/critical paths.
+//! 3. Cross-reference tests/examples that exercise this file.
+
+//!
+//! ### Algorithmic assumptions for this file
+//! - `Cv` assumes `ndarray` row-major sample layout (`n_samples x n_features`) throughout fit/predict paths.
+//! - `Cv` prioritizes reproducibility via explicit seeds and deterministic iteration order where applicable.
+//! - Model quality metrics for `Cv` depend on consistent preprocessing choices (scaling, splitting, and leakage control).
+//! - Specific scope anchor: `crates/ferrum_core/src/ml/cv.rs` defines cv behavior and should be updated together with its direct tests.
+//! ### Chemistry/ML references
+//! - Canonical ML literature for `Cv` algorithm family (statistical learning and validation texts).
+//! - scikit-learn/RDKit-style API ergonomics that inform `Cv` fit/transform/predict contracts.
+//! - OECD QSAR validation principles where `Cv` is used in predictive chemistry contexts.
+//! - Code-local source of truth: symbols and tests declared in `crates/ferrum_core/src/ml/cv.rs`.
+
 use crate::ml::dataset::QsarDataset;
 use rand::SeedableRng;
 use rand::rngs::StdRng;
@@ -77,6 +111,10 @@ mod tests {
     use super::*;
     use ndarray::{Array1, Array2};
 
+    /// Builds dataset.
+    ///
+    /// Function context: `crates/ferrum_core/src/ml/cv.rs`.
+    /// ML-layer note: numerical stability and reproducibility are important for comparable model evaluation.
     fn make_dataset(n: usize) -> QsarDataset {
         let features = Array2::from_shape_fn((n, 2), |(i, j)| (i + j) as f64);
         let targets = Array1::from_vec((0..n).map(|i| i as f64).collect());
@@ -85,6 +123,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for k fold sizes.
+    ///
+    /// Function context: `crates/ferrum_core/src/ml/cv.rs`.
+    /// ML-layer note: numerical stability and reproducibility are important for comparable model evaluation.
     fn test_k_fold_sizes() {
         let splits = k_fold(100, 5, 42);
         assert_eq!(splits.folds.len(), 5);
@@ -95,6 +137,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for k fold no overlap.
+    ///
+    /// Function context: `crates/ferrum_core/src/ml/cv.rs`.
+    /// ML-layer note: numerical stability and reproducibility are important for comparable model evaluation.
     fn test_k_fold_no_overlap() {
         let splits = k_fold(20, 4, 42);
         let mut all_test: Vec<usize> = Vec::new();
@@ -111,6 +157,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for leave one out.
+    ///
+    /// Function context: `crates/ferrum_core/src/ml/cv.rs`.
+    /// ML-layer note: numerical stability and reproducibility are important for comparable model evaluation.
     fn test_leave_one_out() {
         let splits = leave_one_out(5);
         assert_eq!(splits.folds.len(), 5);
@@ -121,6 +171,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for y randomization.
+    ///
+    /// Function context: `crates/ferrum_core/src/ml/cv.rs`.
+    /// ML-layer note: numerical stability and reproducibility are important for comparable model evaluation.
     fn test_y_randomization() {
         let ds = make_dataset(20);
         let shuffled = y_randomization(&ds, 5, 42);

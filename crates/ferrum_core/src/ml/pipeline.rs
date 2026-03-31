@@ -2,6 +2,38 @@
 //!
 //! Combines: scaler → optional PCA → model → applicability domain → prediction.
 
+
+//! ## File guide: Pipeline
+//!
+//! This file belongs to FerrumChem's **machine-learning pipeline layer**.
+//!
+//! What to learn here:
+//! - Which chemistry/ML concern this file owns in the pipeline.
+//! - How Rust types and control-flow encode that concern.
+//! - Which public symbols are the best entry points for reading/debugging.
+//!
+//! Key symbols in this file:
+//! - `enum ScalerType`
+//! - `enum ModelType`
+//! - `enum TaskType`
+//! - `struct QsarPipeline`
+//! - `fn predict_one`
+//!
+//! Suggested reading workflow:
+//! 1. Read top-level type definitions and public APIs.
+//! 2. Trace helper functions used in hot/critical paths.
+//! 3. Cross-reference tests/examples that exercise this file.
+
+//!
+//! ### Algorithmic assumptions for this file
+//! - Training flow is strictly ordered: scaling -> optional PCA -> model fit -> optional AD fit.
+//! - Serialized pipeline structs assume version-compatible ndarray/serde layouts for reproducible reloads.
+//! - Task-type branching (regression/classification) must remain consistent across CV, metrics, and prediction APIs.
+//! ### Chemistry/ML references
+//! - Kuhn & Johnson. Applied predictive modeling workflows (preprocess-fit-validate).
+//! - Breiman (2001), Zou & Hastie (2005), and KNN/PLS literature reflected by selectable model backends.
+//! - OECD QSAR validation principles motivating explicit applicability-domain handling.
+
 use ndarray::{Array1, Array2};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -109,6 +141,10 @@ impl QsarPipeline {
         }
     }
 
+    /// Implements predict one.
+    ///
+    /// Function context: `crates/ferrum_core/src/ml/pipeline.rs`.
+    /// ML-layer note: numerical stability and reproducibility are important for comparable model evaluation.
     fn model_predict_one(&self, sample: &[f64]) -> f64 {
         match &self.model {
             ModelType::KnnRegressor(m) => m.predict_one(sample),
@@ -120,6 +156,10 @@ impl QsarPipeline {
         }
     }
 
+    /// Implements predict.
+    ///
+    /// Function context: `crates/ferrum_core/src/ml/pipeline.rs`.
+    /// ML-layer note: numerical stability and reproducibility are important for comparable model evaluation.
     fn model_predict(&self, features: &Array2<f64>) -> Array1<f64> {
         match &self.model {
             ModelType::KnnRegressor(m) => m.predict(features),
@@ -360,6 +400,10 @@ where
     metrics::r_squared(targets.as_slice().unwrap(), &all_preds)
 }
 
+/// Implements rows.
+///
+/// Function context: `crates/ferrum_core/src/ml/pipeline.rs`.
+/// ML-layer note: numerical stability and reproducibility are important for comparable model evaluation.
 fn select_rows(data: &Array2<f64>, indices: &[usize]) -> Array2<f64> {
     let ncols = data.ncols();
     let mut result = Array2::<f64>::zeros((indices.len(), ncols));
@@ -369,6 +413,10 @@ fn select_rows(data: &Array2<f64>, indices: &[usize]) -> Array2<f64> {
     result
 }
 
+/// Implements elements.
+///
+/// Function context: `crates/ferrum_core/src/ml/pipeline.rs`.
+/// ML-layer note: numerical stability and reproducibility are important for comparable model evaluation.
 fn select_elements(data: &Array1<f64>, indices: &[usize]) -> Array1<f64> {
     Array1::from_vec(indices.iter().map(|&i| data[i]).collect())
 }
@@ -378,6 +426,10 @@ mod tests {
     use super::*;
     use ndarray::{Array1, Array2};
 
+    /// Builds regression dataset.
+    ///
+    /// Function context: `crates/ferrum_core/src/ml/pipeline.rs`.
+    /// ML-layer note: numerical stability and reproducibility are important for comparable model evaluation.
     fn make_regression_dataset() -> QsarDataset {
         // y ≈ 2*x1 + noise
         let n = 30;
@@ -395,6 +447,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for pipeline predict.
+    ///
+    /// Function context: `crates/ferrum_core/src/ml/pipeline.rs`.
+    /// ML-layer note: numerical stability and reproducibility are important for comparable model evaluation.
     fn test_pipeline_predict() {
         let ds = make_regression_dataset();
         let scaler = StandardScaler::fit(&ds.features);
@@ -423,6 +479,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for pipeline serialization.
+    ///
+    /// Function context: `crates/ferrum_core/src/ml/pipeline.rs`.
+    /// ML-layer note: numerical stability and reproducibility are important for comparable model evaluation.
     fn test_pipeline_serialization() {
         let ds = make_regression_dataset();
         let scaler = StandardScaler::fit(&ds.features);
@@ -448,6 +508,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for auto qsar regression.
+    ///
+    /// Function context: `crates/ferrum_core/src/ml/pipeline.rs`.
+    /// ML-layer note: numerical stability and reproducibility are important for comparable model evaluation.
     fn test_auto_qsar_regression() {
         let ds = make_regression_dataset();
         let pipeline = AutoQsar::regression(&ds, 3, 42);
@@ -463,6 +527,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for preprocess one matches batch with pca.
+    ///
+    /// Function context: `crates/ferrum_core/src/ml/pipeline.rs`.
+    /// ML-layer note: numerical stability and reproducibility are important for comparable model evaluation.
     fn test_preprocess_one_matches_batch_with_pca() {
         let ds = make_regression_dataset();
         let scaler = StandardScaler::fit(&ds.features);

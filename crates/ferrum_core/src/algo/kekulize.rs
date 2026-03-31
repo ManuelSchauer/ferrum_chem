@@ -13,6 +13,40 @@
 //! This function modifies the molecule in-place and is not thread-safe.
 //! Call it once per molecule before parallel descriptor calculations.
 
+
+//! ## File guide: Kekulize
+//!
+//! This file belongs to FerrumChem's **cheminformatics algorithm layer**.
+//!
+//! What to learn here:
+//! - Which chemistry/ML concern this file owns in the pipeline.
+//! - How Rust types and control-flow encode that concern.
+//! - Which public symbols are the best entry points for reading/debugging.
+//!
+//! Key symbols in this file:
+//! - `fn kekulize`
+//! - `fn is_aromatic_ring`
+//! - `fn kekulize_ring`
+//! - `fn find_bond_between`
+//! - `mod tests`
+//!
+//! Suggested reading workflow:
+//! 1. Read top-level type definitions and public APIs.
+//! 2. Trace helper functions used in hot/critical paths.
+//! 3. Cross-reference tests/examples that exercise this file.
+
+//!
+//! ### Algorithmic assumptions for this file
+//! - `Kekulize` operates on 2D molecular graphs (atoms/bonds) and does not consume conformer geometry.
+//! - `Kekulize` relies on stable `AtomIdx`/`BondIdx` semantics and adjacency invariants from `mol::molecule`.
+//! - Performance paths in `Kekulize` prefer deterministic pruning/caching over probabilistic heuristics.
+//! - Specific scope anchor: `crates/ferrum_core/src/algo/kekulize.rs` defines kekulize behavior and should be updated together with its direct tests.
+//! ### Chemistry/ML references
+//! - Core graph algorithm literature relevant to `Kekulize` (traversal, cycle, isomorphism, or canonicalization topics).
+//! - Cheminformatics toolkit conventions (RDKit/CDK/OpenBabel) mirrored by `Kekulize` decisions.
+//! - FerrumChem regression tests that pin `Kekulize` behavior on representative molecules.
+//! - Code-local source of truth: symbols and tests declared in `crates/ferrum_core/src/algo/kekulize.rs`.
+
 use crate::algo::rings::find_sssr;
 use crate::mol::molecule::Molecule;
 use crate::types::{AtomIdx, BondType};
@@ -99,6 +133,10 @@ mod tests {
     use crate::io::smiles::parse_smiles;
 
     #[test]
+    /// Runs regression test for kekulize benzene.
+    ///
+    /// Function context: `crates/ferrum_core/src/algo/kekulize.rs`.
+    /// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
     fn test_kekulize_benzene() {
         let mut mol = parse_smiles("c1ccccc1").unwrap();
         perceive_aromaticity(&mut mol);

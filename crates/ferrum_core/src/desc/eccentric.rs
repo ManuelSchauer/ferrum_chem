@@ -10,6 +10,40 @@
 //!
 //! Reference: Sharma et al. (1997) Eccentric Connectivity Index
 
+
+//! ## File guide: Eccentric
+//!
+//! This file belongs to FerrumChem's **descriptor/fingerprint feature layer**.
+//!
+//! What to learn here:
+//! - Which chemistry/ML concern this file owns in the pipeline.
+//! - How Rust types and control-flow encode that concern.
+//! - Which public symbols are the best entry points for reading/debugging.
+//!
+//! Key symbols in this file:
+//! - `fn _compute_distance_matrix_unused`
+//! - `fn calculate`
+//! - `mod tests`
+//! - `fn parse`
+//! - `fn test_eccentric_methane`
+//!
+//! Suggested reading workflow:
+//! 1. Read top-level type definitions and public APIs.
+//! 2. Trace helper functions used in hot/critical paths.
+//! 3. Cross-reference tests/examples that exercise this file.
+
+//!
+//! ### Algorithmic assumptions for this file
+//! - `Eccentric` assumes molecule preprocessing (implicit hydrogens, aromaticity flags, and ring annotations) is current before calculation.
+//! - `Eccentric` remains deterministic for identical atom/bond indexing so batch and single-molecule runs agree bit-for-bit.
+//! - Typed `DescriptorValue` output is part of the contract; downstream ML code should not rely on ad-hoc coercions.
+//! - Specific scope anchor: `crates/ferrum_core/src/desc/eccentric.rs` defines eccentric behavior and should be updated together with its direct tests.
+//! ### Chemistry/ML references
+//! - Todeschini & Consonni. Handbook of Molecular Descriptors (general descriptor taxonomy).
+//! - RDKit descriptor/fingerprint APIs used as practical parity baselines for `Eccentric` workflows.
+//! - Repository unit and parity tests covering `Eccentric` behavior and edge molecules.
+//! - Code-local source of truth: symbols and tests declared in `crates/ferrum_core/src/desc/eccentric.rs`.
+
 use crate::mol::molecule::Molecule;
 use std::collections::VecDeque;
 
@@ -98,11 +132,19 @@ mod tests {
     use super::*;
     use crate::io::smiles::parse_smiles;
 
+    /// Parses the behavior encoded by this function.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/eccentric.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn parse(smiles: &str) -> Molecule {
         parse_smiles(smiles).unwrap()
     }
 
     #[test]
+    /// Runs regression test for eccentric methane.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/eccentric.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_eccentric_methane() {
         let mut mol = parse("C");
         let mut ctx = crate::desc::context::CalculationContext::new();
@@ -111,6 +153,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for eccentric ethane.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/eccentric.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_eccentric_ethane() {
         let mut mol = parse("CC");
         let mut ctx = crate::desc::context::CalculationContext::new();
@@ -121,6 +167,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for eccentric propane.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/eccentric.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_eccentric_propane() {
         let mut mol = parse("CCC");
         let mut ctx = crate::desc::context::CalculationContext::new();
@@ -131,6 +181,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for eccentric butane.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/eccentric.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_eccentric_butane() {
         let mut mol = parse("CCCC");
         let mut ctx = crate::desc::context::CalculationContext::new();
@@ -141,6 +195,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for eccentric isobutane.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/eccentric.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_eccentric_isobutane() {
         let mut mol = parse("CC(C)C");
         let mut ctx = crate::desc::context::CalculationContext::new();
@@ -151,6 +209,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for eccentric benzene.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/eccentric.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_eccentric_benzene() {
         let mut mol = parse("c1ccccc1");
         let mut ctx = crate::desc::context::CalculationContext::new();
@@ -161,6 +223,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for eccentric cyclohexane.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/eccentric.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_eccentric_cyclohexane() {
         let mut mol = parse("C1CCCCC1");
         let mut ctx = crate::desc::context::CalculationContext::new();
@@ -170,6 +236,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for eccentric naphthalene.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/eccentric.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_eccentric_naphthalene() {
         let mut mol = parse("c1ccc2ccccc2c1");
         let mut ctx = crate::desc::context::CalculationContext::new();
@@ -179,6 +249,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for eccentric path vs branched.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/eccentric.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_eccentric_path_vs_branched() {
         let mut linear = parse("CCCCC"); // Pentane
         let mut branched = parse("CC(C)CC"); // Isopentane

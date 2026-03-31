@@ -1,3 +1,47 @@
+//! Descriptor module: Polarizability.
+//!
+//! This file implements one descriptor family (or supporting descriptor glue)
+//! used in QSAR pipelines. Descriptors convert molecular structure into typed
+//! numerical or binary features consumed by ML and analytics layers.
+//!
+//! Learning focus:
+//! - Implementing stateless descriptor structs in Rust.
+//! - Mapping chemistry concepts to reproducible numeric features.
+
+
+//! ## File guide: Polarizability
+//!
+//! This file belongs to FerrumChem's **descriptor/fingerprint feature layer**.
+//!
+//! What to learn here:
+//! - Which chemistry/ML concern this file owns in the pipeline.
+//! - How Rust types and control-flow encode that concern.
+//! - Which public symbols are the best entry points for reading/debugging.
+//!
+//! Key symbols in this file:
+//! - `fn atom_pol`
+//! - `struct APol`
+//! - `fn name`
+//! - `fn calculate`
+//! - `struct BPol`
+//!
+//! Suggested reading workflow:
+//! 1. Read top-level type definitions and public APIs.
+//! 2. Trace helper functions used in hot/critical paths.
+//! 3. Cross-reference tests/examples that exercise this file.
+
+//!
+//! ### Algorithmic assumptions for this file
+//! - `Polarizability` assumes molecule preprocessing (implicit hydrogens, aromaticity flags, and ring annotations) is current before calculation.
+//! - `Polarizability` remains deterministic for identical atom/bond indexing so batch and single-molecule runs agree bit-for-bit.
+//! - Typed `DescriptorValue` output is part of the contract; downstream ML code should not rely on ad-hoc coercions.
+//! - Specific scope anchor: `crates/ferrum_core/src/desc/polarizability.rs` defines polarizability behavior and should be updated together with its direct tests.
+//! ### Chemistry/ML references
+//! - Todeschini & Consonni. Handbook of Molecular Descriptors (general descriptor taxonomy).
+//! - RDKit descriptor/fingerprint APIs used as practical parity baselines for `Polarizability` workflows.
+//! - Repository unit and parity tests covering `Polarizability` behavior and edge molecules.
+//! - Code-local source of truth: symbols and tests declared in `crates/ferrum_core/src/desc/polarizability.rs`.
+
 use super::Descriptor;
 use crate::desc::DescriptorValue;
 use crate::mol::molecule::Molecule;
@@ -45,6 +89,10 @@ const POLARIZABILITY: [f32; 54] = [
     5.35, // 53 I
 ];
 
+/// Implements pol.
+///
+/// Function context: `crates/ferrum_core/src/desc/polarizability.rs`.
+/// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
 fn atom_pol(atomic_number: u8) -> f32 {
     let idx = atomic_number as usize;
     if idx < POLARIZABILITY.len() {
@@ -58,10 +106,18 @@ fn atom_pol(atomic_number: u8) -> f32 {
 pub struct APol;
 
 impl Descriptor for APol {
+    /// Implements the behavior encoded by this function.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/polarizability.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn name(&self) -> &str {
         "APol"
     }
 
+    /// Calculates the behavior encoded by this function.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/polarizability.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn calculate(&self, mol: &mut Molecule, ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
         let h_pol = POLARIZABILITY[1];
         let mut sum = 0.0f32;
@@ -77,10 +133,18 @@ impl Descriptor for APol {
 pub struct BPol;
 
 impl Descriptor for BPol {
+    /// Implements the behavior encoded by this function.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/polarizability.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn name(&self) -> &str {
         "BPol"
     }
 
+    /// Calculates the behavior encoded by this function.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/polarizability.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn calculate(&self, mol: &mut Molecule, ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
         let mut sum = 0.0f32;
         for bond in &mol.bonds {
@@ -97,10 +161,18 @@ mod tests {
     use super::*;
     use crate::io::smiles::parse_smiles;
 
+    /// Parses the behavior encoded by this function.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/polarizability.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn parse(smiles: &str) -> Molecule {
         parse_smiles(smiles).expect("valid SMILES")
     }
 
+    /// Implements the behavior encoded by this function.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/polarizability.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn calc(desc: &dyn Descriptor, smiles: &str) -> f32 {
         let mut mol = parse(smiles);
         match desc.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()) {
@@ -110,6 +182,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for apol methane.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/polarizability.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_apol_methane() {
         // C: 1.76 + 4*0.387 = 3.308
         let v = calc(&APol, "[CH4]");
@@ -117,6 +193,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for apol ethanol.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/polarizability.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_apol_ethanol() {
         // CCO: 2*1.76 + 0.802 + (3+2+1)*0.387 = 4.322 + 2.322 = 6.644
         let v = calc(&APol, "CCO");
@@ -128,6 +208,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for bpol ethanol.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/polarizability.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_bpol_ethanol() {
         // Bonds: C-C (|1.76-1.76|=0) + C-O (|1.76-0.802|=0.958)
         let v = calc(&BPol, "CCO");
@@ -135,6 +219,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for apol benzene.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/polarizability.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_apol_benzene() {
         // c1ccccc1: 6*1.76 + 6*0.387 = 10.56 + 2.322 = 12.882
         let v = calc(&APol, "c1ccccc1");
@@ -146,6 +234,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for bpol symmetric.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/polarizability.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_bpol_symmetric() {
         // Benzene: all C-C bonds → BPol = 0
         let v = calc(&BPol, "c1ccccc1");
@@ -153,6 +245,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for apol fluoromethane.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/polarizability.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_apol_fluoromethane() {
         // CF: 1.76 + 0.557 + 3*0.387 = 3.478
         let v = calc(&APol, "CF");
@@ -164,6 +260,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for empty molecule.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/polarizability.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_empty_molecule() {
         let mut mol = Molecule::default();
         assert!(matches!(APol.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()), DescriptorValue::Float(v) if v == 0.0));

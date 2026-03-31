@@ -10,12 +10,50 @@
 //! Reference: Liu, S. et al. (1998) "Molecular Distance Edge (MDE)
 //!            Vector", JCICS 38, 536-540.
 
+
+//! ## File guide: Mde
+//!
+//! This file belongs to FerrumChem's **descriptor/fingerprint feature layer**.
+//!
+//! What to learn here:
+//! - Which chemistry/ML concern this file owns in the pipeline.
+//! - How Rust types and control-flow encode that concern.
+//! - Which public symbols are the best entry points for reading/debugging.
+//!
+//! Key symbols in this file:
+//! - `fn _compute_distance_matrix_unused`
+//! - `fn atom_class`
+//! - `fn pair_index`
+//! - `struct MDE`
+//! - `fn name`
+//!
+//! Suggested reading workflow:
+//! 1. Read top-level type definitions and public APIs.
+//! 2. Trace helper functions used in hot/critical paths.
+//! 3. Cross-reference tests/examples that exercise this file.
+
+//!
+//! ### Algorithmic assumptions for this file
+//! - `Mde` assumes molecule preprocessing (implicit hydrogens, aromaticity flags, and ring annotations) is current before calculation.
+//! - `Mde` remains deterministic for identical atom/bond indexing so batch and single-molecule runs agree bit-for-bit.
+//! - Typed `DescriptorValue` output is part of the contract; downstream ML code should not rely on ad-hoc coercions.
+//! - Specific scope anchor: `crates/ferrum_core/src/desc/mde.rs` defines mde behavior and should be updated together with its direct tests.
+//! ### Chemistry/ML references
+//! - Todeschini & Consonni. Handbook of Molecular Descriptors (general descriptor taxonomy).
+//! - RDKit descriptor/fingerprint APIs used as practical parity baselines for `Mde` workflows.
+//! - Repository unit and parity tests covering `Mde` behavior and edge molecules.
+//! - Code-local source of truth: symbols and tests declared in `crates/ferrum_core/src/desc/mde.rs`.
+
 use super::typed::{Descriptor, DescriptorValue};
 use crate::mol::molecule::Molecule;
 use crate::types::AtomIdx;
 use std::collections::VecDeque;
 
 #[allow(dead_code)]
+/// Computes distance matrix unused.
+///
+/// Function context: `crates/ferrum_core/src/desc/mde.rs`.
+/// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
 fn _compute_distance_matrix_unused(mol: &Molecule) -> Vec<u32> {
     let n = mol.num_atoms();
     let mut distances = vec![u32::MAX; n * n];
@@ -63,6 +101,10 @@ fn atom_class(atomic_number: u8) -> usize {
 // Total: 15 pair types (upper triangle of 6×6, but we only count 5 classes: 0-4)
 const NUM_PAIR_TYPES: usize = 15;
 
+/// Implements index.
+///
+/// Function context: `crates/ferrum_core/src/desc/mde.rs`.
+/// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
 fn pair_index(a: usize, b: usize) -> Option<usize> {
     let (lo, hi) = if a <= b { (a, b) } else { (b, a) };
     if lo > 4 || hi > 4 {
@@ -81,10 +123,18 @@ fn pair_index(a: usize, b: usize) -> Option<usize> {
 pub struct MDE;
 
 impl Descriptor for MDE {
+    /// Implements the behavior encoded by this function.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/mde.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn name(&self) -> &str {
         "MDE"
     }
 
+    /// Calculates the behavior encoded by this function.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/mde.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn calculate(&self, mol: &mut Molecule, ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
         let mut values = vec![0.0f32; NUM_PAIR_TYPES];
 
@@ -116,6 +166,10 @@ impl Descriptor for MDE {
 }
 
 const _: () = {
+    /// Asserts send sync to guard invariants.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/mde.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     const fn assert_send_sync<T: Send + Sync>() {}
     let _ = assert_send_sync::<MDE>;
 };
@@ -126,6 +180,10 @@ mod tests {
     use super::*;
     use crate::io::smiles::parse_smiles;
 
+    /// Implements mde.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/mde.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn calc_mde(smiles: &str) -> Vec<f32> {
         let mut mol = parse_smiles(smiles).expect("valid SMILES");
         match MDE.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()) {
@@ -135,12 +193,20 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for mde len.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/mde.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_mde_len() {
         let m = calc_mde("CC");
         assert_eq!(m.len(), 15);
     }
 
     #[test]
+    /// Runs regression test for mde ethane.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/mde.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_mde_ethane() {
         let m = calc_mde("CC");
         let cc_idx = pair_index(0, 0).unwrap();
@@ -148,6 +214,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for mde ethanol.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/mde.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_mde_ethanol() {
         let m = calc_mde("CCO");
         let cc = pair_index(0, 0).unwrap();
@@ -157,6 +227,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for mde no nitrogen in ethane.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/mde.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_mde_no_nitrogen_in_ethane() {
         let m = calc_mde("CC");
         let cn = pair_index(0, 1).unwrap();
@@ -164,6 +238,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for mde benzene.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/mde.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_mde_benzene() {
         let m = calc_mde("c1ccccc1");
         let cc = pair_index(0, 0).unwrap();
@@ -171,6 +249,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for mde deterministic.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/mde.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_mde_deterministic() {
         let a = calc_mde("CCCC");
         let b = calc_mde("CCCC");
@@ -178,6 +260,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for mde halogen.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/mde.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_mde_halogen() {
         let m = calc_mde("CCl");
         let cx = pair_index(0, 4).unwrap();
@@ -185,6 +271,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for pair index.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/mde.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_pair_index() {
         assert_eq!(pair_index(0, 0), Some(0));
         assert_eq!(pair_index(0, 1), Some(1));

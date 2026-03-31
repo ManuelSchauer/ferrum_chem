@@ -18,6 +18,38 @@
 //! - TPSA ≤ 60 Ų: Good blood-brain barrier penetration
 //! - TPSA > 140 Ų: Poor oral absorption
 
+
+//! ## File guide: Tpsa
+//!
+//! This file belongs to FerrumChem's **descriptor/fingerprint feature layer**.
+//!
+//! What to learn here:
+//! - Which chemistry/ML concern this file owns in the pipeline.
+//! - How Rust types and control-flow encode that concern.
+//! - Which public symbols are the best entry points for reading/debugging.
+//!
+//! Key symbols in this file:
+//! - `fn compute_tpsa`
+//! - `fn is_in_3_ring`
+//! - `fn calculate_n_contribution`
+//! - `fn fallback_n`
+//! - `fn calculate_o_contribution`
+//!
+//! Suggested reading workflow:
+//! 1. Read top-level type definitions and public APIs.
+//! 2. Trace helper functions used in hot/critical paths.
+//! 3. Cross-reference tests/examples that exercise this file.
+
+//!
+//! ### Algorithmic assumptions for this file
+//! - TPSA is computed with Ertl fragment contributions from local atom/bond environments, not 3D solvent-accessible surfaces.
+//! - N/O contribution tables require correct aromaticity, valence, and hydrogen counts from parser/preprocessing stages.
+//! - `include_sp` toggles sulfur/phosphorus fragments exactly like common toolkit APIs.
+//! ### Chemistry/ML references
+//! - Ertl, Rohde, Selzer (2000). Fragment-based topological polar surface area.
+//! - RDKit CalcTPSA behavior (including optional S/P handling) as parity baseline.
+//! - Medicinal chemistry guidance linking TPSA thresholds to oral bioavailability and BBB penetration.
+
 use super::typed::{Descriptor, DescriptorValue};
 use crate::mol::molecule::Molecule;
 use crate::types::BondType;
@@ -130,6 +162,10 @@ pub fn compute_tpsa(mol: &Molecule, include_sp: bool) -> f64 {
     tpsa
 }
 
+/// Computes tpsa cached.
+///
+/// Function context: `crates/ferrum_core/src/desc/tpsa.rs`.
+/// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
 pub(crate) fn compute_tpsa_cached(mol: &mut Molecule, include_sp: bool) -> f64 {
     if include_sp {
         return compute_tpsa(mol, true);
@@ -389,12 +425,20 @@ mod tests {
     use super::*;
     use crate::io::smiles::parse_smiles;
 
+    /// Implements the behavior encoded by this function.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/tpsa.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn tpsa(smiles: &str) -> f64 {
         let mol = parse_smiles(smiles).unwrap();
         compute_tpsa(&mol, false)
     }
 
     #[test]
+    /// Runs regression test for tpsa comprehensive rdkit validation.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/tpsa.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_tpsa_comprehensive_rdkit_validation() {
         // Comprehensive validation against RDKit TPSA(includeSandP=False) defaults
         let cases: Vec<(&str, &str, f64)> = vec![
@@ -488,76 +532,136 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for tpsa alkane.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/tpsa.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_tpsa_alkane() {
         assert!((tpsa("CCCC") - 0.0).abs() < 0.01);
     }
 
     #[test]
+    /// Runs regression test for tpsa alcohol.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/tpsa.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_tpsa_alcohol() {
         assert!((tpsa("CCO") - 20.23).abs() < 0.01);
     }
 
     #[test]
+    /// Runs regression test for tpsa ether.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/tpsa.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_tpsa_ether() {
         assert!((tpsa("COC") - 9.23).abs() < 0.01);
     }
 
     #[test]
+    /// Runs regression test for tpsa ketone.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/tpsa.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_tpsa_ketone() {
         assert!((tpsa("CC(=O)C") - 17.07).abs() < 0.01);
     }
 
     #[test]
+    /// Runs regression test for tpsa carboxylic acid.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/tpsa.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_tpsa_carboxylic_acid() {
         assert!((tpsa("CC(=O)O") - 37.30).abs() < 0.01);
     }
 
     #[test]
+    /// Runs regression test for tpsa ester.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/tpsa.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_tpsa_ester() {
         assert!((tpsa("CC(=O)OC") - 26.30).abs() < 0.01);
     }
 
     #[test]
+    /// Runs regression test for tpsa primary amine.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/tpsa.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_tpsa_primary_amine() {
         assert!((tpsa("CN") - 26.02).abs() < 0.01);
     }
 
     #[test]
+    /// Runs regression test for tpsa secondary amine.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/tpsa.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_tpsa_secondary_amine() {
         assert!((tpsa("CNC") - 12.03).abs() < 0.01);
     }
 
     #[test]
+    /// Runs regression test for tpsa tertiary amine.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/tpsa.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_tpsa_tertiary_amine() {
         assert!((tpsa("CN(C)C") - 3.24).abs() < 0.01);
     }
 
     #[test]
+    /// Runs regression test for tpsa pyridine.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/tpsa.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_tpsa_pyridine() {
         assert!((tpsa("c1cccnc1") - 12.89).abs() < 0.01);
     }
 
     #[test]
+    /// Runs regression test for tpsa aspirin.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/tpsa.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_tpsa_aspirin() {
         assert!((tpsa("CC(=O)Oc1ccccc1C(=O)O") - 63.60).abs() < 0.01);
     }
 
     #[test]
+    /// Runs regression test for tpsa caffeine.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/tpsa.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_tpsa_caffeine() {
         assert!((tpsa("CN1C=NC2=C1C(=O)N(C(=O)N2C)C") - 61.82).abs() < 0.01);
     }
 
     #[test]
+    /// Runs regression test for tpsa ibuprofen.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/tpsa.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_tpsa_ibuprofen() {
         assert!((tpsa("CC(C)Cc1ccc(cc1)C(C)C(=O)O") - 37.30).abs() < 0.01);
     }
 
     #[test]
+    /// Runs regression test for tpsa amide.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/tpsa.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_tpsa_amide() {
         assert!((tpsa("CC(=O)N") - 43.09).abs() < 0.01);
     }
 
     #[test]
+    /// Runs regression test for tpsa 3ring epoxides.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/tpsa.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_tpsa_3ring_epoxides() {
         // Epoxides: O in 3-ring → 12.53 (vs 9.23 for normal ether)
         assert!((tpsa("C1CO1") - 12.53).abs() < 0.01, "ethylene oxide");
@@ -571,6 +675,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for tpsa 3ring aziridines.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/tpsa.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_tpsa_3ring_aziridines() {
         // Aziridines: N in 3-ring
         // -NH- in 3-ring → 21.94 (vs 12.03 for normal secondary amine)
@@ -586,6 +694,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for tpsa 3ring vs larger rings.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/tpsa.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_tpsa_3ring_vs_larger_rings() {
         // Confirm non-3-ring molecules get normal (non-3-ring) values
         assert!(
@@ -643,10 +755,18 @@ mod tests {
 pub struct Tpsa;
 
 impl Descriptor for Tpsa {
+    /// Implements the behavior encoded by this function.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/tpsa.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn name(&self) -> &str {
         "TPSA"
     }
 
+    /// Calculates the behavior encoded by this function.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/tpsa.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn calculate(&self, mol: &mut Molecule, ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
         let tpsa = compute_tpsa_cached(mol, false) as f32;
         DescriptorValue::Float(tpsa)
@@ -654,6 +774,10 @@ impl Descriptor for Tpsa {
 }
 
 const _: () = {
+    /// Asserts send sync to guard invariants.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/tpsa.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     const fn assert_send_sync<T: Send + Sync>() {}
     let _ = assert_send_sync::<Tpsa>;
 };

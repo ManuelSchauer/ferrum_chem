@@ -12,6 +12,38 @@
 //! Reference: Rogers, D. & Hahn, M. (2010) "Extended-Connectivity Fingerprints"
 //! J. Chem. Inf. Model. 50(5), 742-754.
 
+
+//! ## File guide: Fingerprint
+//!
+//! This file belongs to FerrumChem's **descriptor/fingerprint feature layer**.
+//!
+//! What to learn here:
+//! - Which chemistry/ML concern this file owns in the pipeline.
+//! - How Rust types and control-flow encode that concern.
+//! - Which public symbols are the best entry points for reading/debugging.
+//!
+//! Key symbols in this file:
+//! - `fn rdkit_hash_combine`
+//! - `fn rdkit_hash_u32_slice`
+//! - `fn rdkit_hash_pair_i32_u32`
+//! - `struct BondNeighborhood`
+//! - `fn new`
+//!
+//! Suggested reading workflow:
+//! 1. Read top-level type definitions and public APIs.
+//! 2. Trace helper functions used in hot/critical paths.
+//! 3. Cross-reference tests/examples that exercise this file.
+
+//!
+//! ### Algorithmic assumptions for this file
+//! - ECFP/FCFP hashing follows RDKit-compatible combine/folding behavior so bit collisions mirror parity expectations.
+//! - Feature invariants depend on SMARTS-derived donor/acceptor and atom typing semantics from `io::smarts`.
+//! - Radius expansion assumes stable bond neighborhoods and deterministic atom ordering across runs.
+//! ### Chemistry/ML references
+//! - Rogers, D. & Hahn, M. (2010). Extended-Connectivity Fingerprints (ECFP).
+//! - RDKit Morgan fingerprint implementation notes for invariant generation and hash folding.
+//! - Daylight SMARTS syntax used for pharmacophore-like feature detection primitives.
+
 use super::typed::{Descriptor, DescriptorValue};
 use crate::algo::iso::visit_matches;
 use crate::io::smarts::parse_smarts;
@@ -22,6 +54,10 @@ use bitvec::prelude::*;
 use once_cell::sync::Lazy;
 use std::collections::HashSet;
 
+/// Implements hash combine.
+///
+/// Function context: `crates/ferrum_core/src/desc/fingerprint.rs`.
+/// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
 fn rdkit_hash_combine(seed: &mut u32, value: u32) {
     *seed ^= value
         .wrapping_add(0x9e37_79b9)
@@ -29,6 +65,10 @@ fn rdkit_hash_combine(seed: &mut u32, value: u32) {
         .wrapping_add(seed.wrapping_shr(2));
 }
 
+/// Implements hash u32 slice.
+///
+/// Function context: `crates/ferrum_core/src/desc/fingerprint.rs`.
+/// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
 fn rdkit_hash_u32_slice(values: &[u32]) -> u32 {
     let mut seed = 0u32;
     for &value in values {
@@ -37,6 +77,10 @@ fn rdkit_hash_u32_slice(values: &[u32]) -> u32 {
     seed
 }
 
+/// Implements hash pair i32 u32.
+///
+/// Function context: `crates/ferrum_core/src/desc/fingerprint.rs`.
+/// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
 fn rdkit_hash_pair_i32_u32(first: i32, second: u32) -> u32 {
     let mut seed = 0u32;
     rdkit_hash_combine(&mut seed, first as u32);
@@ -48,11 +92,19 @@ fn rdkit_hash_pair_i32_u32(first: i32, second: u32) -> u32 {
 struct BondNeighborhood(Vec<u64>);
 
 impl BondNeighborhood {
+    /// Creates a new value with the defaults and invariants required by this module.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/fingerprint.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn new(word_count: usize) -> Self {
         Self(vec![0u64; word_count])
     }
 
     #[inline]
+    /// Sets bit.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/fingerprint.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn set_bit(&mut self, bit_idx: usize) {
         let word = bit_idx / 64;
         let bit = bit_idx % 64;
@@ -60,6 +112,10 @@ impl BondNeighborhood {
     }
 
     #[inline]
+    /// Implements with.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/fingerprint.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn union_with(&mut self, other: &Self) {
         for (slot, rhs) in self.0.iter_mut().zip(other.0.iter()) {
             *slot |= *rhs;
@@ -67,6 +123,10 @@ impl BondNeighborhood {
     }
 }
 
+/// Implements mass.
+///
+/// Function context: `crates/ferrum_core/src/desc/fingerprint.rs`.
+/// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
 fn atom_mass(atom: &crate::mol::atom::Atom) -> f32 {
     if atom.isotope > 0 {
         atom.isotope as f32
@@ -145,6 +205,10 @@ fn morgan_feature_invariants(mol: &Molecule) -> Vec<u32> {
     invars
 }
 
+/// Implements bond invariant.
+///
+/// Function context: `crates/ferrum_core/src/desc/fingerprint.rs`.
+/// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
 fn morgan_bond_invariant(bond: &crate::mol::bond::Bond) -> i32 {
     match bond.bond_type {
         BondType::Single => 1,
@@ -156,6 +220,10 @@ fn morgan_bond_invariant(bond: &crate::mol::bond::Bond) -> i32 {
     }
 }
 
+/// Implements features from invariants.
+///
+/// Function context: `crates/ferrum_core/src/desc/fingerprint.rs`.
+/// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
 fn morgan_features_from_invariants(mol: &Molecule, radius: u32, atom_invariants: Vec<u32>) -> Vec<u64> {
     let n_atoms = mol.num_atoms();
     if n_atoms == 0 {
@@ -365,6 +433,10 @@ impl ECFP {
 }
 
 impl Descriptor for ECFP {
+    /// Implements the behavior encoded by this function.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/fingerprint.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn name(&self) -> &str {
         match self.radius {
             1 => "ECFP2",
@@ -374,6 +446,10 @@ impl Descriptor for ECFP {
         }
     }
 
+    /// Calculates the behavior encoded by this function.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/fingerprint.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn calculate(&self, mol: &mut Molecule, ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
         let features = morgan_features(mol, self.radius as u32);
         let bits = fold_fingerprint(&features, self.num_bits);
@@ -445,6 +521,10 @@ impl FCFP {
 }
 
 impl Descriptor for FCFP {
+    /// Implements the behavior encoded by this function.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/fingerprint.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn name(&self) -> &str {
         match self.radius {
             1 => "FCFP2",
@@ -454,6 +534,10 @@ impl Descriptor for FCFP {
         }
     }
 
+    /// Calculates the behavior encoded by this function.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/fingerprint.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn calculate(&self, mol: &mut Molecule, ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
         let features = fcfp_features(mol, self.radius as u32);
         let bits = fold_fingerprint(&features, self.num_bits);
@@ -462,6 +546,10 @@ impl Descriptor for FCFP {
 }
 
 const _: () = {
+    /// Asserts send sync to guard invariants.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/fingerprint.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     const fn assert_send_sync<T: Send + Sync>() {}
     let _ = assert_send_sync::<ECFP>;
     let _ = assert_send_sync::<FCFP>;
@@ -472,17 +560,29 @@ mod tests {
     use super::*;
     use crate::io::smiles::parse_smiles;
 
+    /// Implements fp.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/fingerprint.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn calc_fp(smiles: &str, radius: u8, bits: usize) -> BitVec<u8, Lsb0> {
         let mut mol = parse_smiles(smiles).expect("valid SMILES");
         let desc = ECFP::new(radius, bits);
         desc.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()).as_binary().clone()
     }
 
+    /// Counts bits.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/fingerprint.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn count_bits(fp: &BitVec<u8, Lsb0>) -> usize {
         fp.count_ones()
     }
 
     #[test]
+    /// Runs regression test for methane has bits.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/fingerprint.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_methane_has_bits() {
         let fp = calc_fp("C", 2, 2048);
         let bits = count_bits(&fp);
@@ -491,6 +591,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for benzene has bits.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/fingerprint.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_benzene_has_bits() {
         let fp = calc_fp("c1ccccc1", 2, 2048);
         let bits = count_bits(&fp);
@@ -498,6 +602,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for empty molecule.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/fingerprint.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_empty_molecule() {
         let mut mol = Molecule::new();
         let desc = Morgan::ecfp4();
@@ -506,6 +614,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for benzene symmetry.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/fingerprint.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_benzene_symmetry() {
         let mol = parse_smiles("c1ccccc1").unwrap();
         let features = morgan_features(&mol, 2);
@@ -518,6 +630,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for identical molecules same fp.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/fingerprint.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_identical_molecules_same_fp() {
         let fp1 = calc_fp("CCO", 2, 2048);
         let fp2 = calc_fp("CCO", 2, 2048);
@@ -525,6 +641,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for tanimoto identical.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/fingerprint.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_tanimoto_identical() {
         let fp = calc_fp("CCO", 2, 2048);
         let sim = tanimoto_similarity(&fp, &fp);
@@ -536,6 +656,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for tanimoto similar molecules.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/fingerprint.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_tanimoto_similar_molecules() {
         let fp1 = calc_fp("c1ccc(O)cc1", 2, 2048);
         let fp2 = calc_fp("Cc1ccc(O)cc1", 2, 2048);
@@ -548,6 +672,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for tanimoto dissimilar molecules.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/fingerprint.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_tanimoto_dissimilar_molecules() {
         let fp1 = calc_fp("c1ccccc1", 2, 2048);
         let fp2 = calc_fp("CCCCCCCCCCCC", 2, 2048);
@@ -560,6 +688,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for higher radius more bits.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/fingerprint.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_higher_radius_more_bits() {
         let fp2 = calc_fp("c1ccc(CC(=O)O)cc1", 1, 2048);
         let fp4 = calc_fp("c1ccc(CC(=O)O)cc1", 2, 2048);
@@ -575,6 +707,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for different bit sizes.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/fingerprint.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_different_bit_sizes() {
         let mut mol = parse_smiles("c1ccc(CC(=O)O)cc1").unwrap();
         for bits in [1024, 2048, 4096] {
@@ -586,6 +722,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for isomers different fps.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/fingerprint.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_isomers_different_fps() {
         let fp1 = calc_fp("CCCCO", 2, 2048);
         let fp2 = calc_fp("CCOCC", 2, 2048);
@@ -598,6 +738,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for tanimoto empty.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/fingerprint.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_tanimoto_empty() {
         let fp1 = bitvec![u8, Lsb0; 0; 2048];
         let fp2 = bitvec![u8, Lsb0; 0; 2048];
@@ -605,6 +749,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for aspirin fp.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/fingerprint.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_aspirin_fp() {
         let fp = calc_fp("CC(=O)Oc1ccccc1C(=O)O", 2, 2048);
         let bits = count_bits(&fp);
@@ -616,6 +764,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for caffeine fp.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/fingerprint.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_caffeine_fp() {
         let fp = calc_fp("CN1C=NC2=C1C(=O)N(C(=O)N2C)C", 2, 2048);
         let bits = count_bits(&fp);
@@ -624,6 +776,10 @@ mod tests {
 
     // ========== FCFP Tests ==========
 
+    /// Implements fcfp.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/fingerprint.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn calc_fcfp(smiles: &str, radius: u8, bits: usize) -> BitVec<u8, Lsb0> {
         let mut mol = parse_smiles(smiles).expect("valid SMILES");
         let desc = FCFP::new(radius, bits);
@@ -631,12 +787,20 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for fcfp has bits.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/fingerprint.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_fcfp_has_bits() {
         let fp = calc_fcfp("c1ccccc1", 2, 2048);
         assert!(count_bits(&fp) > 0, "Benzene FCFP4 should set bits");
     }
 
     #[test]
+    /// Runs regression test for fcfp differs from ecfp.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/fingerprint.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_fcfp_differs_from_ecfp() {
         let fp_ecfp = calc_fp("CCO", 2, 2048);
         let fp_fcfp = calc_fcfp("CCO", 2, 2048);
@@ -644,6 +808,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for fcfp pharmacophore similarity.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/fingerprint.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_fcfp_pharmacophore_similarity() {
         let ecfp_phenol = calc_fp("c1ccc(O)cc1", 2, 2048);
         let ecfp_thiophenol = calc_fp("c1ccc(S)cc1", 2, 2048);
@@ -661,6 +829,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for fcfp empty molecule.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/fingerprint.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_fcfp_empty_molecule() {
         let mut mol = Molecule::new();
         let desc = FCFP::fcfp4();
@@ -669,6 +841,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for fcfp identical molecules.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/fingerprint.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_fcfp_identical_molecules() {
         let fp1 = calc_fcfp("CCO", 2, 2048);
         let fp2 = calc_fcfp("CCO", 2, 2048);
@@ -676,6 +852,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for fcfp self tanimoto.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/fingerprint.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_fcfp_self_tanimoto() {
         let fp = calc_fcfp("c1ccc(CC(=O)O)cc1", 2, 2048);
         let sim = tanimoto_similarity(&fp, &fp);
@@ -683,6 +863,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for fcfp radius variants.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/fingerprint.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_fcfp_radius_variants() {
         let fp2 = calc_fcfp("c1ccc(CC(=O)O)cc1", 1, 2048);
         let fp4 = calc_fcfp("c1ccc(CC(=O)O)cc1", 2, 2048);
@@ -692,6 +876,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for fcfp drug molecule.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/fingerprint.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_fcfp_drug_molecule() {
         let fp = calc_fcfp("CC(=O)Oc1ccccc1C(=O)O", 2, 2048);
         let bits = count_bits(&fp);
@@ -699,6 +887,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for fcfp constructors.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/fingerprint.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_fcfp_constructors() {
         let f2 = FCFP::fcfp2();
         assert_eq!(f2.radius, 1);
@@ -712,6 +904,10 @@ mod tests {
     }
 
     #[test]
+    /// Runs regression test for fcfp name.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/fingerprint.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_fcfp_name() {
         let f = FCFP::fcfp4();
         assert_eq!(Descriptor::name(&f), "FCFP4");
