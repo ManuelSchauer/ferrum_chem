@@ -9,7 +9,6 @@
 //! - Lipophilicity
 //! - Molecular complexity
 
-
 //! ## File guide: Chains
 //!
 //! This file belongs to FerrumChem's **descriptor/fingerprint feature layer**.
@@ -198,13 +197,8 @@ impl LongestAliphaticChain {
             if !allowed[i] || comp_mark[i] {
                 continue;
             }
-            let vertices = Self::component_vertices(
-                mol,
-                i as AtomIdx,
-                &allowed,
-                &mut comp_mark,
-                &mut queue,
-            );
+            let vertices =
+                Self::component_vertices(mol, i as AtomIdx, &allowed, &mut comp_mark, &mut queue);
             let len =
                 Self::tree_diameter_or_cycle_bound(mol, &vertices, &allowed, &mut dist, &mut queue);
             best = best.max(len);
@@ -227,7 +221,11 @@ impl Descriptor for LongestAliphaticChain {
     ///
     /// Function context: `crates/ferrum_core/src/desc/chains.rs`.
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-    fn calculate(&self, mol: &mut Molecule, ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
+    fn calculate(
+        &self,
+        mol: &mut Molecule,
+        ctx: &mut crate::desc::context::CalculationContext,
+    ) -> DescriptorValue {
         DescriptorValue::Int(Self::compute(mol))
     }
 }
@@ -377,13 +375,8 @@ impl LargestChain {
             if comp_mark[i] {
                 continue;
             }
-            let vertices = Self::component_vertices(
-                mol,
-                i as AtomIdx,
-                &allowed,
-                &mut comp_mark,
-                &mut queue,
-            );
+            let vertices =
+                Self::component_vertices(mol, i as AtomIdx, &allowed, &mut comp_mark, &mut queue);
             let len =
                 Self::tree_diameter_or_cycle_bound(mol, &vertices, &allowed, &mut dist, &mut queue);
             best = best.max(len);
@@ -406,7 +399,11 @@ impl Descriptor for LargestChain {
     ///
     /// Function context: `crates/ferrum_core/src/desc/chains.rs`.
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-    fn calculate(&self, mol: &mut Molecule, ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
+    fn calculate(
+        &self,
+        mol: &mut Molecule,
+        ctx: &mut crate::desc::context::CalculationContext,
+    ) -> DescriptorValue {
         DescriptorValue::Int(Self::compute(mol))
     }
 }
@@ -447,7 +444,10 @@ mod tests {
     fn test_longest_aliphatic_chain_linear() {
         let mut mol = parse_and_prepare("CCCCCC");
         assert_eq!(
-            LongestAliphaticChain.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()),
+            LongestAliphaticChain.calculate(
+                &mut mol,
+                &mut crate::desc::context::CalculationContext::new()
+            ),
             DescriptorValue::Int(6)
         );
     }
@@ -460,7 +460,10 @@ mod tests {
     fn test_longest_aliphatic_chain_branched() {
         let mut mol = parse_and_prepare("CC(C)CCC");
         assert_eq!(
-            LongestAliphaticChain.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()),
+            LongestAliphaticChain.calculate(
+                &mut mol,
+                &mut crate::desc::context::CalculationContext::new()
+            ),
             DescriptorValue::Int(5)
         );
     }
@@ -473,7 +476,10 @@ mod tests {
     fn test_longest_aliphatic_chain_aromatic() {
         let mut mol = parse_and_prepare("CCCc1ccccc1");
         assert_eq!(
-            LongestAliphaticChain.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()),
+            LongestAliphaticChain.calculate(
+                &mut mol,
+                &mut crate::desc::context::CalculationContext::new()
+            ),
             DescriptorValue::Int(3)
         );
     }
@@ -486,7 +492,10 @@ mod tests {
     fn test_longest_aliphatic_chain_aromatic_only() {
         let mut mol = parse_and_prepare("c1ccccc1");
         assert_eq!(
-            LongestAliphaticChain.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()),
+            LongestAliphaticChain.calculate(
+                &mut mol,
+                &mut crate::desc::context::CalculationContext::new()
+            ),
             DescriptorValue::Int(0)
         );
     }
@@ -499,7 +508,10 @@ mod tests {
     fn test_longest_aliphatic_chain_complex() {
         let mut mol = parse_and_prepare("CCCCC(CC)CCCC");
         assert_eq!(
-            LongestAliphaticChain.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()),
+            LongestAliphaticChain.calculate(
+                &mut mol,
+                &mut crate::desc::context::CalculationContext::new()
+            ),
             DescriptorValue::Int(9)
         );
     }
@@ -511,7 +523,13 @@ mod tests {
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_largest_chain_linear() {
         let mut mol = parse_and_prepare("CCCCCC");
-        assert_eq!(LargestChain.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()), DescriptorValue::Int(6));
+        assert_eq!(
+            LargestChain.calculate(
+                &mut mol,
+                &mut crate::desc::context::CalculationContext::new()
+            ),
+            DescriptorValue::Int(6)
+        );
     }
 
     #[test]
@@ -521,7 +539,13 @@ mod tests {
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_largest_chain_aromatic() {
         let mut mol = parse_and_prepare("c1ccccc1");
-        assert_eq!(LargestChain.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()), DescriptorValue::Int(6));
+        assert_eq!(
+            LargestChain.calculate(
+                &mut mol,
+                &mut crate::desc::context::CalculationContext::new()
+            ),
+            DescriptorValue::Int(6)
+        );
     }
 
     #[test]
@@ -531,7 +555,13 @@ mod tests {
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_largest_chain_with_heteroatom() {
         let mut mol = parse_and_prepare("CCOCCOC");
-        assert_eq!(LargestChain.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()), DescriptorValue::Int(7));
+        assert_eq!(
+            LargestChain.calculate(
+                &mut mol,
+                &mut crate::desc::context::CalculationContext::new()
+            ),
+            DescriptorValue::Int(7)
+        );
     }
 
     #[test]
@@ -541,7 +571,13 @@ mod tests {
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_largest_chain_branched() {
         let mut mol = parse_and_prepare("CC(C)(C)C");
-        assert_eq!(LargestChain.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()), DescriptorValue::Int(3));
+        assert_eq!(
+            LargestChain.calculate(
+                &mut mol,
+                &mut crate::desc::context::CalculationContext::new()
+            ),
+            DescriptorValue::Int(3)
+        );
     }
 
     #[test]

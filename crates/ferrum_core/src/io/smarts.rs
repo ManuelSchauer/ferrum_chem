@@ -8,7 +8,6 @@
 //! - Parser/state-machine techniques in Rust.
 //! - Error-aware ingestion pipelines for large datasets.
 
-
 //! ## File guide: Smarts
 //!
 //! This file belongs to FerrumChem's **input/output parsing layer**.
@@ -209,7 +208,8 @@ impl QueryAtom {
         // outside VF2. If this atom uses ring-size/membership SMARTS primitives,
         // build ring context once here so ring checks stay context-driven and
         // never trigger clone+SSSR fallback work.
-        let ring_ctx = query_atom_needs_ring_context(self).then(|| SmartsRingContext::for_molecule(mol));
+        let ring_ctx =
+            query_atom_needs_ring_context(self).then(|| SmartsRingContext::for_molecule(mol));
         query_atom_matches_with_context(self, mol, atom_idx, ring_ctx.as_ref())
     }
 }
@@ -341,7 +341,10 @@ fn primitive_needs_ring_context(primitive: &AtomPrimitive) -> bool {
 /// Function context: `crates/ferrum_core/src/io/smarts.rs`.
 /// I/O-layer note: parsing/ingestion should surface explicit errors instead of silently repairing malformed input.
 fn query_atom_needs_ring_context(query_atom: &QueryAtom) -> bool {
-    query_atom.primitives.iter().any(primitive_needs_ring_context)
+    query_atom
+        .primitives
+        .iter()
+        .any(primitive_needs_ring_context)
 }
 
 /// Implements atom matches with context.

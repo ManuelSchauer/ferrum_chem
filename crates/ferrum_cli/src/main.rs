@@ -12,7 +12,6 @@
 //! command wiring pattern. Most production workflows in this repository are
 //! exposed through dedicated binaries under `src/bin/`.
 
-
 //! ## File guide: Main
 //!
 //! This file belongs to FerrumChem's **library support layer**.

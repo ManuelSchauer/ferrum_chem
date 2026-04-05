@@ -9,7 +9,6 @@
 //! Note: This is the public MACCS keys set with 166 keys (numbered 1-166).
 //! Key 0 is reserved and always returns 0.
 
-
 //! ## File guide: Maccs
 //!
 //! This file belongs to FerrumChem's **descriptor/fingerprint feature layer**.
@@ -208,7 +207,10 @@ fn fixed_atomic_number_primitive(primitive: &AtomPrimitive) -> Option<u8> {
 /// Function context: `crates/ferrum_core/src/desc/maccs.rs`.
 /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
 fn query_atom_requires_aromatic(query_atom: &QueryAtom) -> bool {
-    query_atom.primitives.iter().any(primitive_requires_aromatic_atom)
+    query_atom
+        .primitives
+        .iter()
+        .any(primitive_requires_aromatic_atom)
 }
 
 /// Implements requires aromatic atom.
@@ -1234,7 +1236,13 @@ mod tests {
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn calc_maccs(smiles: &str) -> BitVec<u8, Lsb0> {
         let mut mol = parse_and_prepare(smiles);
-        MaccsKeys.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()).as_binary().clone()
+        MaccsKeys
+            .calculate(
+                &mut mol,
+                &mut crate::desc::context::CalculationContext::new(),
+            )
+            .as_binary()
+            .clone()
     }
 
     #[test]

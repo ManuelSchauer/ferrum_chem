@@ -40,7 +40,6 @@
 //! }
 //! ```
 
-
 //! ## File guide: Typed
 //!
 //! This file belongs to FerrumChem's **descriptor/fingerprint feature layer**.
@@ -310,7 +309,11 @@ pub trait Descriptor: Send + Sync {
     ///
     /// Default implementation calculates a value and returns its length.
     /// Override if this can be determined without calculation (e.g., constant size).
-    fn size(&self, mol: &mut Molecule, ctx: &mut crate::desc::context::CalculationContext) -> usize {
+    fn size(
+        &self,
+        mol: &mut Molecule,
+        ctx: &mut crate::desc::context::CalculationContext,
+    ) -> usize {
         self.calculate(mol, ctx).len()
     }
 }
@@ -589,7 +592,11 @@ mod tests {
         ///
         /// Function context: `crates/ferrum_core/src/desc/typed.rs`.
         /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-        fn calculate(&self, mol: &mut Molecule, ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
+        fn calculate(
+            &self,
+            mol: &mut Molecule,
+            ctx: &mut crate::desc::context::CalculationContext,
+        ) -> DescriptorValue {
             DescriptorValue::Int(mol.num_atoms() as u32)
         }
     }
@@ -604,7 +611,10 @@ mod tests {
 
         let mut mol = parse_smiles("CCO").unwrap();
         let desc = ExampleDescriptor;
-        let value = desc.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new());
+        let value = desc.calculate(
+            &mut mol,
+            &mut crate::desc::context::CalculationContext::new(),
+        );
 
         assert_eq!(desc.name(), "Example");
         assert_eq!(value.as_int(), 3); // 3 heavy atoms

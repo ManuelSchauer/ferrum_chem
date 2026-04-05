@@ -8,7 +8,6 @@
 //! - Environment-driven configuration patterns in Rust CLIs.
 //! - How FerrumChem APIs are wired into practical workflows.
 
-
 //! ## File guide: Parity Bundle Benchmark
 //!
 //! This file belongs to FerrumChem's **CLI/demo/benchmark executable layer**.

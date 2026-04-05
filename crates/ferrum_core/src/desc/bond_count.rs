@@ -8,7 +8,6 @@
 //! - Implementing stateless descriptor structs in Rust.
 //! - Mapping chemistry concepts to reproducible numeric features.
 
-
 //! ## File guide: Bond Count
 //!
 //! This file belongs to FerrumChem's **descriptor/fingerprint feature layer**.
@@ -212,7 +211,10 @@ fn is_strict_terminal_substituent_center(
         let other_atom = &mol.atoms[other];
         match other_atom.atomic_number {
             // RDKit strict excludes C([CH3])([CH3])[CH3] centers.
-            6 if !other_atom.is_aromatic() && heavy_degree[other] == 1 && other_atom.total_h() == 3 => {
+            6 if !other_atom.is_aromatic()
+                && heavy_degree[other] == 1
+                && other_atom.total_h() == 3 =>
+            {
                 terminal_methyl_neighbors += 1;
             }
             // RDKit strict excludes C(F)(F)F, C(Cl)(Cl)Cl and C(Br)(Br)Br.
@@ -533,7 +535,11 @@ impl Descriptor for BondCount {
     ///
     /// Function context: `crates/ferrum_core/src/desc/bond_count.rs`.
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-    fn calculate(&self, mol: &mut Molecule, ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
+    fn calculate(
+        &self,
+        mol: &mut Molecule,
+        ctx: &mut crate::desc::context::CalculationContext,
+    ) -> DescriptorValue {
         DescriptorValue::Int(compute_bond_count(mol))
     }
 }
@@ -556,7 +562,11 @@ impl Descriptor for BondCountDetailed {
     ///
     /// Function context: `crates/ferrum_core/src/desc/bond_count.rs`.
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-    fn calculate(&self, mol: &mut Molecule, ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
+    fn calculate(
+        &self,
+        mol: &mut Molecule,
+        ctx: &mut crate::desc::context::CalculationContext,
+    ) -> DescriptorValue {
         let mut counts = vec![0u32; 5]; // total, single, double, triple, aromatic
 
         counts[0] = mol.num_bonds() as u32;
@@ -594,7 +604,11 @@ impl Descriptor for RotatableBondCount {
     ///
     /// Function context: `crates/ferrum_core/src/desc/bond_count.rs`.
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-    fn calculate(&self, mol: &mut Molecule, ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
+    fn calculate(
+        &self,
+        mol: &mut Molecule,
+        ctx: &mut crate::desc::context::CalculationContext,
+    ) -> DescriptorValue {
         DescriptorValue::Int(compute_rotatable_bond_count_cached(mol))
     }
 }
@@ -623,7 +637,15 @@ mod tests {
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_bond_count_simple() {
         let mut mol = parse_smiles("CCO").unwrap();
-        assert_eq!(BondCount.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()).as_int(), 2);
+        assert_eq!(
+            BondCount
+                .calculate(
+                    &mut mol,
+                    &mut crate::desc::context::CalculationContext::new()
+                )
+                .as_int(),
+            2
+        );
     }
 
     #[test]
@@ -633,7 +655,13 @@ mod tests {
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_bond_count_detailed_single() {
         let mut mol = parse_smiles("CCCC").unwrap();
-        let v = BondCountDetailed.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()).as_int_vec().to_vec();
+        let v = BondCountDetailed
+            .calculate(
+                &mut mol,
+                &mut crate::desc::context::CalculationContext::new(),
+            )
+            .as_int_vec()
+            .to_vec();
         assert_eq!(v[0], 3); // Total
         assert_eq!(v[1], 3); // Single
         assert_eq!(v[2], 0); // Double
@@ -647,7 +675,13 @@ mod tests {
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_bond_count_detailed_double() {
         let mut mol = parse_smiles("C=C").unwrap();
-        let v = BondCountDetailed.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()).as_int_vec().to_vec();
+        let v = BondCountDetailed
+            .calculate(
+                &mut mol,
+                &mut crate::desc::context::CalculationContext::new(),
+            )
+            .as_int_vec()
+            .to_vec();
         assert_eq!(v[0], 1);
         assert_eq!(v[1], 0);
         assert_eq!(v[2], 1);
@@ -661,7 +695,13 @@ mod tests {
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_bond_count_detailed_triple() {
         let mut mol = parse_smiles("C#N").unwrap();
-        let v = BondCountDetailed.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()).as_int_vec().to_vec();
+        let v = BondCountDetailed
+            .calculate(
+                &mut mol,
+                &mut crate::desc::context::CalculationContext::new(),
+            )
+            .as_int_vec()
+            .to_vec();
         assert_eq!(v[0], 1);
         assert_eq!(v[1], 0);
         assert_eq!(v[2], 0);
@@ -675,7 +715,13 @@ mod tests {
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_bond_count_detailed_mixed() {
         let mut mol = parse_smiles("CC=C").unwrap();
-        let v = BondCountDetailed.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()).as_int_vec().to_vec();
+        let v = BondCountDetailed
+            .calculate(
+                &mut mol,
+                &mut crate::desc::context::CalculationContext::new(),
+            )
+            .as_int_vec()
+            .to_vec();
         assert_eq!(v[0], 2);
         assert_eq!(v[1], 1);
         assert_eq!(v[2], 1);
@@ -689,7 +735,15 @@ mod tests {
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_rotatable_bond_count_ethane() {
         let mut mol = parse_smiles("CC").unwrap();
-        assert_eq!(RotatableBondCount.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()).as_int(), 0);
+        assert_eq!(
+            RotatableBondCount
+                .calculate(
+                    &mut mol,
+                    &mut crate::desc::context::CalculationContext::new()
+                )
+                .as_int(),
+            0
+        );
     }
 
     #[test]
@@ -699,7 +753,15 @@ mod tests {
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_rotatable_bond_count_propane() {
         let mut mol = parse_smiles("CCC").unwrap();
-        assert_eq!(RotatableBondCount.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()).as_int(), 0);
+        assert_eq!(
+            RotatableBondCount
+                .calculate(
+                    &mut mol,
+                    &mut crate::desc::context::CalculationContext::new()
+                )
+                .as_int(),
+            0
+        );
     }
 
     #[test]
@@ -709,7 +771,15 @@ mod tests {
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_rotatable_bond_count_butane() {
         let mut mol = parse_smiles("CCCC").unwrap();
-        assert_eq!(RotatableBondCount.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()).as_int(), 1);
+        assert_eq!(
+            RotatableBondCount
+                .calculate(
+                    &mut mol,
+                    &mut crate::desc::context::CalculationContext::new()
+                )
+                .as_int(),
+            1
+        );
     }
 
     #[test]
@@ -719,7 +789,15 @@ mod tests {
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_rotatable_bond_count_ethene() {
         let mut mol = parse_smiles("C=C").unwrap();
-        assert_eq!(RotatableBondCount.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()).as_int(), 0);
+        assert_eq!(
+            RotatableBondCount
+                .calculate(
+                    &mut mol,
+                    &mut crate::desc::context::CalculationContext::new()
+                )
+                .as_int(),
+            0
+        );
     }
 
     #[test]
@@ -730,7 +808,15 @@ mod tests {
     fn test_rotatable_bond_count_benzene() {
         let mut mol = parse_smiles("c1ccccc1").unwrap();
         find_sssr(&mut mol);
-        assert_eq!(RotatableBondCount.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()).as_int(), 0);
+        assert_eq!(
+            RotatableBondCount
+                .calculate(
+                    &mut mol,
+                    &mut crate::desc::context::CalculationContext::new()
+                )
+                .as_int(),
+            0
+        );
     }
 
     #[test]
@@ -741,7 +827,15 @@ mod tests {
     fn test_rotatable_bond_count_toluene() {
         let mut mol = parse_smiles("Cc1ccccc1").unwrap();
         find_sssr(&mut mol);
-        assert_eq!(RotatableBondCount.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()).as_int(), 0);
+        assert_eq!(
+            RotatableBondCount
+                .calculate(
+                    &mut mol,
+                    &mut crate::desc::context::CalculationContext::new()
+                )
+                .as_int(),
+            0
+        );
     }
 
     #[test]
@@ -751,7 +845,15 @@ mod tests {
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_rotatable_bond_count_pentane() {
         let mut mol = parse_smiles("CCCCC").unwrap();
-        assert_eq!(RotatableBondCount.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()).as_int(), 2);
+        assert_eq!(
+            RotatableBondCount
+                .calculate(
+                    &mut mol,
+                    &mut crate::desc::context::CalculationContext::new()
+                )
+                .as_int(),
+            2
+        );
     }
 
     #[test]
@@ -761,7 +863,15 @@ mod tests {
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_rotatable_bond_count_ethanol() {
         let mut mol = parse_smiles("CCO").unwrap();
-        assert_eq!(RotatableBondCount.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()).as_int(), 0);
+        assert_eq!(
+            RotatableBondCount
+                .calculate(
+                    &mut mol,
+                    &mut crate::desc::context::CalculationContext::new()
+                )
+                .as_int(),
+            0
+        );
     }
 
     #[test]
@@ -771,7 +881,15 @@ mod tests {
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_rotatable_bond_count_propanol() {
         let mut mol = parse_smiles("CCCO").unwrap();
-        assert_eq!(RotatableBondCount.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()).as_int(), 1);
+        assert_eq!(
+            RotatableBondCount
+                .calculate(
+                    &mut mol,
+                    &mut crate::desc::context::CalculationContext::new()
+                )
+                .as_int(),
+            1
+        );
     }
 
     #[test]
@@ -783,7 +901,15 @@ mod tests {
         // RDKit excludes the acyl C(=O)-N bond itself but still counts the
         // exocyclic N-alkyl bond in a secondary amide.
         let mut mol = parse_smiles("CC(=O)NCC").unwrap();
-        assert_eq!(RotatableBondCount.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()).as_int(), 1);
+        assert_eq!(
+            RotatableBondCount
+                .calculate(
+                    &mut mol,
+                    &mut crate::desc::context::CalculationContext::new()
+                )
+                .as_int(),
+            1
+        );
     }
 
     #[test]
@@ -794,7 +920,15 @@ mod tests {
     fn test_rotatable_bond_count_ester_carbonyl_o_excluded() {
         // Ethyl acetate: C(=O)-O is excluded by carbonyl-O rule, O-CH2 counted.
         let mut mol = parse_smiles("CC(=O)OCC").unwrap();
-        assert_eq!(RotatableBondCount.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()).as_int(), 1);
+        assert_eq!(
+            RotatableBondCount
+                .calculate(
+                    &mut mol,
+                    &mut crate::desc::context::CalculationContext::new()
+                )
+                .as_int(),
+            1
+        );
     }
 
     #[test]
@@ -805,7 +939,15 @@ mod tests {
     fn test_rotatable_bond_count_methyl_acetate_zero() {
         // Methyl acetate: C(=O)-O excluded (carbonyl-O), O-CH3 terminal -> 0.
         let mut mol = parse_smiles("CC(=O)OC").unwrap();
-        assert_eq!(RotatableBondCount.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()).as_int(), 0);
+        assert_eq!(
+            RotatableBondCount
+                .calculate(
+                    &mut mol,
+                    &mut crate::desc::context::CalculationContext::new()
+                )
+                .as_int(),
+            0
+        );
     }
 
     #[test]
@@ -816,15 +958,39 @@ mod tests {
     fn test_rotatable_bond_count_formyl_c_n_bond_is_counted() {
         // Formyl C(=O)H-N bonds remain rotatable under RDKit strict semantics.
         let mut mol = parse_smiles("CNC=O").unwrap();
-        assert_eq!(RotatableBondCount.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()).as_int(), 1);
+        assert_eq!(
+            RotatableBondCount
+                .calculate(
+                    &mut mol,
+                    &mut crate::desc::context::CalculationContext::new()
+                )
+                .as_int(),
+            1
+        );
 
         // Aromatic formyl imidazole-like nitrogens are also counted.
         let mut mol2 = parse_smiles("O=CN1C=CC=N1").unwrap();
-        assert_eq!(RotatableBondCount.calculate(&mut mol2, &mut crate::desc::context::CalculationContext::new()).as_int(), 1);
+        assert_eq!(
+            RotatableBondCount
+                .calculate(
+                    &mut mol2,
+                    &mut crate::desc::context::CalculationContext::new()
+                )
+                .as_int(),
+            1
+        );
 
         // Tertiary formamide remains rotatable as well.
         let mut mol2 = parse_smiles("CN(C)C=O").unwrap();
-        assert_eq!(RotatableBondCount.calculate(&mut mol2, &mut crate::desc::context::CalculationContext::new()).as_int(), 1);
+        assert_eq!(
+            RotatableBondCount
+                .calculate(
+                    &mut mol2,
+                    &mut crate::desc::context::CalculationContext::new()
+                )
+                .as_int(),
+            1
+        );
     }
 
     #[test]
@@ -834,10 +1000,26 @@ mod tests {
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_rotatable_bond_count_hydrazide_nn_excluded_only_when_both_n_are_conjugated() {
         let mut mol2 = parse_smiles("CC(=O)NNC(=O)C").unwrap();
-        assert_eq!(RotatableBondCount.calculate(&mut mol2, &mut crate::desc::context::CalculationContext::new()).as_int(), 0);
+        assert_eq!(
+            RotatableBondCount
+                .calculate(
+                    &mut mol2,
+                    &mut crate::desc::context::CalculationContext::new()
+                )
+                .as_int(),
+            0
+        );
 
         let mut mol3 = parse_smiles("CC(=O)NNC").unwrap();
-        assert_eq!(RotatableBondCount.calculate(&mut mol3, &mut crate::desc::context::CalculationContext::new()).as_int(), 1);
+        assert_eq!(
+            RotatableBondCount
+                .calculate(
+                    &mut mol3,
+                    &mut crate::desc::context::CalculationContext::new()
+                )
+                .as_int(),
+            1
+        );
     }
 
     #[test]
@@ -847,7 +1029,15 @@ mod tests {
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_rotatable_bond_count_acetanilide_counts_n_aryl_bond() {
         let mut mol = parse_smiles("CC(=O)Nc1ccccc1").unwrap();
-        assert_eq!(RotatableBondCount.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()).as_int(), 1);
+        assert_eq!(
+            RotatableBondCount
+                .calculate(
+                    &mut mol,
+                    &mut crate::desc::context::CalculationContext::new()
+                )
+                .as_int(),
+            1
+        );
     }
 
     #[test]
@@ -857,7 +1047,15 @@ mod tests {
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_rotatable_bond_count_amidine_c_n_bond_excluded() {
         let mut mol = parse_smiles("CCNC(=N)N").unwrap();
-        assert_eq!(RotatableBondCount.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()).as_int(), 1);
+        assert_eq!(
+            RotatableBondCount
+                .calculate(
+                    &mut mol,
+                    &mut crate::desc::context::CalculationContext::new()
+                )
+                .as_int(),
+            1
+        );
     }
 
     #[test]
@@ -867,10 +1065,26 @@ mod tests {
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_rotatable_bond_count_formate_c_o_bond_is_counted() {
         let mut mol = parse_smiles("COC=O").unwrap();
-        assert_eq!(RotatableBondCount.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()).as_int(), 1);
+        assert_eq!(
+            RotatableBondCount
+                .calculate(
+                    &mut mol,
+                    &mut crate::desc::context::CalculationContext::new()
+                )
+                .as_int(),
+            1
+        );
 
         let mut mol2 = parse_smiles("CCOC=O").unwrap();
-        assert_eq!(RotatableBondCount.calculate(&mut mol2, &mut crate::desc::context::CalculationContext::new()).as_int(), 2);
+        assert_eq!(
+            RotatableBondCount
+                .calculate(
+                    &mut mol2,
+                    &mut crate::desc::context::CalculationContext::new()
+                )
+                .as_int(),
+            2
+        );
     }
 
     #[test]
@@ -880,10 +1094,26 @@ mod tests {
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_rotatable_bond_count_aromatic_acyl_n_excluded_but_formyl_kept() {
         let mut mol = parse_smiles("CC(=O)N1C=CC=N1").unwrap();
-        assert_eq!(RotatableBondCount.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()).as_int(), 0);
+        assert_eq!(
+            RotatableBondCount
+                .calculate(
+                    &mut mol,
+                    &mut crate::desc::context::CalculationContext::new()
+                )
+                .as_int(),
+            0
+        );
 
         let mut mol2 = parse_smiles("O=CN1C=CC=N1").unwrap();
-        assert_eq!(RotatableBondCount.calculate(&mut mol2, &mut crate::desc::context::CalculationContext::new()).as_int(), 1);
+        assert_eq!(
+            RotatableBondCount
+                .calculate(
+                    &mut mol2,
+                    &mut crate::desc::context::CalculationContext::new()
+                )
+                .as_int(),
+            1
+        );
     }
 
     #[test]
@@ -893,10 +1123,26 @@ mod tests {
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_rotatable_bond_count_tert_butyl_like_linkage_excluded() {
         let mut mol = parse_smiles("CC(C)(C)CC").unwrap();
-        assert_eq!(RotatableBondCount.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()).as_int(), 0);
+        assert_eq!(
+            RotatableBondCount
+                .calculate(
+                    &mut mol,
+                    &mut crate::desc::context::CalculationContext::new()
+                )
+                .as_int(),
+            0
+        );
 
         let mut mol2 = parse_smiles("CC(C)(C)OC").unwrap();
-        assert_eq!(RotatableBondCount.calculate(&mut mol2, &mut crate::desc::context::CalculationContext::new()).as_int(), 0);
+        assert_eq!(
+            RotatableBondCount
+                .calculate(
+                    &mut mol2,
+                    &mut crate::desc::context::CalculationContext::new()
+                )
+                .as_int(),
+            0
+        );
     }
 
     #[test]
@@ -906,17 +1152,49 @@ mod tests {
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_rotatable_bond_count_trihaloalkyl_linkage_excluded() {
         let mut mol = parse_smiles("ClC(Cl)(Cl)CC").unwrap();
-        assert_eq!(RotatableBondCount.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()).as_int(), 0);
+        assert_eq!(
+            RotatableBondCount
+                .calculate(
+                    &mut mol,
+                    &mut crate::desc::context::CalculationContext::new()
+                )
+                .as_int(),
+            0
+        );
 
         let mut mol2 = parse_smiles("FC(F)(F)CC").unwrap();
-        assert_eq!(RotatableBondCount.calculate(&mut mol2, &mut crate::desc::context::CalculationContext::new()).as_int(), 0);
+        assert_eq!(
+            RotatableBondCount
+                .calculate(
+                    &mut mol2,
+                    &mut crate::desc::context::CalculationContext::new()
+                )
+                .as_int(),
+            0
+        );
 
         let mut mol3 = parse_smiles("BrC(Br)(Br)CC").unwrap();
-        assert_eq!(RotatableBondCount.calculate(&mut mol3, &mut crate::desc::context::CalculationContext::new()).as_int(), 0);
+        assert_eq!(
+            RotatableBondCount
+                .calculate(
+                    &mut mol3,
+                    &mut crate::desc::context::CalculationContext::new()
+                )
+                .as_int(),
+            0
+        );
 
         // RDKit strict pattern excludes F/Cl/Br but intentionally not I.
         let mut mol4 = parse_smiles("IC(I)(I)CC").unwrap();
-        assert_eq!(RotatableBondCount.calculate(&mut mol4, &mut crate::desc::context::CalculationContext::new()).as_int(), 1);
+        assert_eq!(
+            RotatableBondCount
+                .calculate(
+                    &mut mol4,
+                    &mut crate::desc::context::CalculationContext::new()
+                )
+                .as_int(),
+            1
+        );
     }
 
     #[test]
@@ -925,11 +1203,18 @@ mod tests {
     /// Function context: `crates/ferrum_core/src/desc/bond_count.rs`.
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_rotatable_bond_count_cnp0329403_matches_rdkit() {
-        let mut mol = parse_smiles(
-            "O=C(N[C@@H](OC[C@@H]1CCCN2CCCC[C@H]12)C(Cl)(Cl)Cl)C1=CC=CC2=CC=CC=C12",
-        )
-        .unwrap();
-        assert_eq!(RotatableBondCount.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()).as_int(), 5);
+        let mut mol =
+            parse_smiles("O=C(N[C@@H](OC[C@@H]1CCCN2CCCC[C@H]12)C(Cl)(Cl)Cl)C1=CC=CC2=CC=CC=C12")
+                .unwrap();
+        assert_eq!(
+            RotatableBondCount
+                .calculate(
+                    &mut mol,
+                    &mut crate::desc::context::CalculationContext::new()
+                )
+                .as_int(),
+            5
+        );
     }
 
     #[test]
@@ -939,10 +1224,26 @@ mod tests {
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_rotatable_bond_count_non_tbutyl_quaternary_linkage_kept() {
         let mut mol = parse_smiles("CCC(C)(C)CC").unwrap();
-        assert_eq!(RotatableBondCount.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()).as_int(), 2);
+        assert_eq!(
+            RotatableBondCount
+                .calculate(
+                    &mut mol,
+                    &mut crate::desc::context::CalculationContext::new()
+                )
+                .as_int(),
+            2
+        );
 
         let mut mol2 = parse_smiles("CC(C)(O)CC").unwrap();
-        assert_eq!(RotatableBondCount.calculate(&mut mol2, &mut crate::desc::context::CalculationContext::new()).as_int(), 1);
+        assert_eq!(
+            RotatableBondCount
+                .calculate(
+                    &mut mol2,
+                    &mut crate::desc::context::CalculationContext::new()
+                )
+                .as_int(),
+            1
+        );
     }
 
     #[test]

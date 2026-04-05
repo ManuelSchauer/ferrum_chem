@@ -2,7 +2,6 @@
 //!
 //! Handles collinearity in the mega-vector of descriptors.
 
-
 //! ## File guide: Pls
 //!
 //! This file belongs to FerrumChem's **machine-learning pipeline layer**.

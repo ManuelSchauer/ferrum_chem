@@ -8,7 +8,6 @@
 //! - Environment-driven configuration patterns in Rust CLIs.
 //! - How FerrumChem APIs are wired into practical workflows.
 
-
 //! ## File guide: Smarts Demo
 //!
 //! This file belongs to FerrumChem's **CLI/demo/benchmark executable layer**.

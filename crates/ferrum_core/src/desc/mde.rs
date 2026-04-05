@@ -10,7 +10,6 @@
 //! Reference: Liu, S. et al. (1998) "Molecular Distance Edge (MDE)
 //!            Vector", JCICS 38, 536-540.
 
-
 //! ## File guide: Mde
 //!
 //! This file belongs to FerrumChem's **descriptor/fingerprint feature layer**.
@@ -135,7 +134,11 @@ impl Descriptor for MDE {
     ///
     /// Function context: `crates/ferrum_core/src/desc/mde.rs`.
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-    fn calculate(&self, mol: &mut Molecule, ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
+    fn calculate(
+        &self,
+        mol: &mut Molecule,
+        ctx: &mut crate::desc::context::CalculationContext,
+    ) -> DescriptorValue {
         let mut values = vec![0.0f32; NUM_PAIR_TYPES];
 
         let n = mol.num_atoms();
@@ -186,7 +189,10 @@ mod tests {
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn calc_mde(smiles: &str) -> Vec<f32> {
         let mut mol = parse_smiles(smiles).expect("valid SMILES");
-        match MDE.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()) {
+        match MDE.calculate(
+            &mut mol,
+            &mut crate::desc::context::CalculationContext::new(),
+        ) {
             DescriptorValue::FloatVec(v) => v,
             other => panic!("expected FloatVec, got {:?}", other),
         }

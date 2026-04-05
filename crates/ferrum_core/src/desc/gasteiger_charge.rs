@@ -8,7 +8,6 @@
 //! - Implementing stateless descriptor structs in Rust.
 //! - Mapping chemistry concepts to reproducible numeric features.
 
-
 //! ## File guide: Gasteiger Charge
 //!
 //! This file belongs to FerrumChem's **descriptor/fingerprint feature layer**.
@@ -74,7 +73,11 @@ impl Descriptor for MaxPartialCharge {
     ///
     /// Function context: `crates/ferrum_core/src/desc/gasteiger_charge.rs`.
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-    fn calculate(&self, mol: &mut Molecule, ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
+    fn calculate(
+        &self,
+        mol: &mut Molecule,
+        ctx: &mut crate::desc::context::CalculationContext,
+    ) -> DescriptorValue {
         let charges = compute_charges_cached(mol);
         let max = charges.iter().copied().fold(f64::NEG_INFINITY, f64::max);
         DescriptorValue::Float(if max.is_finite() { max as f32 } else { 0.0 })
@@ -97,7 +100,11 @@ impl Descriptor for MinPartialCharge {
     ///
     /// Function context: `crates/ferrum_core/src/desc/gasteiger_charge.rs`.
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-    fn calculate(&self, mol: &mut Molecule, ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
+    fn calculate(
+        &self,
+        mol: &mut Molecule,
+        ctx: &mut crate::desc::context::CalculationContext,
+    ) -> DescriptorValue {
         let charges = compute_charges_cached(mol);
         let min = charges.iter().copied().fold(f64::INFINITY, f64::min);
         DescriptorValue::Float(if min.is_finite() { min as f32 } else { 0.0 })
@@ -120,7 +127,11 @@ impl Descriptor for MaxAbsPartialCharge {
     ///
     /// Function context: `crates/ferrum_core/src/desc/gasteiger_charge.rs`.
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-    fn calculate(&self, mol: &mut Molecule, ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
+    fn calculate(
+        &self,
+        mol: &mut Molecule,
+        ctx: &mut crate::desc::context::CalculationContext,
+    ) -> DescriptorValue {
         let charges = compute_charges_cached(mol);
         let max_abs = charges
             .iter()
@@ -150,7 +161,11 @@ impl Descriptor for MinAbsPartialCharge {
     ///
     /// Function context: `crates/ferrum_core/src/desc/gasteiger_charge.rs`.
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-    fn calculate(&self, mol: &mut Molecule, ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
+    fn calculate(
+        &self,
+        mol: &mut Molecule,
+        ctx: &mut crate::desc::context::CalculationContext,
+    ) -> DescriptorValue {
         let charges = compute_charges_cached(mol);
         let min_abs = charges
             .iter()
@@ -180,7 +195,11 @@ impl Descriptor for GasteigerCharges {
     ///
     /// Function context: `crates/ferrum_core/src/desc/gasteiger_charge.rs`.
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-    fn calculate(&self, mol: &mut Molecule, ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
+    fn calculate(
+        &self,
+        mol: &mut Molecule,
+        ctx: &mut crate::desc::context::CalculationContext,
+    ) -> DescriptorValue {
         let charges = compute_charges_cached(mol);
         DescriptorValue::FloatVec(charges.iter().map(|&c| c as f32).collect())
     }
@@ -290,7 +309,10 @@ mod tests {
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_charges_vector_length() {
         let mut mol = parse("CCO");
-        match GasteigerCharges.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()) {
+        match GasteigerCharges.calculate(
+            &mut mol,
+            &mut crate::desc::context::CalculationContext::new(),
+        ) {
             DescriptorValue::FloatVec(v) => {
                 assert_eq!(
                     v.len(),
@@ -353,23 +375,38 @@ mod tests {
     fn test_empty_molecule() {
         let mut mol = Molecule::default();
         assert_eq!(
-            MaxPartialCharge.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()),
+            MaxPartialCharge.calculate(
+                &mut mol,
+                &mut crate::desc::context::CalculationContext::new()
+            ),
             DescriptorValue::Float(0.0)
         );
         assert_eq!(
-            MinPartialCharge.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()),
+            MinPartialCharge.calculate(
+                &mut mol,
+                &mut crate::desc::context::CalculationContext::new()
+            ),
             DescriptorValue::Float(0.0)
         );
         assert_eq!(
-            MaxAbsPartialCharge.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()),
+            MaxAbsPartialCharge.calculate(
+                &mut mol,
+                &mut crate::desc::context::CalculationContext::new()
+            ),
             DescriptorValue::Float(0.0)
         );
         assert_eq!(
-            MinAbsPartialCharge.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()),
+            MinAbsPartialCharge.calculate(
+                &mut mol,
+                &mut crate::desc::context::CalculationContext::new()
+            ),
             DescriptorValue::Float(0.0)
         );
         assert_eq!(
-            GasteigerCharges.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()),
+            GasteigerCharges.calculate(
+                &mut mol,
+                &mut crate::desc::context::CalculationContext::new()
+            ),
             DescriptorValue::FloatVec(vec![])
         );
     }

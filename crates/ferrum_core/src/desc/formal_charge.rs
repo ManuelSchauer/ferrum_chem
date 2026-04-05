@@ -8,7 +8,6 @@
 //! - Implementing stateless descriptor structs in Rust.
 //! - Mapping chemistry concepts to reproducible numeric features.
 
-
 //! ## File guide: Formal Charge
 //!
 //! This file belongs to FerrumChem's **descriptor/fingerprint feature layer**.
@@ -64,7 +63,11 @@ impl Descriptor for FormalCharge {
     ///
     /// Function context: `crates/ferrum_core/src/desc/formal_charge.rs`.
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-    fn calculate(&self, mol: &mut Molecule, ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
+    fn calculate(
+        &self,
+        mol: &mut Molecule,
+        ctx: &mut crate::desc::context::CalculationContext,
+    ) -> DescriptorValue {
         let total: i32 = mol.atoms.iter().map(|atom| atom.formal_charge as i32).sum();
         DescriptorValue::Float(total as f32)
     }
@@ -92,7 +95,10 @@ mod tests {
     fn test_formal_charge_neutral() {
         let mut mol = parse_smiles("CCO").unwrap();
         assert_eq!(
-            FormalCharge.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()),
+            FormalCharge.calculate(
+                &mut mol,
+                &mut crate::desc::context::CalculationContext::new()
+            ),
             DescriptorValue::Float(0.0)
         );
     }
@@ -105,7 +111,10 @@ mod tests {
     fn test_formal_charge_positive() {
         let mut mol = parse_smiles("[NH4+]").unwrap();
         assert_eq!(
-            FormalCharge.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()),
+            FormalCharge.calculate(
+                &mut mol,
+                &mut crate::desc::context::CalculationContext::new()
+            ),
             DescriptorValue::Float(1.0)
         );
     }
@@ -118,7 +127,10 @@ mod tests {
     fn test_formal_charge_negative() {
         let mut mol = parse_smiles("[OH-]").unwrap();
         assert_eq!(
-            FormalCharge.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()),
+            FormalCharge.calculate(
+                &mut mol,
+                &mut crate::desc::context::CalculationContext::new()
+            ),
             DescriptorValue::Float(-1.0)
         );
     }
@@ -131,7 +143,10 @@ mod tests {
     fn test_formal_charge_doubly_charged() {
         let mut mol = parse_smiles("[O-2]").unwrap();
         assert_eq!(
-            FormalCharge.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()),
+            FormalCharge.calculate(
+                &mut mol,
+                &mut crate::desc::context::CalculationContext::new()
+            ),
             DescriptorValue::Float(-2.0)
         );
     }
@@ -144,7 +159,10 @@ mod tests {
     fn test_formal_charge_benzene() {
         let mut mol = parse_smiles("c1ccccc1").unwrap();
         assert_eq!(
-            FormalCharge.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()),
+            FormalCharge.calculate(
+                &mut mol,
+                &mut crate::desc::context::CalculationContext::new()
+            ),
             DescriptorValue::Float(0.0)
         );
     }
@@ -157,7 +175,10 @@ mod tests {
     fn test_formal_charge_carboxylate() {
         let mut mol = parse_smiles("CC([O-])=O").unwrap();
         assert_eq!(
-            FormalCharge.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()),
+            FormalCharge.calculate(
+                &mut mol,
+                &mut crate::desc::context::CalculationContext::new()
+            ),
             DescriptorValue::Float(-1.0)
         );
     }
@@ -170,7 +191,10 @@ mod tests {
     fn test_formal_charge_zwitterion() {
         let mut mol = parse_smiles("[NH3+]CC([O-])=O").unwrap();
         assert_eq!(
-            FormalCharge.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()),
+            FormalCharge.calculate(
+                &mut mol,
+                &mut crate::desc::context::CalculationContext::new()
+            ),
             DescriptorValue::Float(0.0)
         );
     }

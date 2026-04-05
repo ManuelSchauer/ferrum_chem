@@ -8,7 +8,6 @@
 //! - Parser/state-machine techniques in Rust.
 //! - Error-aware ingestion pipelines for large datasets.
 
-
 //! ## File guide: Builder
 //!
 //! This file belongs to FerrumChem's **input/output parsing layer**.

@@ -10,7 +10,6 @@
 //! Reference: Pearlman, R.S. & Smith, K.M. (1999) "Metric Validation and
 //!            the Receptor-Relevant Subspace Concept", JCICS 39, 28-35.
 
-
 //! ## File guide: Bcut
 //!
 //! This file belongs to FerrumChem's **descriptor/fingerprint feature layer**.
@@ -179,9 +178,9 @@ impl BurdenLinearOperator {
         debug_assert_eq!(y.len(), self.n);
         let sum_x: f64 = x.iter().sum();
         for i in 0..self.n {
-            let mut acc = self.diag[i] * x[i] + BURDEN_OFF_DIAG_BASE * (sum_x - x[i]);
+            let mut acc = BURDEN_OFF_DIAG_BASE.mul_add(sum_x - x[i], self.diag[i] * x[i]);
             for &(j, delta) in &self.edge_deltas[i] {
-                acc += delta * x[j];
+                acc = delta.mul_add(x[j], acc);
             }
             y[i] = acc;
         }
@@ -249,22 +248,25 @@ fn jacobi_diagonalize_in_place(a: &mut [f64], n: usize) {
 
         let c = theta.cos();
         let s = theta.sin();
+        let c2 = c * c;
+        let s2 = s * s;
+        let cs2 = 2.0 * c * s;
 
         // Apply Jacobi rotation in-place.
         for i in 0..n {
             if i != p && i != q {
                 let aip = a[i * n + p];
                 let aiq = a[i * n + q];
-                let new_ip = c * aip + s * aiq;
-                let new_iq = -s * aip + c * aiq;
+                let new_ip = c.mul_add(aip, s * aiq);
+                let new_iq = (-s).mul_add(aip, c * aiq);
                 a[i * n + p] = new_ip;
                 a[p * n + i] = new_ip;
                 a[i * n + q] = new_iq;
                 a[q * n + i] = new_iq;
             }
         }
-        a[p * n + p] = c * c * app + 2.0 * c * s * apq + s * s * aqq;
-        a[q * n + q] = s * s * app - 2.0 * c * s * apq + c * c * aqq;
+        a[p * n + p] = cs2.mul_add(apq, c2.mul_add(app, s2 * aqq));
+        a[q * n + q] = (-cs2).mul_add(apq, s2.mul_add(app, c2 * aqq));
         a[p * n + q] = 0.0;
         a[q * n + p] = 0.0;
     }
@@ -382,12 +384,7 @@ fn largest_eigenvalue_power_operator(
 
     for _ in 0..max_iters {
         op.matvec(&ws.x, &mut ws.y);
-        let new_lambda: f64 = ws
-            .x
-            .iter()
-            .zip(ws.y.iter())
-            .map(|(&xi, &yi)| xi * yi)
-            .sum();
+        let new_lambda: f64 = ws.x.iter().zip(ws.y.iter()).map(|(&xi, &yi)| xi * yi).sum();
         let norm = normalize_in_place(&mut ws.y);
         if !new_lambda.is_finite() || !norm.is_finite() {
             break;
@@ -428,12 +425,7 @@ fn largest_eigenvalue_shifted_power_operator(
             ws.y[i] = shift * ws.x[i] - ws.ax[i];
         }
 
-        let new_lambda: f64 = ws
-            .x
-            .iter()
-            .zip(ws.y.iter())
-            .map(|(&xi, &yi)| xi * yi)
-            .sum();
+        let new_lambda: f64 = ws.x.iter().zip(ws.y.iter()).map(|(&xi, &yi)| xi * yi).sum();
         let norm = normalize_in_place(&mut ws.y);
         if !new_lambda.is_finite() || !norm.is_finite() {
             break;
@@ -454,7 +446,10 @@ fn largest_eigenvalue_shifted_power_operator(
 ///
 /// Function context: `crates/ferrum_core/src/desc/bcut.rs`.
 /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-fn eigenvalue_bounds_burden_operator(op: &BurdenLinearOperator, ws: &mut BcutWorkspace) -> (f64, f64) {
+fn eigenvalue_bounds_burden_operator(
+    op: &BurdenLinearOperator,
+    ws: &mut BcutWorkspace,
+) -> (f64, f64) {
     debug_assert!(op.n > 0);
     if op.n == 1 {
         let v = op.diag[0];
@@ -547,7 +542,8 @@ fn eigenvalue_bounds_symmetric_inplace(matrix: &mut [f64], n: usize) -> (f64, f6
         }
     }
     let shift = row_sum_bound.max(max_eig.abs()) + 1e-6;
-    let shifted_max = largest_eigenvalue_shifted_power(matrix, n, shift, POWER_MAX_ITERS, POWER_TOL);
+    let shifted_max =
+        largest_eigenvalue_shifted_power(matrix, n, shift, POWER_MAX_ITERS, POWER_TOL);
     let min_eig = shift - shifted_max;
 
     if max_eig.is_finite() && min_eig.is_finite() {
@@ -621,7 +617,11 @@ impl Descriptor for BCUT {
     ///
     /// Function context: `crates/ferrum_core/src/desc/bcut.rs`.
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-    fn calculate(&self, mol: &mut Molecule, ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
+    fn calculate(
+        &self,
+        mol: &mut Molecule,
+        ctx: &mut crate::desc::context::CalculationContext,
+    ) -> DescriptorValue {
         let mut values = vec![0.0f32; 8];
 
         let n = mol.num_atoms();
@@ -654,7 +654,9 @@ impl Descriptor for BCUT {
                 let op = BurdenLinearOperator::from_molecule(mol, *wfn);
                 eigenvalue_bounds_burden_operator(
                     &op,
-                    workspace.as_mut().expect("workspace initialized for large BCUT"),
+                    workspace
+                        .as_mut()
+                        .expect("workspace initialized for large BCUT"),
                 )
             };
             values[wi * 2] = low as f32;
@@ -686,7 +688,10 @@ mod tests {
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn calc_bcut(smiles: &str) -> Vec<f32> {
         let mut mol = parse_smiles(smiles).expect("valid SMILES");
-        match BCUT.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()) {
+        match BCUT.calculate(
+            &mut mol,
+            &mut crate::desc::context::CalculationContext::new(),
+        ) {
             DescriptorValue::FloatVec(v) => v,
             other => panic!("expected FloatVec, got {:?}", other),
         }
@@ -858,7 +863,10 @@ mod tests {
         let mut mol = parse_smiles(&smiles).expect("valid large mixed-element chain");
         assert!(mol.num_atoms() > JACOBI_EXACT_MAX_N);
 
-        let got = match BCUT.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()) {
+        let got = match BCUT.calculate(
+            &mut mol,
+            &mut crate::desc::context::CalculationContext::new(),
+        ) {
             DescriptorValue::FloatVec(v) => v,
             other => panic!("expected FloatVec, got {:?}", other),
         };

@@ -8,7 +8,6 @@
 //! - Implementing stateless descriptor structs in Rust.
 //! - Mapping chemistry concepts to reproducible numeric features.
 
-
 //! ## File guide: Aromatic Ring Count
 //!
 //! This file belongs to FerrumChem's **descriptor/fingerprint feature layer**.
@@ -71,10 +70,8 @@ fn compute_aromatic_ring_count_cached(mol: &mut Molecule) -> u32 {
     let cycles = mol
         .cached_min_cycle_basis_bonds()
         .expect("minimum cycle basis cache initialized");
-    cycles
-        .iter()
-        .filter(|ring| ring_bonds_all_aromatic(mol, ring))
-        .count() as u32
+    let aromatic_bond_mask: Vec<bool> = mol.bonds.iter().map(|bond| bond.is_aromatic()).collect();
+    count_aromatic_cycles(cycles, &aromatic_bond_mask)
 }
 
 /// Implements bonds all aromatic.
@@ -84,6 +81,20 @@ fn compute_aromatic_ring_count_cached(mol: &mut Molecule) -> u32 {
 fn ring_bonds_all_aromatic(mol: &Molecule, ring: &[usize]) -> bool {
     ring.iter()
         .all(|&bond_idx| mol.bonds[bond_idx].is_aromatic())
+}
+
+/// Counts aromatic cycles using a precomputed aromatic-bond mask.
+///
+/// Function context: `crates/ferrum_core/src/desc/aromatic_ring_count.rs`.
+/// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
+fn count_aromatic_cycles(
+    cycles: &[smallvec::SmallVec<[usize; 8]>],
+    aromatic_bond_mask: &[bool],
+) -> u32 {
+    cycles
+        .iter()
+        .filter(|ring| ring.iter().all(|&bond_idx| aromatic_bond_mask[bond_idx]))
+        .count() as u32
 }
 
 // ---------------------------------------------------------------------------
@@ -109,7 +120,11 @@ impl Descriptor for AromaticRingCount {
     ///
     /// Function context: `crates/ferrum_core/src/desc/aromatic_ring_count.rs`.
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-    fn calculate(&self, mol: &mut Molecule, ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
+    fn calculate(
+        &self,
+        mol: &mut Molecule,
+        ctx: &mut crate::desc::context::CalculationContext,
+    ) -> DescriptorValue {
         DescriptorValue::Int(compute_aromatic_ring_count_cached(mol))
     }
 }
@@ -137,7 +152,15 @@ mod tests {
     fn test_aromatic_ring_count_benzene() {
         let mut mol = parse_smiles("c1ccccc1").unwrap();
         perceive_aromaticity(&mut mol);
-        assert_eq!(AromaticRingCount.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()).as_int(), 1);
+        assert_eq!(
+            AromaticRingCount
+                .calculate(
+                    &mut mol,
+                    &mut crate::desc::context::CalculationContext::new()
+                )
+                .as_int(),
+            1
+        );
     }
 
     #[test]
@@ -148,7 +171,15 @@ mod tests {
     fn test_aromatic_ring_count_naphthalene() {
         let mut mol = parse_smiles("c1ccc2ccccc2c1").unwrap();
         perceive_aromaticity(&mut mol);
-        assert_eq!(AromaticRingCount.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()).as_int(), 2);
+        assert_eq!(
+            AromaticRingCount
+                .calculate(
+                    &mut mol,
+                    &mut crate::desc::context::CalculationContext::new()
+                )
+                .as_int(),
+            2
+        );
     }
 
     #[test]
@@ -159,7 +190,15 @@ mod tests {
     fn test_aromatic_ring_count_cyclohexane() {
         let mut mol = parse_smiles("C1CCCCC1").unwrap();
         perceive_aromaticity(&mut mol);
-        assert_eq!(AromaticRingCount.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()).as_int(), 0);
+        assert_eq!(
+            AromaticRingCount
+                .calculate(
+                    &mut mol,
+                    &mut crate::desc::context::CalculationContext::new()
+                )
+                .as_int(),
+            0
+        );
     }
 
     #[test]
@@ -170,7 +209,15 @@ mod tests {
     fn test_aromatic_ring_count_pyridine() {
         let mut mol = parse_smiles("c1ccncc1").unwrap();
         perceive_aromaticity(&mut mol);
-        assert_eq!(AromaticRingCount.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()).as_int(), 1);
+        assert_eq!(
+            AromaticRingCount
+                .calculate(
+                    &mut mol,
+                    &mut crate::desc::context::CalculationContext::new()
+                )
+                .as_int(),
+            1
+        );
     }
 
     #[test]
@@ -181,7 +228,15 @@ mod tests {
     fn test_aromatic_ring_count_pyrrole() {
         let mut mol = parse_smiles("c1cc[nH]c1").unwrap();
         perceive_aromaticity(&mut mol);
-        assert_eq!(AromaticRingCount.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()).as_int(), 1);
+        assert_eq!(
+            AromaticRingCount
+                .calculate(
+                    &mut mol,
+                    &mut crate::desc::context::CalculationContext::new()
+                )
+                .as_int(),
+            1
+        );
     }
 
     #[test]
@@ -192,7 +247,15 @@ mod tests {
     fn test_aromatic_ring_count_no_rings() {
         let mut mol = parse_smiles("CCCC").unwrap();
         perceive_aromaticity(&mut mol);
-        assert_eq!(AromaticRingCount.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()).as_int(), 0);
+        assert_eq!(
+            AromaticRingCount
+                .calculate(
+                    &mut mol,
+                    &mut crate::desc::context::CalculationContext::new()
+                )
+                .as_int(),
+            0
+        );
     }
 
     #[test]

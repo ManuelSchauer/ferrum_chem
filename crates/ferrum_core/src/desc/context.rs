@@ -8,7 +8,6 @@
 //! - Implementing stateless descriptor structs in Rust.
 //! - Mapping chemistry concepts to reproducible numeric features.
 
-
 //! ## File guide: Context
 //!
 //! This file belongs to FerrumChem's **descriptor/fingerprint feature layer**.
@@ -49,7 +48,7 @@ pub struct CalculationContext {
     pub has_dist_u8: bool,
     pub dist_bo: Vec<f64>,
     pub has_dist_bo: bool,
-    
+
     // Distance matrix workspace
     pub dist_f64: Vec<f64>,
     pub row_f64: Vec<f64>,
@@ -107,7 +106,7 @@ impl CalculationContext {
         self.has_dist_bo = false;
         self.bfs_queue.clear();
         self.bfs_dist.clear();
-        
+
         self.dist_f64.clear();
         self.row_f64.clear();
         self.visited_bool.clear();

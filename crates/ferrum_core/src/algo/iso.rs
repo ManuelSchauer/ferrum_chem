@@ -8,7 +8,6 @@
 //! - Graph traversal and indexing patterns over atom/bond adjacency.
 //! - Performance-oriented Rust design in numerically heavy code paths.
 
-
 //! ## File guide: Iso
 //!
 //! This file belongs to FerrumChem's **cheminformatics algorithm layer**.
@@ -654,7 +653,9 @@ impl<'a> MatchState<'a> {
             return false;
         }
 
-        if !self.atom_fast_filters[pattern_idx].matches_atom(&self.target.atoms[target_idx as usize]) {
+        if !self.atom_fast_filters[pattern_idx]
+            .matches_atom(&self.target.atoms[target_idx as usize])
+        {
             return false;
         }
 
@@ -716,11 +717,14 @@ impl<'a> MatchState<'a> {
             .as_ref()
             .and_then(|cache| cache.lookup_bond(t1, t2))
             .or_else(|| {
-                self.target.adjacency[t1 as usize].iter().copied().find(|&bond_idx| {
-                    let bond = &self.target.bonds[bond_idx as usize];
-                    (bond.source == t1 && bond.target == t2)
-                        || (bond.target == t1 && bond.source == t2)
-                })
+                self.target.adjacency[t1 as usize]
+                    .iter()
+                    .copied()
+                    .find(|&bond_idx| {
+                        let bond = &self.target.bonds[bond_idx as usize];
+                        (bond.source == t1 && bond.target == t2)
+                            || (bond.target == t1 && bond.source == t2)
+                    })
             });
 
         let Some(target_bond_idx) = target_bond_idx else {
@@ -1135,7 +1139,9 @@ fn query_atom_requires_aliphatic(query_atom: &QueryAtom) -> bool {
 fn atom_primitive_requires_aromatic(primitive: &AtomPrimitive) -> bool {
     match primitive {
         AtomPrimitive::AnyAromatic | AtomPrimitive::Aromatic(_) => true,
-        AtomPrimitive::And(requirements) => requirements.iter().any(atom_primitive_requires_aromatic),
+        AtomPrimitive::And(requirements) => {
+            requirements.iter().any(atom_primitive_requires_aromatic)
+        }
         AtomPrimitive::Or(options) => {
             !options.is_empty() && options.iter().all(atom_primitive_requires_aromatic)
         }
@@ -1150,7 +1156,9 @@ fn atom_primitive_requires_aromatic(primitive: &AtomPrimitive) -> bool {
 fn atom_primitive_requires_aliphatic(primitive: &AtomPrimitive) -> bool {
     match primitive {
         AtomPrimitive::AnyAliphatic | AtomPrimitive::Aliphatic(_) => true,
-        AtomPrimitive::And(requirements) => requirements.iter().any(atom_primitive_requires_aliphatic),
+        AtomPrimitive::And(requirements) => {
+            requirements.iter().any(atom_primitive_requires_aliphatic)
+        }
         AtomPrimitive::Or(options) => {
             !options.is_empty() && options.iter().all(atom_primitive_requires_aliphatic)
         }
@@ -1279,7 +1287,6 @@ fn backtrack_count(state: &mut MatchState, depth: usize, count: &mut usize) {
         }
     }
 }
-
 
 /// Helper to create simple query graphs for testing.
 impl QueryGraph {

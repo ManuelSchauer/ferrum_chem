@@ -8,7 +8,6 @@
 //! - Implementing stateless descriptor structs in Rust.
 //! - Mapping chemistry concepts to reproducible numeric features.
 
-
 //! ## File guide: Hbond
 //!
 //! This file belongs to FerrumChem's **descriptor/fingerprint feature layer**.
@@ -123,7 +122,11 @@ impl Descriptor for HBondDonor {
     ///
     /// Function context: `crates/ferrum_core/src/desc/hbond.rs`.
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-    fn calculate(&self, mol: &mut Molecule, ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
+    fn calculate(
+        &self,
+        mol: &mut Molecule,
+        ctx: &mut crate::desc::context::CalculationContext,
+    ) -> DescriptorValue {
         DescriptorValue::Int(compute_hbond_donors_cached(mol))
     }
 }
@@ -146,7 +149,11 @@ impl Descriptor for HBondAcceptor {
     ///
     /// Function context: `crates/ferrum_core/src/desc/hbond.rs`.
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-    fn calculate(&self, mol: &mut Molecule, ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
+    fn calculate(
+        &self,
+        mol: &mut Molecule,
+        ctx: &mut crate::desc::context::CalculationContext,
+    ) -> DescriptorValue {
         DescriptorValue::Int(compute_hbond_acceptors_cached(mol))
     }
 }
@@ -384,7 +391,13 @@ mod tests {
         let mut mol = parse_smiles("CCO").unwrap();
         let desc = HBondDonor;
         assert_eq!(desc.name(), "HBondDonor");
-        assert_eq!(desc.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()), DescriptorValue::Int(1));
+        assert_eq!(
+            desc.calculate(
+                &mut mol,
+                &mut crate::desc::context::CalculationContext::new()
+            ),
+            DescriptorValue::Int(1)
+        );
     }
 
     #[test]
@@ -396,6 +409,12 @@ mod tests {
         let mut mol = parse_smiles("CCO").unwrap();
         let desc = HBondAcceptor;
         assert_eq!(desc.name(), "HBondAcceptor");
-        assert_eq!(desc.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()), DescriptorValue::Int(1));
+        assert_eq!(
+            desc.calculate(
+                &mut mol,
+                &mut crate::desc::context::CalculationContext::new()
+            ),
+            DescriptorValue::Int(1)
+        );
     }
 }

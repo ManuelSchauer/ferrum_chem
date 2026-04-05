@@ -4,7 +4,6 @@
 //! algorithms, descriptors, and ML surfaces. It captures real-world edge cases
 //! so regressions are caught before parity or performance runs.
 
-
 //! ## File guide: Test Specific Molecules
 //!
 //! This file belongs to FerrumChem's **integration/diagnostic validation layer**.

@@ -8,7 +8,6 @@
 //! - Implementing stateless descriptor structs in Rust.
 //! - Mapping chemistry concepts to reproducible numeric features.
 
-
 //! ## File guide: Zagreb
 //!
 //! This file belongs to FerrumChem's **descriptor/fingerprint feature layer**.
@@ -78,7 +77,11 @@ impl Descriptor for ZagrebIndices {
     ///
     /// Function context: `crates/ferrum_core/src/desc/zagreb.rs`.
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-    fn calculate(&self, mol: &mut Molecule, ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
+    fn calculate(
+        &self,
+        mol: &mut Molecule,
+        ctx: &mut crate::desc::context::CalculationContext,
+    ) -> DescriptorValue {
         let n = mol.num_atoms();
 
         if n == 0 {
@@ -123,7 +126,13 @@ mod tests {
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn calculate_zagreb(smiles: &str) -> (f32, f32) {
         let mut mol = parse_smiles(smiles).expect("Invalid SMILES");
-        let v = ZagrebIndices.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()).as_float_vec().to_vec();
+        let v = ZagrebIndices
+            .calculate(
+                &mut mol,
+                &mut crate::desc::context::CalculationContext::new(),
+            )
+            .as_float_vec()
+            .to_vec();
         (v[0], v[1])
     }
 

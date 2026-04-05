@@ -5,7 +5,6 @@
 //! - `GetHashedAtomPairFingerprintAsBitVect()`
 //! - `GetHashedTopologicalTorsionFingerprintAsBitVect()`
 
-
 //! ## File guide: Path Fingerprints
 //!
 //! This file belongs to FerrumChem's **descriptor/fingerprint feature layer**.
@@ -328,9 +327,7 @@ fn dfs_paths_len4(mol: &Molecule, path: &mut Vec<usize>, out: &mut Vec<[usize; 4
         if let Some(existing_pos) = path.iter().position(|&a| a == next) {
             // Match RDKit path-extension behavior for ring closure candidates:
             // only allow a repeated atom at final extension and not immediate backtrack.
-            if path.len() == TT_ATOM_COUNT - 1
-                && existing_pos == 0
-                && path[path.len() - 2] != next
+            if path.len() == TT_ATOM_COUNT - 1 && existing_pos == 0 && path[path.len() - 2] != next
             {
                 path.push(next);
                 out.push([path[0], path[1], path[2], path[3]]);
@@ -401,7 +398,9 @@ fn torsion_hashes(mol: &mut Molecule) -> Vec<u32> {
     }
 
     // TopologicalTorsion uses AtomPair invariants with correction (subtract 2).
-    let atom_invariants: Vec<u32> = (0..n).map(|i| atom_code(mol, i, 0).wrapping_sub(2)).collect();
+    let atom_invariants: Vec<u32> = (0..n)
+        .map(|i| atom_code(mol, i, 0).wrapping_sub(2))
+        .collect();
     let paths = unique_torsion_paths(mol);
     let mut hashes = Vec::with_capacity(paths.len());
 

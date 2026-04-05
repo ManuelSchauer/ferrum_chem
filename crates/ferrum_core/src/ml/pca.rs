@@ -1,6 +1,5 @@
 //! PCA dimensionality reduction — Jacobi eigendecomposition (from scratch).
 
-
 //! ## File guide: Pca
 //!
 //! This file belongs to FerrumChem's **machine-learning pipeline layer**.
@@ -80,7 +79,7 @@ impl Pca {
                 for j in i..n_samples {
                     let mut s = 0.0;
                     for k in 0..n_features {
-                        s += centered[[i, k]] * centered[[j, k]];
+                        s = centered[[i, k]].mul_add(centered[[j, k]], s);
                     }
                     s /= n;
                     gram[[i, j]] = s;
@@ -94,7 +93,7 @@ impl Pca {
                 for j in i..n_features {
                     let mut s = 0.0;
                     for k in 0..n_samples {
-                        s += centered[[k, i]] * centered[[k, j]];
+                        s = centered[[k, i]].mul_add(centered[[k, j]], s);
                     }
                     s /= n;
                     cov[[i, j]] = s;
@@ -228,7 +227,7 @@ impl Pca {
             for j in 0..p {
                 let mut v = self.mean[j];
                 for k in 0..nc {
-                    v += data[[i, k]] * self.components[[k, j]];
+                    v = data[[i, k]].mul_add(self.components[[k, j]], v);
                 }
                 result[[i, j]] = v;
             }
@@ -458,7 +457,11 @@ mod tests {
     /// Function context: `crates/ferrum_core/src/ml/pca.rs`.
     /// ML-layer note: numerical stability and reproducibility are important for comparable model evaluation.
     fn test_transform_one_matches_batch() {
-        let data = Array2::from_shape_vec((4, 3), vec![1.0, 2.0, 3.0, 2.0, 3.0, 5.0, 3.0, 5.0, 8.0, 4.0, 6.0, 10.0]).unwrap();
+        let data = Array2::from_shape_vec(
+            (4, 3),
+            vec![1.0, 2.0, 3.0, 2.0, 3.0, 5.0, 3.0, 5.0, 8.0, 4.0, 6.0, 10.0],
+        )
+        .unwrap();
         let pca = Pca::fit(&data, 2);
         let sample = vec![2.5, 4.0, 6.5];
         let one = pca.transform_one(&sample);

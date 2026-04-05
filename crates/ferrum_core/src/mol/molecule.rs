@@ -8,7 +8,6 @@
 //! - Data-oriented Rust struct design for scientific computing.
 //! - Graph-centric chemistry representations.
 
-
 //! ## File guide: Molecule
 //!
 //! This file belongs to FerrumChem's **molecular graph model layer**.
@@ -81,7 +80,7 @@ pub struct Molecule {
     // Adjazenzliste: Für jedes Atom eine Liste von Bindungs-Indizes.
     // SmallVec optimiert: Keine Heap-Allocation bei < 4 Bindungen.
     pub adjacency: Vec<SmallVec<[BondIdx; 4]>>,
-    
+
     // Lazy-initialized cache for expensive properties
     cache: Option<Box<MoleculeCache>>,
 }
@@ -122,7 +121,11 @@ impl Molecule {
     ///
     /// Function context: `crates/ferrum_core/src/mol/molecule.rs`.
     /// Molecule-model note: preserve atom/bond index invariants and cached-property invalidation rules.
-    pub(crate) fn from_parts(atoms: Vec<Atom>, bonds: Vec<Bond>, adjacency: Vec<SmallVec<[BondIdx; 4]>>) -> Self {
+    pub(crate) fn from_parts(
+        atoms: Vec<Atom>,
+        bonds: Vec<Bond>,
+        adjacency: Vec<SmallVec<[BondIdx; 4]>>,
+    ) -> Self {
         Self {
             atoms,
             bonds,
@@ -205,7 +208,10 @@ impl Molecule {
     /// Function context: `crates/ferrum_core/src/mol/molecule.rs`.
     /// Molecule-model note: preserve atom/bond index invariants and cached-property invalidation rules.
     pub(crate) fn store_labute_contribs(&mut self, atom_vsa: Vec<f64>, h_contrib: f64) {
-        self.cache_mut().labute_contribs = Some(CachedLabuteContribs { atom_vsa, h_contrib });
+        self.cache_mut().labute_contribs = Some(CachedLabuteContribs {
+            atom_vsa,
+            h_contrib,
+        });
     }
 
     /// Implements crippen contribs.
@@ -325,7 +331,9 @@ impl Molecule {
     ///
     /// Function context: `crates/ferrum_core/src/mol/molecule.rs`.
     /// Molecule-model note: preserve atom/bond index invariants and cached-property invalidation rules.
-    pub(crate) fn cached_min_cycle_basis_bonds(&self) -> Option<&Vec<smallvec::SmallVec<[usize; 8]>>> {
+    pub(crate) fn cached_min_cycle_basis_bonds(
+        &self,
+    ) -> Option<&Vec<smallvec::SmallVec<[usize; 8]>>> {
         self.cache.as_deref()?.min_cycle_basis_bonds.as_ref()
     }
 
@@ -333,7 +341,10 @@ impl Molecule {
     ///
     /// Function context: `crates/ferrum_core/src/mol/molecule.rs`.
     /// Molecule-model note: preserve atom/bond index invariants and cached-property invalidation rules.
-    pub(crate) fn store_min_cycle_basis_bonds(&mut self, rings: Vec<smallvec::SmallVec<[usize; 8]>>) {
+    pub(crate) fn store_min_cycle_basis_bonds(
+        &mut self,
+        rings: Vec<smallvec::SmallVec<[usize; 8]>>,
+    ) {
         self.cache_mut().min_cycle_basis_bonds = Some(rings);
     }
 
@@ -341,7 +352,9 @@ impl Molecule {
     ///
     /// Function context: `crates/ferrum_core/src/mol/molecule.rs`.
     /// Molecule-model note: preserve atom/bond index invariants and cached-property invalidation rules.
-    pub(crate) fn cached_symmetrized_sssr_bonds(&self) -> Option<&Vec<smallvec::SmallVec<[usize; 8]>>> {
+    pub(crate) fn cached_symmetrized_sssr_bonds(
+        &self,
+    ) -> Option<&Vec<smallvec::SmallVec<[usize; 8]>>> {
         self.cache.as_deref()?.symmetrized_sssr_bonds.as_ref()
     }
 
@@ -349,7 +362,10 @@ impl Molecule {
     ///
     /// Function context: `crates/ferrum_core/src/mol/molecule.rs`.
     /// Molecule-model note: preserve atom/bond index invariants and cached-property invalidation rules.
-    pub(crate) fn store_symmetrized_sssr_bonds(&mut self, rings: Vec<smallvec::SmallVec<[usize; 8]>>) {
+    pub(crate) fn store_symmetrized_sssr_bonds(
+        &mut self,
+        rings: Vec<smallvec::SmallVec<[usize; 8]>>,
+    ) {
         self.cache_mut().symmetrized_sssr_bonds = Some(rings);
     }
 

@@ -20,7 +20,6 @@
 //! **Validation**: Cross-validated against RDKit `rdPartialCharges.ComputeGasteigerCharges`
 //! for 17 molecules (±0.05 per atom). See tests at the bottom of this file.
 
-
 //! ## File guide: Electronic
 //!
 //! This file belongs to FerrumChem's **cheminformatics algorithm layer**.
@@ -273,13 +272,12 @@ fn effective_hybridization(mol: &Molecule, idx: usize) -> Hybridization {
     // Track whether any neighbor has a double/aromatic bond (conjugation).
     let mut neighbor_has_pi = false;
 
-    for bond in &mol.bonds {
+    for &bond_idx in &mol.adjacency[idx] {
+        let bond = &mol.bonds[bond_idx as usize];
         let nbr_idx = if bond.source as usize == idx {
             bond.target as usize
-        } else if bond.target as usize == idx {
-            bond.source as usize
         } else {
-            continue;
+            bond.source as usize
         };
         heavy_degree += 1;
         match bond.bond_type {
@@ -304,21 +302,18 @@ fn effective_hybridization(mol: &Molecule, idx: usize) -> Hybridization {
         // This matches RDKit's setHybridization behaviour and fixes the
         // systematic HallKierAlpha over-negativity caused by ester/phosphate
         // oxygens being mis-classified as SP2.
-        let nbr = &mol.atoms[nbr_idx];
-        if nbr.is_aromatic() {
-            neighbor_has_pi = true;
-        } else {
-            for b2 in &mol.bonds {
-                let touches = (b2.source as usize == nbr_idx) || (b2.target as usize == nbr_idx);
-                if touches
-                    && matches!(
+        if !neighbor_has_pi {
+            let nbr = &mol.atoms[nbr_idx];
+            if nbr.is_aromatic() {
+                neighbor_has_pi = true;
+            } else {
+                neighbor_has_pi = mol.adjacency[nbr_idx].iter().any(|&b2_idx| {
+                    let b2 = &mol.bonds[b2_idx as usize];
+                    matches!(
                         b2.bond_type,
                         crate::types::BondType::Double | crate::types::BondType::Aromatic
                     )
-                {
-                    neighbor_has_pi = true;
-                    break;
-                }
+                });
             }
         }
     }

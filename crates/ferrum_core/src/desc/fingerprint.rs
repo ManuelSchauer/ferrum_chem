@@ -12,7 +12,6 @@
 //! Reference: Rogers, D. & Hahn, M. (2010) "Extended-Connectivity Fingerprints"
 //! J. Chem. Inf. Model. 50(5), 742-754.
 
-
 //! ## File guide: Fingerprint
 //!
 //! This file belongs to FerrumChem's **descriptor/fingerprint feature layer**.
@@ -224,7 +223,11 @@ fn morgan_bond_invariant(bond: &crate::mol::bond::Bond) -> i32 {
 ///
 /// Function context: `crates/ferrum_core/src/desc/fingerprint.rs`.
 /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-fn morgan_features_from_invariants(mol: &Molecule, radius: u32, atom_invariants: Vec<u32>) -> Vec<u64> {
+fn morgan_features_from_invariants(
+    mol: &Molecule,
+    radius: u32,
+    atom_invariants: Vec<u32>,
+) -> Vec<u64> {
     let n_atoms = mol.num_atoms();
     if n_atoms == 0 {
         return vec![];
@@ -272,7 +275,8 @@ fn morgan_features_from_invariants(mol: &Molecule, radius: u32, atom_invariants:
 
                 round_atom_neighborhoods[atom_idx].set_bit(bond_idx);
                 round_atom_neighborhoods[atom_idx].union_with(&atom_neighborhoods[neighbor_idx]);
-                neighborhood_invariants.push((bond_invariants[bond_idx], current_invariants[neighbor_idx]));
+                neighborhood_invariants
+                    .push((bond_invariants[bond_idx], current_invariants[neighbor_idx]));
             }
 
             neighborhood_invariants.sort_unstable();
@@ -450,7 +454,11 @@ impl Descriptor for ECFP {
     ///
     /// Function context: `crates/ferrum_core/src/desc/fingerprint.rs`.
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-    fn calculate(&self, mol: &mut Molecule, ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
+    fn calculate(
+        &self,
+        mol: &mut Molecule,
+        ctx: &mut crate::desc::context::CalculationContext,
+    ) -> DescriptorValue {
         let features = morgan_features(mol, self.radius as u32);
         let bits = fold_fingerprint(&features, self.num_bits);
         DescriptorValue::Binary(bits)
@@ -538,7 +546,11 @@ impl Descriptor for FCFP {
     ///
     /// Function context: `crates/ferrum_core/src/desc/fingerprint.rs`.
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-    fn calculate(&self, mol: &mut Molecule, ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
+    fn calculate(
+        &self,
+        mol: &mut Molecule,
+        ctx: &mut crate::desc::context::CalculationContext,
+    ) -> DescriptorValue {
         let features = fcfp_features(mol, self.radius as u32);
         let bits = fold_fingerprint(&features, self.num_bits);
         DescriptorValue::Binary(bits)
@@ -567,7 +579,12 @@ mod tests {
     fn calc_fp(smiles: &str, radius: u8, bits: usize) -> BitVec<u8, Lsb0> {
         let mut mol = parse_smiles(smiles).expect("valid SMILES");
         let desc = ECFP::new(radius, bits);
-        desc.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()).as_binary().clone()
+        desc.calculate(
+            &mut mol,
+            &mut crate::desc::context::CalculationContext::new(),
+        )
+        .as_binary()
+        .clone()
     }
 
     /// Counts bits.
@@ -609,7 +626,13 @@ mod tests {
     fn test_empty_molecule() {
         let mut mol = Molecule::new();
         let desc = Morgan::ecfp4();
-        let fp = desc.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()).as_binary().clone();
+        let fp = desc
+            .calculate(
+                &mut mol,
+                &mut crate::desc::context::CalculationContext::new(),
+            )
+            .as_binary()
+            .clone();
         assert_eq!(count_bits(&fp), 0);
     }
 
@@ -715,7 +738,13 @@ mod tests {
         let mut mol = parse_smiles("c1ccc(CC(=O)O)cc1").unwrap();
         for bits in [1024, 2048, 4096] {
             let desc = Morgan::new(2, bits);
-            let fp = desc.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()).as_binary().clone();
+            let fp = desc
+                .calculate(
+                    &mut mol,
+                    &mut crate::desc::context::CalculationContext::new(),
+                )
+                .as_binary()
+                .clone();
             assert_eq!(fp.len(), bits);
             assert!(count_bits(&fp) > 0);
         }
@@ -783,7 +812,12 @@ mod tests {
     fn calc_fcfp(smiles: &str, radius: u8, bits: usize) -> BitVec<u8, Lsb0> {
         let mut mol = parse_smiles(smiles).expect("valid SMILES");
         let desc = FCFP::new(radius, bits);
-        desc.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()).as_binary().clone()
+        desc.calculate(
+            &mut mol,
+            &mut crate::desc::context::CalculationContext::new(),
+        )
+        .as_binary()
+        .clone()
     }
 
     #[test]
@@ -836,7 +870,13 @@ mod tests {
     fn test_fcfp_empty_molecule() {
         let mut mol = Molecule::new();
         let desc = FCFP::fcfp4();
-        let fp = desc.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()).as_binary().clone();
+        let fp = desc
+            .calculate(
+                &mut mol,
+                &mut crate::desc::context::CalculationContext::new(),
+            )
+            .as_binary()
+            .clone();
         assert_eq!(count_bits(&fp), 0);
     }
 

@@ -8,7 +8,6 @@
 //! - Graph traversal and indexing patterns over atom/bond adjacency.
 //! - Performance-oriented Rust design in numerically heavy code paths.
 
-
 //! ## File guide: Aromaticity
 //!
 //! This file belongs to FerrumChem's **cheminformatics algorithm layer**.
@@ -742,7 +741,8 @@ fn canonical_cycle_order_excluding_chord(
         }
     }
 
-    let mut neighbors: Vec<smallvec::SmallVec<[AtomIdx; 2]>> = vec![smallvec::SmallVec::new(); ring.len()];
+    let mut neighbors: Vec<smallvec::SmallVec<[AtomIdx; 2]>> =
+        vec![smallvec::SmallVec::new(); ring.len()];
 
     for (u_idx, &atom_idx) in ring.iter().enumerate() {
         for &bond_idx in &mol.adjacency[atom_idx as usize] {
@@ -866,11 +866,9 @@ fn unique_cycle_chord(mol: &Molecule, ring: &[AtomIdx]) -> Option<(AtomIdx, Atom
 
     let chord_a = degree3_atoms[0];
     let chord_b = degree3_atoms[1];
-    induced_edges
-        .into_iter()
-        .find_map(|(a, b, bond_idx)| {
-            (a.min(b) == chord_a && a.max(b) == chord_b).then_some((chord_a, chord_b, bond_idx))
-        })
+    induced_edges.into_iter().find_map(|(a, b, bond_idx)| {
+        (a.min(b) == chord_a && a.max(b) == chord_b).then_some((chord_a, chord_b, bond_idx))
+    })
 }
 
 /// Implements ring.
@@ -2132,7 +2130,10 @@ fn suppress_fused_bridge_bonds(mol: &mut Molecule, aromatic_rings: &[Vec<AtomIdx
 ///
 /// Function context: `crates/ferrum_core/src/algo/aromaticity.rs`.
 /// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
-fn suppress_fused_bridge_ring_bond_aromaticity(mol: &mut Molecule, aromatic_rings: &[Vec<AtomIdx>]) {
+fn suppress_fused_bridge_ring_bond_aromaticity(
+    mol: &mut Molecule,
+    aromatic_rings: &[Vec<AtomIdx>],
+) {
     let mut atoms_to_mark = Vec::new();
     let mut bonds_to_aromaticize = Vec::new();
     let mut bonds_to_kekulize = Vec::new();
@@ -2289,12 +2290,10 @@ fn fused_diaza_dicarbonyl_bridge_bond(mol: &Molecule, ring: &[AtomIdx]) -> Optio
     let labels = labels?;
     let valid_forward = labels[0] == b'N'
         && labels[2] == b'N'
-        && ((labels[1] == b'D' && labels[3] == b'S')
-            || (labels[1] == b'S' && labels[3] == b'D'));
+        && ((labels[1] == b'D' && labels[3] == b'S') || (labels[1] == b'S' && labels[3] == b'D'));
     let valid_reverse = labels[1] == b'N'
         && labels[3] == b'N'
-        && ((labels[0] == b'D' && labels[2] == b'S')
-            || (labels[0] == b'S' && labels[2] == b'D'));
+        && ((labels[0] == b'D' && labels[2] == b'S') || (labels[0] == b'S' && labels[2] == b'D'));
     if !valid_forward && !valid_reverse {
         return None;
     }

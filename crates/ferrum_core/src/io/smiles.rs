@@ -8,7 +8,6 @@
 //! - Parser/state-machine techniques in Rust.
 //! - Error-aware ingestion pipelines for large datasets.
 
-
 //! ## File guide: Smiles
 //!
 //! This file belongs to FerrumChem's **input/output parsing layer**.
@@ -113,6 +112,13 @@ pub fn parse_smiles(smiles: &str) -> Result<Molecule> {
         crate::algo::aromaticity::perceive_aromaticity(&mut mol);
     } else if saw_ring_closure {
         crate::algo::rings::find_sssr(&mut mol);
+    }
+
+    // Prime minimum cycle basis for ring-containing molecules so descriptors that
+    // rely on this cache (e.g. AromaticRingCount, QED aromatic ring term) avoid
+    // recomputing expensive cycle basis work in tight descriptor loops.
+    if saw_ring_closure {
+        crate::algo::rings::ensure_minimum_cycle_basis_bonds_cached(&mut mol);
     }
 
     // ❌ Do NOT kekulize by default

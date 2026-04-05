@@ -15,7 +15,6 @@
 //! Reference: Kier, L.B. & Hall, L.H. (1986) "Molecular Connectivity in
 //!            Structure-Activity Analysis", Research Studies Press.
 
-
 //! ## File guide: Chi
 //!
 //! This file belongs to FerrumChem's **descriptor/fingerprint feature layer**.
@@ -109,11 +108,7 @@ fn chi1(mol: &Molecule, deltas: &[f64]) -> f64 {
             let di = deltas[bond.source as usize];
             let dj = deltas[bond.target as usize];
             let prod = di * dj;
-            if prod > 0.0 {
-                1.0 / prod.sqrt()
-            } else {
-                0.0
-            }
+            if prod > 0.0 { 1.0 / prod.sqrt() } else { 0.0 }
         })
         .sum()
 }
@@ -288,14 +283,7 @@ fn sum_cluster_combinations(neighbor_deltas: &[f64], k: usize, center_delta: f64
     ///
     /// Function context: `crates/ferrum_core/src/desc/chi.rs`.
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-    fn recurse(
-        vals: &[f64],
-        k: usize,
-        start: usize,
-        picked: usize,
-        prod: f64,
-        acc: &mut f64,
-    ) {
+    fn recurse(vals: &[f64], k: usize, start: usize, picked: usize, prod: f64, acc: &mut f64) {
         if picked == k {
             *acc += 1.0 / prod.sqrt();
             return;
@@ -591,7 +579,10 @@ mod tests {
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn calc_chi(smiles: &str) -> Vec<f32> {
         let mut mol = parse_smiles(smiles).expect("valid SMILES");
-        match ChiIndices.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()) {
+        match ChiIndices.calculate(
+            &mut mol,
+            &mut crate::desc::context::CalculationContext::new(),
+        ) {
             DescriptorValue::FloatVec(v) => v,
             other => panic!("expected FloatVec, got {:?}", other),
         }
@@ -818,7 +809,11 @@ impl Descriptor for ChiIndices {
     ///
     /// Function context: `crates/ferrum_core/src/desc/chi.rs`.
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-    fn calculate(&self, mol: &mut Molecule, ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
+    fn calculate(
+        &self,
+        mol: &mut Molecule,
+        ctx: &mut crate::desc::context::CalculationContext,
+    ) -> DescriptorValue {
         let mut values = Vec::with_capacity(26);
 
         // ChiPath (8 values)

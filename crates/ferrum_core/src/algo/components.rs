@@ -8,7 +8,6 @@
 //! - Graph traversal and indexing patterns over atom/bond adjacency.
 //! - Performance-oriented Rust design in numerically heavy code paths.
 
-
 //! ## File guide: Components
 //!
 //! This file belongs to FerrumChem's **cheminformatics algorithm layer**.

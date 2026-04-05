@@ -1,6 +1,5 @@
 //! Evaluation metrics — regression and classification.
 
-
 //! ## File guide: Metrics
 //!
 //! This file belongs to FerrumChem's **machine-learning pipeline layer**.

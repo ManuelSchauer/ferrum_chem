@@ -4,7 +4,6 @@
 //! explicit and composable. This module defines the canonical Result surface
 //! used by public APIs.
 
-
 //! ## File guide: Error
 //!
 //! This file belongs to FerrumChem's **library support layer**.

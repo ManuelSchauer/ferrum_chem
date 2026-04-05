@@ -8,7 +8,6 @@
 //! - Environment-driven configuration patterns in Rust CLIs.
 //! - How FerrumChem APIs are wired into practical workflows.
 
-
 //! ## File guide: Parity Bundle Csv Benchmark
 //!
 //! This file belongs to FerrumChem's **CLI/demo/benchmark executable layer**.
@@ -188,8 +187,16 @@ fn peak_rss_bytes() -> Option<u64> {
     if maxrss <= 0 {
         return Some(0);
     }
-    // Darwin reports ru_maxrss in bytes.
-    Some(maxrss as u64)
+    #[cfg(target_os = "macos")]
+    {
+        // Darwin reports ru_maxrss in bytes.
+        Some(maxrss as u64)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        // Linux reports ru_maxrss in KiB.
+        Some((maxrss as u64) * 1024)
+    }
 }
 
 /// Implements output len.

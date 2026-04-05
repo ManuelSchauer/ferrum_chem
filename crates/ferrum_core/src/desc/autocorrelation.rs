@@ -12,7 +12,6 @@
 //!
 //! Reference: Moreau, G. & Broto, P. (1980) Nouv. J. Chim. 4, 359-360.
 
-
 //! ## File guide: Autocorrelation
 //!
 //! This file belongs to FerrumChem's **descriptor/fingerprint feature layer**.
@@ -116,7 +115,7 @@ fn compute_ats(mol: &Molecule, dist: &[u8], weights: &[f64]) -> [f64; MAX_LAG] {
             }
             let lag = d as usize;
             if lag >= 1 && lag <= MAX_LAG {
-                ats[lag - 1] += weights[i] * weights[j];
+                ats[lag - 1] = weights[i].mul_add(weights[j], ats[lag - 1]);
             }
         }
     }
@@ -158,7 +157,11 @@ impl Descriptor for Autocorrelation {
     ///
     /// Function context: `crates/ferrum_core/src/desc/autocorrelation.rs`.
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-    fn calculate(&self, mol: &mut Molecule, ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
+    fn calculate(
+        &self,
+        mol: &mut Molecule,
+        ctx: &mut crate::desc::context::CalculationContext,
+    ) -> DescriptorValue {
         let mut values = vec![0.0f32; MAX_LAG * 4];
 
         let n = mol.num_atoms();
@@ -218,7 +221,10 @@ mod tests {
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn calc_ats(smiles: &str) -> Vec<f32> {
         let mut mol = parse_smiles(smiles).expect("valid SMILES");
-        match Autocorrelation.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()) {
+        match Autocorrelation.calculate(
+            &mut mol,
+            &mut crate::desc::context::CalculationContext::new(),
+        ) {
             DescriptorValue::FloatVec(v) => v,
             other => panic!("expected FloatVec, got {:?}", other),
         }

@@ -5,7 +5,6 @@
 //! - Aliphatic rings: non-aromatic
 //! - Aromatic rings: marked as aromatic
 
-
 //! ## File guide: Ring Types
 //!
 //! This file belongs to FerrumChem's **descriptor/fingerprint feature layer**.
@@ -39,9 +38,7 @@
 //! - Repository unit and parity tests covering `Ring Types` behavior and edge molecules.
 //! - Code-local source of truth: symbols and tests declared in `crates/ferrum_core/src/desc/ring_types.rs`.
 
-use crate::algo::rings::{
-    cached_symmetrized_sssr_bonds_ref, ensure_symmetrized_sssr_bonds_cached,
-};
+use crate::algo::rings::{cached_symmetrized_sssr_bonds_ref, ensure_symmetrized_sssr_bonds_cached};
 use crate::desc::typed::{Descriptor, DescriptorValue};
 use crate::mol::molecule::Molecule;
 use crate::types::BondType;
@@ -74,8 +71,7 @@ fn ring_bonds_all_aromatic(mol: &Molecule, ring: &[usize]) -> bool {
 /// - Cyclohexene: 0 saturated rings (one double bond)
 pub fn num_saturated_rings(mol: &mut Molecule) -> u32 {
     ensure_symmetrized_sssr_bonds_cached(mol);
-    let rings =
-        cached_symmetrized_sssr_bonds_ref(mol).expect("symmetrized SSSR cache initialized");
+    let rings = cached_symmetrized_sssr_bonds_ref(mol).expect("symmetrized SSSR cache initialized");
 
     rings
         .iter()
@@ -96,8 +92,7 @@ pub fn num_saturated_rings(mol: &mut Molecule) -> u32 {
 /// - Naphthalene: 0 aliphatic rings (both rings aromatic)
 pub fn num_aliphatic_rings(mol: &mut Molecule) -> u32 {
     ensure_symmetrized_sssr_bonds_cached(mol);
-    let rings =
-        cached_symmetrized_sssr_bonds_ref(mol).expect("symmetrized SSSR cache initialized");
+    let rings = cached_symmetrized_sssr_bonds_ref(mol).expect("symmetrized SSSR cache initialized");
 
     rings
         .iter()
@@ -118,8 +113,7 @@ pub fn num_aliphatic_rings(mol: &mut Molecule) -> u32 {
 /// - Cyclohexane: 0 aromatic rings
 pub fn num_aromatic_rings(mol: &mut Molecule) -> u32 {
     ensure_symmetrized_sssr_bonds_cached(mol);
-    let rings =
-        cached_symmetrized_sssr_bonds_ref(mol).expect("symmetrized SSSR cache initialized");
+    let rings = cached_symmetrized_sssr_bonds_ref(mol).expect("symmetrized SSSR cache initialized");
 
     rings
         .iter()
@@ -289,7 +283,11 @@ impl Descriptor for RingTypeCounts {
     ///
     /// Function context: `crates/ferrum_core/src/desc/ring_types.rs`.
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-    fn calculate(&self, mol: &mut Molecule, ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
+    fn calculate(
+        &self,
+        mol: &mut Molecule,
+        ctx: &mut crate::desc::context::CalculationContext,
+    ) -> DescriptorValue {
         ensure_symmetrized_sssr_bonds_cached(mol);
         let rings =
             cached_symmetrized_sssr_bonds_ref(mol).expect("symmetrized SSSR cache initialized");

@@ -1,4 +1,3 @@
-
 //! ## File guide: Tui
 //!
 //! This file belongs to FerrumChem's **CLI/demo/benchmark executable layer**.
@@ -47,16 +46,16 @@
 //! - Text input fields: tui-input crate for native editing behavior
 
 use std::cmp::Ordering;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::env;
 use std::fs;
 use std::io;
 use std::io::Write as _;
-use std::path::{Path, PathBuf};
 use std::panic::{self, AssertUnwindSafe};
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
 use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
-use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -74,11 +73,10 @@ use ratatui::widgets::{
 use tui_input::Input;
 use tui_input::backend::crossterm::EventHandler;
 
-use ferrum_core::desc::batch::{
-    BatchDescriptor, FlatDescriptorMatrix, calculate_batch_flat_static,
-    calculate_batch_flat_static_cancellable, write_csv_flat,
-};
 use ferrum_core::algo::rings::find_symmetrized_sssr_bonds;
+use ferrum_core::desc::batch::{
+    BatchDescriptor, FlatDescriptorMatrix, calculate_batch_flat_static_cancellable, write_csv_flat,
+};
 use ferrum_core::io::csv_reader::CsvReader;
 use ferrum_core::io::smiles::parse_smiles;
 use ferrum_core::ml::ad::KnnDistanceAD;
@@ -90,18 +88,23 @@ use ferrum_core::ml::feature_selection::{correlation_filter, variance_threshold}
 use ferrum_core::ml::knn::{DistanceMetric, KnnRegressor};
 use ferrum_core::ml::metrics;
 use ferrum_core::ml::pca::Pca;
-use ferrum_core::ml::pipeline::{ModelType, QsarPipeline, ScalerType, TaskType};
+use ferrum_core::ml::pipeline::{
+    AutoQsar, AutoQsarProgress, AutoQsarProgressStage, ModelType, QsarPipeline, ScalerType,
+    TaskType,
+};
 use ferrum_core::ml::pls::PlsRegression;
 use ferrum_core::ml::random_forest::RandomForestRegressor;
 use ferrum_core::ml::scaling::{MinMaxScaler, StandardScaler};
 use ferrum_core::ml::splitting::{TrainTestSplit, random_split, scaffold_split, stratified_split};
 use ferrum_core::mol::molecule::Molecule;
+use serde::{Deserialize, Serialize};
 
 const FRAME_INTERVAL: Duration = Duration::from_millis(16);
 const PREVIEW_ROWS: usize = 8;
 const PREVIEW_COLS: usize = 5;
 const DEFAULT_EXPORT_PATH: &str = "/tmp/ferrum_tui_predictions.csv";
 const DEFAULT_FEATURE_EXPORT_PATH: &str = "/tmp/ferrum_tui_features.csv";
+const DEFAULT_MODEL_EXPORT_PATH: &str = "/tmp/ferrum_tui_model_bundle.fcbundle";
 const DEFAULT_VARIANCE_THRESHOLD: f64 = 1e-12;
 const DEFAULT_CORRELATION_THRESHOLD: f64 = 0.95;
 const DEFAULT_TEST_FRACTION: f64 = 0.20;
@@ -124,16 +127,74 @@ const TAB_TITLES: [&str; 5] = [
 #[derive(Debug, Clone)]
 enum AppState {
     Idle,
-    Computing(String),
+    Computing { message: String, job: WorkerJobKind },
     ErrorPopup(String),
     FileBrowserOpen(PathBuf),
     TargetSelectionOpen,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WorkerJobKind {
+    DatasetLoad,
+    DescriptorCalculation,
+    ModelTraining,
+    Art2aClustering,
+    Prediction,
+    PredictionExport,
+    ModelBundleExport,
+    ModelBundleImport,
+    VarianceFilter,
+    CorrelationFilter,
+    FeatureMatrixExport,
+}
+
+impl WorkerJobKind {
+    /// Returns a human-readable label for worker status and cancellation messages.
+    fn label(self) -> &'static str {
+        match self {
+            Self::DatasetLoad => "dataset loading",
+            Self::DescriptorCalculation => "descriptor calculation",
+            Self::ModelTraining => "model training",
+            Self::Art2aClustering => "ART2-A clustering",
+            Self::Prediction => "prediction",
+            Self::PredictionExport => "prediction export",
+            Self::ModelBundleExport => "model bundle export",
+            Self::ModelBundleImport => "model bundle import",
+            Self::VarianceFilter => "variance filtering",
+            Self::CorrelationFilter => "correlation filtering",
+            Self::FeatureMatrixExport => "feature matrix export",
+        }
+    }
+
+    /// Indicates whether this job kind supports cooperative cancellation.
+    fn is_cancelable(self) -> bool {
+        matches!(
+            self,
+            Self::DescriptorCalculation
+                | Self::ModelTraining
+                | Self::Art2aClustering
+                | Self::Prediction
+        )
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum BrowserPurpose {
     Dataset,
     Prediction,
+    ModelImport,
+}
+
+const MODEL_BUNDLE_SCHEMA_VERSION: u32 = 1;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct PersistedModelBundle {
+    schema_version: u32,
+    pipeline_bundle_bytes: Option<Vec<u8>>,
+    art2a_model_bytes: Option<Vec<u8>>,
+    descriptors: Vec<String>,
+    selected_feature_indices: Vec<usize>,
+    expected_feature_names: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -210,7 +271,10 @@ impl MlAlgorithm {
     /// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
     fn manual_cycle(self, delta: isize) -> Self {
         let all = Self::manual_all();
-        let idx = all.iter().position(|candidate| *candidate == self).unwrap_or(0);
+        let idx = all
+            .iter()
+            .position(|candidate| *candidate == self)
+            .unwrap_or(0);
         let next = (idx as isize + delta).rem_euclid(all.len() as isize) as usize;
         all[next]
     }
@@ -348,6 +412,59 @@ impl VisualizationColorMode {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum TargetColumnSource {
+    Csv,
+    Descriptor,
+}
+
+impl TargetColumnSource {
+    /// Returns a short human-readable source label.
+    fn label(self) -> &'static str {
+        match self {
+            Self::Csv => "CSV",
+            Self::Descriptor => "DESC",
+        }
+    }
+
+    /// Returns a stable key prefix used for internal target identifiers.
+    fn key_prefix(self) -> &'static str {
+        match self {
+            Self::Csv => "csv",
+            Self::Descriptor => "desc",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct TargetColumn {
+    key: String,
+    name: String,
+    source: TargetColumnSource,
+}
+
+impl TargetColumn {
+    /// Creates a new typed target column entry.
+    fn new(name: String, source: TargetColumnSource) -> Self {
+        let key = format!("{}:{}", source.key_prefix(), name);
+        Self { key, name, source }
+    }
+
+    /// Formats this target for UI selection lists.
+    fn display_label(&self) -> String {
+        format!("[{}] {}", self.source.label(), self.name)
+    }
+
+    /// Formats this target for model/prediction output names.
+    fn output_name(&self) -> String {
+        format!(
+            "{}__{}",
+            self.name,
+            self.source.label().to_ascii_lowercase()
+        )
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum MlParamKey {
     CvFolds,
@@ -434,6 +551,38 @@ struct FeatureMatrix {
     selected_feature_indices: Vec<usize>,
 }
 
+/// Persisted/active feature-layout contract used for model inference/export.
+#[derive(Debug, Clone)]
+struct ModelFeatureLayout {
+    descriptors: Vec<BatchDescriptor>,
+    selected_feature_indices: Vec<usize>,
+    expected_feature_names: Vec<String>,
+}
+
+impl ModelFeatureLayout {
+    /// Builds a feature-layout snapshot from an in-memory feature matrix.
+    fn from_matrix(matrix: &FeatureMatrix) -> Self {
+        Self {
+            descriptors: matrix.descriptors.clone(),
+            selected_feature_indices: matrix.selected_feature_indices.clone(),
+            expected_feature_names: matrix.feature_names.clone(),
+        }
+    }
+
+    /// Builds a feature-layout snapshot from persisted/model response components.
+    fn from_parts(
+        descriptors: Vec<BatchDescriptor>,
+        selected_feature_indices: Vec<usize>,
+        expected_feature_names: Vec<String>,
+    ) -> Self {
+        Self {
+            descriptors,
+            selected_feature_indices,
+            expected_feature_names,
+        }
+    }
+}
+
 impl FeatureMatrix {
     /// Implements the behavior encoded by this function.
     ///
@@ -516,6 +665,7 @@ struct FeatureMatrixPayload {
 #[derive(Debug, Clone)]
 struct TargetTrainingSummary {
     target: String,
+    target_display_label: String,
     pipeline_name: String,
     cv_q2: f64,
     train_r2: f64,
@@ -529,6 +679,7 @@ struct TargetTrainingSummary {
     split_label: String,
     split_train_size: usize,
     split_test_size: usize,
+    top_feature_importances: Vec<(String, f64)>,
 }
 
 #[derive(Debug, Clone)]
@@ -550,7 +701,6 @@ struct Art2aClusterSummary {
 #[derive(Debug)]
 enum WorkerRequest {
     LoadDataset(PathBuf),
-    CancelDescriptors,
     CalculateDescriptors {
         molecules: Vec<Molecule>,
         descriptors: Vec<BatchDescriptor>,
@@ -560,6 +710,7 @@ enum WorkerRequest {
         target_series: Vec<(String, Vec<f64>)>,
         smiles: Vec<String>,
         config: MlTrainingConfig,
+        target_columns: Vec<TargetColumn>,
     },
     RunArt2aClustering {
         matrix: FeatureMatrixPayload,
@@ -592,6 +743,13 @@ enum WorkerRequest {
         smiles: Vec<String>,
         matrix: FeatureMatrixPayload,
     },
+    ExportModelBundle {
+        path: PathBuf,
+        bundle: PersistedModelBundle,
+    },
+    ImportModelBundle {
+        path: PathBuf,
+    },
     Shutdown,
 }
 
@@ -612,6 +770,7 @@ enum WorkerResponse {
     },
     ModelTrained {
         primary_target: String,
+        primary_target_display_label: String,
         pipeline_name: String,
         cv_q2: f64,
         train_r2: f64,
@@ -630,6 +789,9 @@ enum WorkerResponse {
         split_test_size: usize,
         target_summaries: Vec<TargetTrainingSummary>,
         pipeline_bundle_bytes: Vec<u8>,
+        descriptors: Vec<BatchDescriptor>,
+        selected_feature_indices: Vec<usize>,
+        expected_feature_names: Vec<String>,
         preview_predictions: Vec<f64>,
         train_predictions: Vec<f64>,
     },
@@ -638,6 +800,10 @@ enum WorkerResponse {
         cluster_sizes: Vec<usize>,
         summaries: Vec<Art2aClusterSummary>,
         art2a_model_bytes: Vec<u8>,
+        projection: Option<ProjectionData>,
+        descriptors: Vec<BatchDescriptor>,
+        selected_feature_indices: Vec<usize>,
+        expected_feature_names: Vec<String>,
     },
     PredictionsReady {
         path: PathBuf,
@@ -656,11 +822,20 @@ enum WorkerResponse {
         removed_features: usize,
         filter_label: String,
     },
-    DescriptorsCanceled,
+    JobCanceled {
+        job: WorkerJobKind,
+    },
     FeatureMatrixExported {
         path: PathBuf,
         rows: usize,
         cols: usize,
+    },
+    ModelBundleExported {
+        path: PathBuf,
+    },
+    ModelBundleImported {
+        path: PathBuf,
+        bundle: PersistedModelBundle,
     },
     Error(String),
 }
@@ -697,6 +872,7 @@ struct App {
     cluster_sizes: Vec<usize>,
     cluster_summaries: Vec<Art2aClusterSummary>,
     art2a_model_bytes: Option<Vec<u8>>,
+    art2a_feature_layout: Option<ModelFeatureLayout>,
     color_mode: VisualizationColorMode,
 
     // Additional state needed for complete workflows
@@ -704,7 +880,7 @@ struct App {
     loaded_properties: Vec<Vec<(String, String)>>,
     last_dataset_failed_rows: usize,
     loaded_from_path: Option<PathBuf>,
-    target_columns: Vec<String>,
+    target_columns: Vec<TargetColumn>,
     selected_target_columns: BTreeSet<String>,
     target_column_list_state: ListState,
     target_overlay_values: Option<Vec<f64>>,
@@ -722,8 +898,13 @@ struct App {
     prediction_source: Option<PathBuf>,
     prediction_export_path: PathBuf,
     feature_export_path: PathBuf,
+    model_bundle_path: PathBuf,
 
     pipeline_bundle_bytes: Option<Vec<u8>>,
+    pipeline_feature_layout: Option<ModelFeatureLayout>,
+    include_csv_numeric_in_clustering: bool,
+    trained_primary_target: Option<String>,
+    importance_target_index: usize,
 
     status_message: String,
     progress_percent: f32,
@@ -736,7 +917,9 @@ struct App {
 
     worker_tx: Sender<WorkerRequest>,
     worker_rx: Receiver<WorkerResponse>,
-    descriptor_cancel_requested: bool,
+    worker_cancel_flag: Arc<AtomicBool>,
+    cancel_requested: bool,
+    active_job: Option<WorkerJobKind>,
 }
 
 impl App {
@@ -744,7 +927,11 @@ impl App {
     ///
     /// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
     /// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
-    fn new(worker_tx: Sender<WorkerRequest>, worker_rx: Receiver<WorkerResponse>) -> Self {
+    fn new(
+        worker_tx: Sender<WorkerRequest>,
+        worker_rx: Receiver<WorkerResponse>,
+        worker_cancel_flag: Arc<AtomicBool>,
+    ) -> Self {
         let mut descriptor_list_state = ListState::default();
         descriptor_list_state.select(Some(0));
 
@@ -786,6 +973,7 @@ impl App {
             cluster_sizes: Vec::new(),
             cluster_summaries: Vec::new(),
             art2a_model_bytes: None,
+            art2a_feature_layout: None,
             color_mode: VisualizationColorMode::Uniform,
 
             loaded_smiles: Vec::new(),
@@ -810,8 +998,13 @@ impl App {
             prediction_source: None,
             prediction_export_path: PathBuf::from(DEFAULT_EXPORT_PATH),
             feature_export_path: PathBuf::from(DEFAULT_FEATURE_EXPORT_PATH),
+            model_bundle_path: PathBuf::from(DEFAULT_MODEL_EXPORT_PATH),
 
             pipeline_bundle_bytes: None,
+            pipeline_feature_layout: None,
+            include_csv_numeric_in_clustering: true,
+            trained_primary_target: None,
+            importance_target_index: 0,
 
             status_message: "Ready. Open Tab 1 (Import) and press 'f' to load molecules."
                 .to_string(),
@@ -825,7 +1018,9 @@ impl App {
 
             worker_tx,
             worker_rx,
-            descriptor_cancel_requested: false,
+            worker_cancel_flag,
+            cancel_requested: false,
+            active_job: None,
         }
     }
 
@@ -834,7 +1029,7 @@ impl App {
     /// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
     /// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
     fn tick(&mut self) {
-        if matches!(self.state, AppState::Computing(_)) {
+        if matches!(self.state, AppState::Computing { .. }) {
             self.spinner_frame = (self.spinner_frame + 1) % SPINNER_FRAMES.len();
         }
     }
@@ -850,27 +1045,195 @@ impl App {
             .collect()
     }
 
+    /// Returns the total number of feature values produced by the current descriptor selection.
+    ///
+    /// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+    /// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
+    fn selected_descriptor_value_count(&self) -> usize {
+        self.available_descriptors
+            .iter()
+            .filter(|(_, enabled)| *enabled)
+            .map(|(descriptor, _)| descriptor.feature_len())
+            .sum()
+    }
+
+    /// Resolves the active model feature-layout contract for prediction/export.
+    fn resolve_active_model_feature_layout(&self) -> Result<ModelFeatureLayout, String> {
+        let mut resolved: Option<ModelFeatureLayout> = None;
+
+        if self.pipeline_bundle_bytes.is_some() {
+            if let Some(layout) = &self.pipeline_feature_layout {
+                resolved = Some(layout.clone());
+            }
+        }
+        if self.art2a_model_bytes.is_some() {
+            if let Some(layout) = &self.art2a_feature_layout {
+                match &resolved {
+                    Some(existing)
+                        if existing.expected_feature_names != layout.expected_feature_names
+                            || existing.descriptors != layout.descriptors =>
+                    {
+                        return Err(
+                            "Supervised model and ART2-A model use different feature layouts. Recompute or load a matching pair before prediction."
+                                .to_string(),
+                        );
+                    }
+                    None => resolved = Some(layout.clone()),
+                    _ => {}
+                }
+            }
+        }
+
+        if let Some(layout) = resolved {
+            return Ok(layout);
+        }
+
+        if let Some(matrix) = &self.feature_matrix {
+            if !matrix.descriptors.is_empty() && !matrix.feature_names.is_empty() {
+                return Ok(ModelFeatureLayout::from_matrix(matrix));
+            }
+        }
+
+        Err("No descriptor/model feature layout available. Calculate descriptors or import a model bundle first.".to_string())
+    }
+
+    /// Returns CSV numeric column vectors aligned to current matrix rows, keyed by column name.
+    fn csv_numeric_targets_aligned_to_matrix_rows(&self) -> Vec<(String, Vec<f64>)> {
+        let Some(matrix) = &self.feature_matrix else {
+            return Vec::new();
+        };
+        if self.loaded_properties.len() != matrix.rows || matrix.rows == 0 {
+            return Vec::new();
+        }
+
+        let mut per_column: HashMap<String, Vec<f64>> = HashMap::new();
+        let mut valid_counts: HashMap<String, usize> = HashMap::new();
+
+        for row in &self.loaded_properties {
+            for (name, raw) in row {
+                if let Ok(parsed) = raw.trim().parse::<f64>() {
+                    per_column.entry(name.clone()).or_default().push(parsed);
+                    *valid_counts.entry(name.clone()).or_insert(0) += 1;
+                }
+            }
+        }
+
+        let mut columns = per_column
+            .into_iter()
+            .filter(|(name, values)| {
+                values.len() == matrix.rows
+                    && valid_counts.get(name).copied().unwrap_or(0) == matrix.rows
+                    && !matrix.feature_names.iter().any(|feature| feature == name)
+            })
+            .collect::<Vec<_>>();
+        columns.sort_by(|left, right| left.0.cmp(&right.0));
+        columns
+    }
+
+    /// Builds clustering matrix from descriptor matrix, optionally appending CSV numeric columns.
+    fn clustering_payload_with_optional_csv_targets(
+        &self,
+    ) -> Result<(FeatureMatrixPayload, usize), String> {
+        let Some(matrix) = &self.feature_matrix else {
+            return Err("No feature matrix available. Calculate descriptors first.".to_string());
+        };
+        if matrix.rows < 2 || matrix.cols == 0 {
+            return Err("ART2-A clustering needs at least 2 rows and 1 feature.".to_string());
+        }
+
+        let mut payload = matrix.to_payload();
+        if !self.include_csv_numeric_in_clustering {
+            return Ok((payload, 0));
+        }
+
+        let csv_columns = self.csv_numeric_targets_aligned_to_matrix_rows();
+        if csv_columns.is_empty() {
+            return Ok((payload, 0));
+        }
+
+        let base_cols = payload.cols;
+        let total_cols = base_cols + csv_columns.len();
+        let mut merged_data = Vec::with_capacity(payload.rows * total_cols);
+        for row in 0..payload.rows {
+            let base = row * base_cols;
+            merged_data.extend_from_slice(&payload.data[base..base + base_cols]);
+            for (_, values) in &csv_columns {
+                merged_data.push(values[row]);
+            }
+        }
+        payload.data = merged_data;
+
+        for (name, _) in &csv_columns {
+            payload.feature_names.push(format!("CSV::{}", name));
+            payload
+                .selected_feature_indices
+                .push(payload.selected_feature_indices.len());
+        }
+        payload.cols = total_cols;
+
+        Ok((payload, csv_columns.len()))
+    }
+
     /// Implements selected target.
     ///
     /// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
     /// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
-    fn primary_selected_target(&self) -> Option<&str> {
+    fn primary_selected_target(&self) -> Option<&TargetColumn> {
         self.target_columns
             .iter()
-            .find(|name| self.selected_target_columns.contains(name.as_str()))
-            .map(|name| name.as_str())
+            .find(|target| self.selected_target_columns.contains(target.key.as_str()))
     }
 
     /// Implements targets in order.
     ///
     /// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
     /// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
-    fn selected_targets_in_order(&self) -> Vec<String> {
+    fn selected_targets_in_order(&self) -> Vec<TargetColumn> {
         self.target_columns
             .iter()
-            .filter(|name| self.selected_target_columns.contains(name.as_str()))
+            .filter(|target| self.selected_target_columns.contains(target.key.as_str()))
             .cloned()
             .collect()
+    }
+
+    /// Returns the currently displayed target summary for feature-importance view.
+    fn current_importance_target_summary(&self) -> Option<&TargetTrainingSummary> {
+        if self.trained_target_summaries.is_empty() {
+            return None;
+        }
+        let idx = self
+            .importance_target_index
+            .min(self.trained_target_summaries.len().saturating_sub(1));
+        self.trained_target_summaries.get(idx)
+    }
+
+    /// Syncs the active feature-importance panel with the selected importance target index.
+    fn sync_importance_view_from_index(&mut self) {
+        if let Some(summary) = self.current_importance_target_summary() {
+            self.top_feature_importances = summary.top_feature_importances.clone();
+        } else {
+            self.top_feature_importances.clear();
+        }
+    }
+
+    /// Cycles which trained target drives the feature-importance panel.
+    fn cycle_importance_target(&mut self, delta: isize) {
+        if self.trained_target_summaries.is_empty() {
+            self.status_message =
+                "No trained target summaries available. Train model(s) first.".to_string();
+            return;
+        }
+        let len = self.trained_target_summaries.len() as isize;
+        let current = self.importance_target_index as isize;
+        let next = (current + delta).rem_euclid(len) as usize;
+        self.importance_target_index = next;
+        self.sync_importance_view_from_index();
+        if let Some(summary) = self.current_importance_target_summary() {
+            self.status_message = format!(
+                "Feature importance target: {} ({})",
+                summary.target_display_label, summary.pipeline_name
+            );
+        }
     }
 
     /// Implements target overlay cache.
@@ -878,12 +1241,12 @@ impl App {
     /// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
     /// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
     fn refresh_target_overlay_cache(&mut self) {
-        let Some(target_column) = self.primary_selected_target().map(str::to_string) else {
+        let Some(target_column) = self.primary_selected_target().cloned() else {
             self.target_overlay_values = None;
             self.target_overlay_error = None;
             return;
         };
-        match extract_targets(&self.loaded_properties, &target_column) {
+        match self.resolve_target_values(&target_column) {
             Ok(values) => {
                 self.target_overlay_values = Some(values);
                 self.target_overlay_error = None;
@@ -902,18 +1265,29 @@ impl App {
     fn ml_mode_summary(&self) -> String {
         let selected = self.selected_targets_in_order();
         if selected.is_empty() {
-            return "Mode: Unsupervised (select target(s) to enable supervised training)".to_string();
+            return "Mode: Unsupervised (select target(s) to enable supervised training)"
+                .to_string();
         }
-        let primary = &selected[0];
+        let primary = &selected[0].name;
         if self.feature_matrix.is_none() {
             if self.target_overlay_values.is_some() {
                 return format!(
                     "Mode: Targets selected [{}], compute descriptors to enable supervised training",
-                    truncate_label(&selected.join(", "), 48)
+                    truncate_label(
+                        &selected
+                            .iter()
+                            .map(|target| target.display_label())
+                            .collect::<Vec<_>>()
+                            .join(", "),
+                        48
+                    )
                 );
             }
             if let Some(error) = &self.target_overlay_error {
-                return format!("Mode: Primary target invalid ({})", truncate_label(error, 52));
+                return format!(
+                    "Mode: Primary target invalid ({})",
+                    truncate_label(error, 52)
+                );
             }
             return format!("Mode: Target pending validation ('{}')", primary);
         }
@@ -932,7 +1306,10 @@ impl App {
             );
         }
         if let Some(error) = &self.target_overlay_error {
-            return format!("Mode: Primary target invalid ({})", truncate_label(error, 52));
+            return format!(
+                "Mode: Primary target invalid ({})",
+                truncate_label(error, 52)
+            );
         }
         format!("Mode: Target pending validation ('{}')", primary)
     }
@@ -954,31 +1331,109 @@ impl App {
         }
 
         let row_count = self.loaded_properties.len();
-        let mut numeric_candidates = stats
+        let mut property_targets = stats
             .into_iter()
             .filter_map(|(name, (present_count, numeric_count))| {
                 (present_count == row_count && row_count > 0 && numeric_count == row_count)
-                    .then_some(name)
+                    .then_some(TargetColumn::new(name, TargetColumnSource::Csv))
             })
             .collect::<Vec<_>>();
-        numeric_candidates.sort();
-        self.target_columns = numeric_candidates;
+        property_targets.sort_by(|left, right| {
+            left.name
+                .cmp(&right.name)
+                .then_with(|| left.source.cmp(&right.source))
+        });
 
-        self.selected_target_columns
-            .retain(|name| self.target_columns.iter().any(|candidate| candidate == name));
+        let mut merged = property_targets.clone();
+        if let Some(matrix) = &self.feature_matrix {
+            for feature_name in &matrix.feature_names {
+                merged.push(TargetColumn::new(
+                    feature_name.clone(),
+                    TargetColumnSource::Descriptor,
+                ));
+            }
+        }
+        merged.sort_by(|left, right| {
+            left.name
+                .cmp(&right.name)
+                .then_with(|| left.source.cmp(&right.source))
+        });
+        self.target_columns = merged;
+
+        self.selected_target_columns.retain(|key| {
+            self.target_columns
+                .iter()
+                .any(|candidate| candidate.key == *key)
+        });
         if self.selected_target_columns.is_empty() {
-            for name in &self.target_columns {
-                self.selected_target_columns.insert(name.clone());
+            for target in &property_targets {
+                self.selected_target_columns.insert(target.key.clone());
+            }
+        }
+        if self.selected_target_columns.is_empty() {
+            for target in &self.target_columns {
+                self.selected_target_columns.insert(target.key.clone());
             }
         }
 
         let selected_idx = self
             .target_columns
             .iter()
-            .position(|name| self.selected_target_columns.contains(name.as_str()))
+            .position(|target| self.selected_target_columns.contains(target.key.as_str()))
             .or_else(|| (!self.target_columns.is_empty()).then_some(0));
         self.target_column_list_state.select(selected_idx);
         self.refresh_target_overlay_cache();
+    }
+
+    /// Resolves descriptor-backed target column values from the current matrix.
+    ///
+    /// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+    /// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
+    fn extract_descriptor_target_values(
+        &self,
+        target_column: &TargetColumn,
+    ) -> Option<(usize, Vec<f64>)> {
+        if target_column.source != TargetColumnSource::Descriptor {
+            return None;
+        }
+        let matrix = self.feature_matrix.as_ref()?;
+        let column_idx = matrix
+            .feature_names
+            .iter()
+            .position(|name| name == &target_column.name)?;
+        let mut values = Vec::with_capacity(matrix.rows);
+        for row in 0..matrix.rows {
+            values.push(matrix.data[row * matrix.cols + column_idx]);
+        }
+        Some((column_idx, values))
+    }
+
+    /// Resolves any target column values (CSV numeric property or descriptor feature).
+    ///
+    /// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+    /// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
+    fn resolve_target_values(&self, target_column: &TargetColumn) -> Result<Vec<f64>, String> {
+        if let Some((_, values)) = self.extract_descriptor_target_values(target_column) {
+            return Ok(values);
+        }
+        extract_targets(&self.loaded_properties, &target_column.name)
+    }
+
+    /// Resolves target values and optionally the source descriptor column index to drop.
+    ///
+    /// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+    /// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
+    fn resolve_training_target_values(
+        &self,
+        target_column: &TargetColumn,
+    ) -> Result<(Vec<f64>, Option<usize>), String> {
+        if let Some((column_idx, values)) = self.extract_descriptor_target_values(target_column) {
+            return Ok((values, Some(column_idx)));
+        }
+        Ok((
+            extract_targets(&self.loaded_properties, &target_column.name)?,
+            None,
+        ))
     }
 
     /// Implements target selection popup.
@@ -987,14 +1442,13 @@ impl App {
     /// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
     fn open_target_selection_popup(&mut self) {
         if self.target_columns.is_empty() {
-            self.status_message =
-                "No numeric target columns found in loaded CSV properties.".to_string();
+            self.status_message = "No target columns available yet.".to_string();
             return;
         }
         let selected_idx = self
             .target_columns
             .iter()
-            .position(|name| self.selected_target_columns.contains(name.as_str()))
+            .position(|target| self.selected_target_columns.contains(target.key.as_str()))
             .or_else(|| Some(0));
         self.target_column_list_state.select(selected_idx);
         self.state = AppState::TargetSelectionOpen;
@@ -1008,13 +1462,13 @@ impl App {
         let Some(selected) = self.target_column_list_state.selected() else {
             return;
         };
-        let Some(name) = self.target_columns.get(selected) else {
+        let Some(target) = self.target_columns.get(selected) else {
             return;
         };
-        if self.selected_target_columns.contains(name.as_str()) {
-            self.selected_target_columns.remove(name.as_str());
+        if self.selected_target_columns.contains(target.key.as_str()) {
+            self.selected_target_columns.remove(target.key.as_str());
         } else {
-            self.selected_target_columns.insert(name.clone());
+            self.selected_target_columns.insert(target.key.clone());
         }
         self.refresh_target_overlay_cache();
     }
@@ -1026,8 +1480,8 @@ impl App {
     fn set_all_target_columns(&mut self, enabled: bool) {
         self.selected_target_columns.clear();
         if enabled {
-            for name in &self.target_columns {
-                self.selected_target_columns.insert(name.clone());
+            for target in &self.target_columns {
+                self.selected_target_columns.insert(target.key.clone());
             }
         }
         self.refresh_target_overlay_cache();
@@ -1067,7 +1521,8 @@ impl App {
                     return;
                 }
                 let current = self.target_column_list_state.selected().unwrap_or(0);
-                self.target_column_list_state.select(Some((current + 1) % len));
+                self.target_column_list_state
+                    .select(Some((current + 1) % len));
             }
             KeyCode::Char(' ') => {
                 self.toggle_selected_target_column();
@@ -1453,9 +1908,13 @@ impl App {
     ///
     /// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
     /// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
-    fn begin_computing(&mut self, message: String) {
+    fn begin_computing(&mut self, message: String, job: WorkerJobKind) {
         self.progress_percent = -1.0;
-        self.state = AppState::Computing(message);
+        self.cancel_requested = false;
+        self.worker_cancel_flag
+            .store(false, AtomicOrdering::Relaxed);
+        self.active_job = Some(job);
+        self.state = AppState::Computing { message, job };
     }
 
     /// Implements worker.
@@ -1487,6 +1946,8 @@ impl App {
             DESCRIPTOR_ERROR_LOG_PATH
         );
         self.progress_percent = 0.0;
+        self.cancel_requested = false;
+        self.active_job = None;
         self.state = AppState::Idle;
     }
 
@@ -1547,6 +2008,22 @@ impl App {
         }
     }
 
+    /// Applies the curated fast-ML descriptor preset.
+    ///
+    /// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+    /// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
+    fn apply_fast_ml_descriptor_preset(&mut self) {
+        let preset = BatchDescriptor::fast_ml_preset();
+        for (descriptor, enabled) in &mut self.available_descriptors {
+            *enabled = preset.contains(descriptor);
+        }
+        self.status_message = format!(
+            "Applied Fast ML descriptor preset ({} descriptors, {} values/mol).",
+            preset.len(),
+            self.selected_descriptor_value_count()
+        );
+    }
+
     /// Implements file browser.
     ///
     /// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
@@ -1564,9 +2041,14 @@ impl App {
                 .as_ref()
                 .and_then(|p| p.parent().map(Path::to_path_buf))
                 .unwrap_or(fallback_dir),
+            BrowserPurpose::ModelImport => self
+                .model_bundle_path
+                .parent()
+                .map(Path::to_path_buf)
+                .unwrap_or(fallback_dir),
         };
 
-        match read_browser_entries(&start_dir) {
+        match read_browser_entries(&start_dir, purpose) {
             Ok(entries) => {
                 self.browser_purpose = purpose;
                 self.browser_entries = entries;
@@ -1583,7 +2065,7 @@ impl App {
     /// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
     /// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
     fn navigate_browser_to(&mut self, dir: PathBuf) {
-        match read_browser_entries(&dir) {
+        match read_browser_entries(&dir, self.browser_purpose) {
             Ok(entries) => {
                 self.browser_entries = entries;
                 let selected = (!self.browser_entries.is_empty()).then_some(0);
@@ -1599,7 +2081,10 @@ impl App {
     /// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
     /// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
     fn request_dataset_load(&mut self, path: PathBuf) {
-        self.begin_computing(format!("Loading molecules from '{}'", path.display()));
+        self.begin_computing(
+            format!("Loading molecules from '{}'", path.display()),
+            WorkerJobKind::DatasetLoad,
+        );
         self.send_worker(WorkerRequest::LoadDataset(path));
     }
 
@@ -1623,8 +2108,10 @@ impl App {
             return;
         }
 
-        self.descriptor_cancel_requested = false;
-        self.begin_computing(DESCRIPTOR_COMPUTING_MESSAGE.to_string());
+        self.begin_computing(
+            DESCRIPTOR_COMPUTING_MESSAGE.to_string(),
+            WorkerJobKind::DescriptorCalculation,
+        );
         self.send_worker(WorkerRequest::CalculateDescriptors {
             molecules: self.loaded_molecules.clone(),
             descriptors,
@@ -1635,14 +2122,28 @@ impl App {
     ///
     /// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
     /// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
-    fn request_descriptor_cancellation(&mut self) {
-        if self.descriptor_cancel_requested {
-            self.status_message = "Descriptor cancellation already requested; waiting for worker to stop.".to_string();
+    fn request_job_cancellation(&mut self) {
+        let Some(job) = self.active_job else {
+            self.status_message = "No active worker job to cancel.".to_string();
+            return;
+        };
+        if !job.is_cancelable() {
+            self.status_message = format!(
+                "Active {} is not cancelable; waiting for completion.",
+                job.label()
+            );
             return;
         }
-        self.descriptor_cancel_requested = true;
-        self.status_message = "Cancelling descriptor calculation...".to_string();
-        self.send_worker(WorkerRequest::CancelDescriptors);
+        if self.cancel_requested {
+            self.status_message = format!(
+                "{} cancellation already requested; waiting for worker to stop.",
+                job.label()
+            );
+            return;
+        }
+        self.cancel_requested = true;
+        self.worker_cancel_flag.store(true, AtomicOrdering::Relaxed);
+        self.status_message = format!("Cancelling {}...", job.label());
     }
 
     /// Implements variance filter.
@@ -1652,7 +2153,9 @@ impl App {
     fn request_variance_filter(&mut self) {
         let payload = {
             let Some(matrix) = &self.feature_matrix else {
-                self.set_error("No feature matrix available. Calculate descriptors first.".to_string());
+                self.set_error(
+                    "No feature matrix available. Calculate descriptors first.".to_string(),
+                );
                 return;
             };
             if matrix.cols == 0 {
@@ -1661,10 +2164,13 @@ impl App {
             }
             matrix.to_payload()
         };
-        self.begin_computing(format!(
-            "Applying variance threshold ({:.2e})...",
-            DEFAULT_VARIANCE_THRESHOLD
-        ));
+        self.begin_computing(
+            format!(
+                "Applying variance threshold ({:.2e})...",
+                DEFAULT_VARIANCE_THRESHOLD
+            ),
+            WorkerJobKind::VarianceFilter,
+        );
         self.send_worker(WorkerRequest::ApplyVarianceFilter {
             matrix: payload,
             threshold: DEFAULT_VARIANCE_THRESHOLD,
@@ -1678,7 +2184,9 @@ impl App {
     fn request_correlation_filter(&mut self) {
         let payload = {
             let Some(matrix) = &self.feature_matrix else {
-                self.set_error("No feature matrix available. Calculate descriptors first.".to_string());
+                self.set_error(
+                    "No feature matrix available. Calculate descriptors first.".to_string(),
+                );
                 return;
             };
             if matrix.cols <= 1 {
@@ -1687,10 +2195,13 @@ impl App {
             }
             matrix.to_payload()
         };
-        self.begin_computing(format!(
-            "Applying correlation filter (|r| > {:.2})...",
-            DEFAULT_CORRELATION_THRESHOLD
-        ));
+        self.begin_computing(
+            format!(
+                "Applying correlation filter (|r| > {:.2})...",
+                DEFAULT_CORRELATION_THRESHOLD
+            ),
+            WorkerJobKind::CorrelationFilter,
+        );
         self.send_worker(WorkerRequest::ApplyCorrelationFilter {
             matrix: payload,
             threshold: DEFAULT_CORRELATION_THRESHOLD,
@@ -1730,10 +2241,10 @@ impl App {
         } else {
             self.feature_export_path.clone()
         };
-        self.begin_computing(format!(
-            "Exporting feature matrix to '{}'...",
-            path.display()
-        ));
+        self.begin_computing(
+            format!("Exporting feature matrix to '{}'...", path.display()),
+            WorkerJobKind::FeatureMatrixExport,
+        );
         self.send_worker(WorkerRequest::ExportFeatureMatrix {
             path,
             smiles: self.loaded_smiles.clone(),
@@ -1746,15 +2257,13 @@ impl App {
     /// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
     /// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
     fn request_training(&mut self) {
-        if self.feature_matrix.is_none() {
-            self.set_error("Calculate descriptors first in Tab 2 (Descriptor).".to_string());
-            return;
-        }
         self.refresh_target_overlay_cache();
-        let Some(matrix_rows) = self.feature_matrix.as_ref().map(|m| m.rows) else {
+        let Some(feature_matrix) = self.feature_matrix.as_ref() else {
             self.set_error("Calculate descriptors first in Tab 2 (Descriptor).".to_string());
             return;
         };
+        let matrix_rows = feature_matrix.rows;
+        let feature_cols = feature_matrix.cols;
 
         let selected_targets = self.selected_targets_in_order();
         if selected_targets.is_empty() {
@@ -1774,24 +2283,31 @@ impl App {
         }
 
         let mut target_series = Vec::with_capacity(selected_targets.len());
-        for target_name in selected_targets {
-            let values = match extract_targets(&self.loaded_properties, &target_name) {
+        let mut target_drop_indices = BTreeSet::new();
+        for target in selected_targets {
+            let (values, drop_idx) = match self.resolve_training_target_values(&target) {
                 Ok(values) => values,
                 Err(error) => {
-                    self.set_error(format!("Target '{}' validation failed: {}", target_name, error));
+                    self.set_error(format!(
+                        "Target '{}' validation failed: {}",
+                        target.name, error
+                    ));
                     return;
                 }
             };
+            if let Some(idx) = drop_idx {
+                target_drop_indices.insert(idx);
+            }
             if values.len() != matrix_rows {
                 self.set_error(format!(
                     "Target '{}' length mismatch: {} targets for {} feature rows.",
-                    target_name,
+                    target.name,
                     values.len(),
                     matrix_rows
                 ));
                 return;
             }
-            target_series.push((target_name, values));
+            target_series.push((target.output_name(), values));
         }
         if self.loaded_smiles.len() != matrix_rows {
             self.set_error(format!(
@@ -1801,24 +2317,47 @@ impl App {
             ));
             return;
         }
-        let matrix_payload = self
-            .feature_matrix
-            .as_ref()
-            .map(FeatureMatrix::to_payload)
-            .unwrap_or_else(|| unreachable!("matrix presence validated above"));
+        let matrix_payload = if target_drop_indices.is_empty() {
+            feature_matrix.to_payload()
+        } else {
+            let keep = (0..feature_cols)
+                .filter(|idx| !target_drop_indices.contains(idx))
+                .collect::<Vec<_>>();
+            if keep.is_empty() {
+                self.set_error(
+                    "Cannot train model: selected targets remove all descriptor features."
+                        .to_string(),
+                );
+                return;
+            }
+            match select_feature_columns(feature_matrix.to_payload(), &keep) {
+                Ok(payload) => payload,
+                Err(error) => {
+                    self.set_error(format!(
+                        "Failed to prepare training matrix after dropping target descriptor columns: {}",
+                        error
+                    ));
+                    return;
+                }
+            }
+        };
 
         self.training_config.algorithm = self.active_algorithm();
-        self.begin_computing(format!(
-            "Training {} on {} target(s) with {}...",
-            self.training_config.algorithm.label(),
-            target_series.len(),
-            self.training_config.scaler.label()
-        ));
+        self.begin_computing(
+            format!(
+                "Training {} on {} target(s) with {}...",
+                self.training_config.algorithm.label(),
+                target_series.len(),
+                self.training_config.scaler.label()
+            ),
+            WorkerJobKind::ModelTraining,
+        );
         self.send_worker(WorkerRequest::TrainModel {
             matrix: matrix_payload,
             target_series,
             smiles: self.loaded_smiles.clone(),
             config: self.training_config.clone(),
+            target_columns: self.target_columns.clone(),
         });
     }
 
@@ -1827,23 +2366,30 @@ impl App {
     /// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
     /// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
     fn request_art2a_clustering(&mut self) {
-        let matrix_payload = {
-            let Some(matrix) = &self.feature_matrix else {
-                self.set_error("No feature matrix available. Calculate descriptors first.".to_string());
-                return;
+        let (matrix_payload, added_csv_cols) =
+            match self.clustering_payload_with_optional_csv_targets() {
+                Ok(result) => result,
+                Err(error) => {
+                    self.set_error(error);
+                    return;
+                }
             };
-            if matrix.rows < 2 || matrix.cols == 0 {
-                self.set_error("ART2-A clustering needs at least 2 rows and 1 feature.".to_string());
-                return;
-            }
-            matrix.to_payload()
-        };
-        self.begin_computing(format!(
-            "Running ART2-A clustering (rho={:.2}, eta={:.2}, scaler={})...",
-            self.art2a_config.vigilance,
-            self.art2a_config.learning_rate,
-            self.training_config.scaler.label()
-        ));
+        self.begin_computing(
+            format!(
+                "Running ART2-A clustering (rho={:.2}, eta={:.2}, scaler={}, csv extras={})...",
+                self.art2a_config.vigilance,
+                self.art2a_config.learning_rate,
+                self.training_config.scaler.label(),
+                if added_csv_cols > 0 {
+                    format!("+{} numeric columns", added_csv_cols)
+                } else if self.include_csv_numeric_in_clustering {
+                    "enabled (none available)".to_string()
+                } else {
+                    "off".to_string()
+                }
+            ),
+            WorkerJobKind::Art2aClustering,
+        );
         self.send_worker(WorkerRequest::RunArt2aClustering {
             matrix: matrix_payload,
             config: self.art2a_config.clone(),
@@ -1862,27 +2408,23 @@ impl App {
             );
             return;
         }
-        let (descriptors, selected_feature_indices, expected_feature_names) = {
-            let Some(matrix) = &self.feature_matrix else {
-                self.set_error(
-                    "No descriptor matrix available. Calculate descriptors before prediction."
-                        .to_string(),
-                );
-                return;
+        let (descriptors, selected_feature_indices, expected_feature_names) =
+            match self.resolve_active_model_feature_layout() {
+                Ok(layout) => (
+                    layout.descriptors,
+                    layout.selected_feature_indices,
+                    layout.expected_feature_names,
+                ),
+                Err(error) => {
+                    self.set_error(error);
+                    return;
+                }
             };
 
-            if matrix.descriptors.is_empty() {
-                self.set_error("No descriptor selection cached for prediction.".to_string());
-                return;
-            }
-            (
-                matrix.descriptors.clone(),
-                matrix.selected_feature_indices.clone(),
-                matrix.feature_names.clone(),
-            )
-        };
-
-        self.begin_computing(format!("Running prediction for '{}'...", path.display()));
+        self.begin_computing(
+            format!("Running prediction for '{}'...", path.display()),
+            WorkerJobKind::Prediction,
+        );
         self.send_worker(WorkerRequest::PredictFile {
             path,
             pipeline_bundle_bytes: self.pipeline_bundle_bytes.clone(),
@@ -1913,15 +2455,88 @@ impl App {
             self.prediction_export_path.clone()
         };
 
-        self.begin_computing(format!(
-            "Exporting predictions to '{}'...",
-            export_path.display()
-        ));
+        self.begin_computing(
+            format!("Exporting predictions to '{}'...", export_path.display()),
+            WorkerJobKind::PredictionExport,
+        );
         self.send_worker(WorkerRequest::ExportPredictions {
             path: export_path,
             target_names: self.prediction_target_names.clone(),
             rows: self.prediction_rows.clone(),
         });
+    }
+
+    /// Exports the currently trained model bundle to disk.
+    ///
+    /// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+    /// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
+    fn request_export_model_bundle(&mut self) {
+        if self.pipeline_bundle_bytes.is_none() && self.art2a_model_bytes.is_none() {
+            self.set_error(
+                "No trained model available to export. Train model (Enter) or run ART2-A (g) first."
+                    .to_string(),
+            );
+            return;
+        }
+        let layout = match self.resolve_active_model_feature_layout() {
+            Ok(layout) => layout,
+            Err(error) => {
+                self.set_error(error);
+                return;
+            }
+        };
+
+        let export_path = if let Some(source) = &self.loaded_from_path {
+            let stem = source
+                .file_stem()
+                .map(|s| s.to_string_lossy().to_string())
+                .unwrap_or_else(|| "ferrum_model".to_string());
+            source.with_file_name(format!("{}_model_bundle.fcbundle", stem))
+        } else {
+            self.model_bundle_path.clone()
+        };
+
+        let bundle = PersistedModelBundle {
+            schema_version: MODEL_BUNDLE_SCHEMA_VERSION,
+            pipeline_bundle_bytes: self.pipeline_bundle_bytes.clone(),
+            art2a_model_bytes: self.art2a_model_bytes.clone(),
+            descriptors: layout
+                .descriptors
+                .iter()
+                .map(|descriptor| descriptor.name().to_string())
+                .collect(),
+            selected_feature_indices: layout.selected_feature_indices,
+            expected_feature_names: layout.expected_feature_names,
+        };
+
+        self.begin_computing(
+            format!("Exporting model bundle to '{}'...", export_path.display()),
+            WorkerJobKind::ModelBundleExport,
+        );
+        self.send_worker(WorkerRequest::ExportModelBundle {
+            path: export_path,
+            bundle,
+        });
+    }
+
+    /// Opens the file browser for model bundle import.
+    ///
+    /// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+    /// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
+    fn request_import_model_bundle(&mut self) {
+        self.open_file_browser(BrowserPurpose::ModelImport);
+    }
+
+    /// Imports a persisted model bundle from disk.
+    ///
+    /// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+    /// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
+    fn request_import_model_bundle_from_path(&mut self, path: PathBuf) {
+        self.begin_computing(
+            format!("Importing model bundle from '{}'...", path.display()),
+            WorkerJobKind::ModelBundleImport,
+        );
+        self.send_worker(WorkerRequest::ImportModelBundle { path });
     }
 
     /// Implements file browser key.
@@ -1978,6 +2593,7 @@ impl App {
                 match self.browser_purpose {
                     BrowserPurpose::Dataset => self.request_dataset_load(path),
                     BrowserPurpose::Prediction => self.request_prediction(path),
+                    BrowserPurpose::ModelImport => self.request_import_model_bundle_from_path(path),
                 }
             }
             _ => {}
@@ -2006,6 +2622,7 @@ impl App {
             KeyCode::Char(' ') => self.toggle_selected_descriptor(),
             KeyCode::Char('a') => self.set_all_descriptors(true),
             KeyCode::Char('n') => self.set_all_descriptors(false),
+            KeyCode::Char('r') => self.apply_fast_ml_descriptor_preset(),
             KeyCode::Char('f') => self.open_file_browser(BrowserPurpose::Dataset),
             KeyCode::Char('v') => self.request_variance_filter(),
             KeyCode::Char('c') => self.request_correlation_filter(),
@@ -2027,8 +2644,7 @@ impl App {
             KeyCode::Char('m') => {
                 self.selected_ml_mode = self.selected_ml_mode.toggle();
                 self.ml_param_page = 0;
-                self.status_message =
-                    format!("ML mode set to {}.", self.selected_ml_mode.label());
+                self.status_message = format!("ML mode set to {}.", self.selected_ml_mode.label());
             }
             KeyCode::Char('a') => {
                 if self.selected_ml_mode != MlMode::Manual {
@@ -2074,6 +2690,12 @@ impl App {
                     self.training_config.split_strategy.label()
                 );
             }
+            KeyCode::Char('u') => {
+                self.request_import_model_bundle();
+            }
+            KeyCode::Char('b') => {
+                self.request_export_model_bundle();
+            }
             _ => {}
         }
     }
@@ -2100,16 +2722,21 @@ impl App {
         match key.code {
             KeyCode::Char('[') => {
                 self.art2a_config.vigilance = (self.art2a_config.vigilance - 0.05).max(0.05);
-                self.status_message =
-                    format!("ART2-A vigilance set to {:.2}.", self.art2a_config.vigilance);
+                self.status_message = format!(
+                    "ART2-A vigilance set to {:.2}.",
+                    self.art2a_config.vigilance
+                );
             }
             KeyCode::Char(']') => {
                 self.art2a_config.vigilance = (self.art2a_config.vigilance + 0.05).min(0.99);
-                self.status_message =
-                    format!("ART2-A vigilance set to {:.2}.", self.art2a_config.vigilance);
+                self.status_message = format!(
+                    "ART2-A vigilance set to {:.2}.",
+                    self.art2a_config.vigilance
+                );
             }
             KeyCode::Char(';') => {
-                self.art2a_config.learning_rate = (self.art2a_config.learning_rate - 0.05).max(0.05);
+                self.art2a_config.learning_rate =
+                    (self.art2a_config.learning_rate - 0.05).max(0.05);
                 self.status_message = format!(
                     "ART2-A learning rate set to {:.2}.",
                     self.art2a_config.learning_rate
@@ -2165,6 +2792,12 @@ impl App {
             KeyCode::Char('s') => {
                 self.request_export_predictions();
             }
+            KeyCode::Char('b') => {
+                self.request_export_model_bundle();
+            }
+            KeyCode::Char('u') => {
+                self.request_import_model_bundle();
+            }
             _ => {}
         }
     }
@@ -2189,15 +2822,39 @@ impl App {
             KeyCode::Char('g') => {
                 self.request_art2a_clustering();
             }
+            KeyCode::Char('y') => {
+                self.include_csv_numeric_in_clustering = !self.include_csv_numeric_in_clustering;
+                self.status_message = format!(
+                    "ART2-A CSV numeric features: {}.",
+                    if self.include_csv_numeric_in_clustering {
+                        "enabled"
+                    } else {
+                        "disabled"
+                    }
+                );
+            }
             KeyCode::Char('p') => {
                 self.open_file_browser(BrowserPurpose::Prediction);
             }
             KeyCode::Char('s') => {
                 self.request_export_predictions();
             }
+            KeyCode::Char('b') => {
+                self.request_export_model_bundle();
+            }
+            KeyCode::Char('u') => {
+                self.request_import_model_bundle();
+            }
             KeyCode::Char('o') => {
                 self.color_mode = self.color_mode.cycle();
-                self.status_message = format!("Visualization color mode: {}.", self.color_mode.label());
+                self.status_message =
+                    format!("Visualization color mode: {}.", self.color_mode.label());
+            }
+            KeyCode::Char('[') => {
+                self.cycle_importance_target(-1);
+            }
+            KeyCode::Char(']') => {
+                self.cycle_importance_target(1);
             }
             KeyCode::Up | KeyCode::Char('k') => {
                 if self.profile_scroll > 0 {
@@ -2235,12 +2892,9 @@ impl App {
                 self.handle_file_browser_key(key);
                 return false;
             }
-            AppState::Computing(_) => {
-                if matches!(key.code, KeyCode::Esc)
-                    && !self.descriptor_cancel_requested
-                    && matches!(&self.state, AppState::Computing(active) if active == DESCRIPTOR_COMPUTING_MESSAGE)
-                {
-                    self.request_descriptor_cancellation();
+            AppState::Computing { .. } => {
+                if matches!(key.code, KeyCode::Esc) {
+                    self.request_job_cancellation();
                 }
                 // Keep UI responsive, but suppress workflow actions while worker is busy.
                 return false;
@@ -2261,7 +2915,9 @@ impl App {
                 if matches!(self.active_tab, 2 | 3) {
                     self.refresh_target_overlay_cache();
                     if self.fallback_stratified_when_target_unavailable() {
-                        self.status_message = "Stratified split requires valid target; split reverted to Random.".to_string();
+                        self.status_message =
+                            "Stratified split requires valid target; split reverted to Random."
+                                .to_string();
                     }
                 }
             }
@@ -2312,15 +2968,17 @@ impl App {
                 failed_rows,
             } => {
                 self.progress_percent = 0.0;
+                self.cancel_requested = false;
+                self.active_job = None;
                 self.last_dataset_failed_rows = failed_rows;
                 self.loaded_molecules = molecules;
                 self.loaded_smiles = smiles;
                 self.loaded_properties = properties;
                 self.loaded_from_path = Some(path.clone());
-                self.rebuild_target_columns();
 
                 // Reset downstream state because source data changed.
                 self.feature_matrix = None;
+                self.rebuild_target_columns();
                 self.descriptor_profiles.clear();
                 self.projection = None;
                 self.train_actuals.clear();
@@ -2328,8 +2986,11 @@ impl App {
                 self.ad_in_domain_flags.clear();
                 self.top_feature_importances.clear();
                 self.trained_target_summaries.clear();
+                self.trained_primary_target = None;
+                self.importance_target_index = 0;
                 self.trained_pipeline = None;
                 self.pipeline_bundle_bytes = None;
+                self.pipeline_feature_layout = None;
                 self.prediction_rows.clear();
                 self.prediction_target_names.clear();
                 self.prediction_source = None;
@@ -2348,6 +3009,7 @@ impl App {
                 self.cluster_sizes.clear();
                 self.cluster_summaries.clear();
                 self.art2a_model_bytes = None;
+                self.art2a_feature_layout = None;
                 self.color_mode = VisualizationColorMode::Uniform;
                 let split_fallback = self.fallback_stratified_when_target_unavailable();
 
@@ -2369,14 +3031,15 @@ impl App {
                 profiles,
                 projection,
             } => {
-                self.descriptor_cancel_requested = false;
+                self.cancel_requested = false;
+                self.active_job = None;
                 self.progress_percent = 0.0;
                 let rows = matrix.rows;
                 let cols = matrix.cols;
                 self.feature_matrix = Some(FeatureMatrix::from_payload(matrix));
+                self.rebuild_target_columns();
                 self.descriptor_profiles = profiles;
                 self.projection = projection;
-                self.refresh_target_overlay_cache();
                 let split_fallback = self.fallback_stratified_when_target_unavailable();
                 self.profile_scroll = 0;
 
@@ -2386,8 +3049,11 @@ impl App {
                 self.ad_in_domain_flags.clear();
                 self.top_feature_importances.clear();
                 self.trained_target_summaries.clear();
+                self.trained_primary_target = None;
+                self.importance_target_index = 0;
                 self.trained_pipeline = None;
                 self.pipeline_bundle_bytes = None;
+                self.pipeline_feature_layout = None;
                 self.prediction_rows.clear();
                 self.prediction_target_names.clear();
                 self.prediction_source = None;
@@ -2405,6 +3071,7 @@ impl App {
                 self.cluster_sizes.clear();
                 self.cluster_summaries.clear();
                 self.art2a_model_bytes = None;
+                self.art2a_feature_layout = None;
                 self.color_mode = VisualizationColorMode::Uniform;
 
                 self.status_message = format!(
@@ -2436,20 +3103,34 @@ impl App {
                 split_train_size,
                 split_test_size,
                 primary_target,
+                primary_target_display_label,
                 target_summaries,
                 pipeline_bundle_bytes,
+                descriptors,
+                selected_feature_indices,
+                expected_feature_names,
                 preview_predictions,
                 train_predictions,
             } => match decode_pipeline_bundle(&pipeline_bundle_bytes, &primary_target) {
                 Ok(pipeline) => {
                     self.progress_percent = 0.0;
+                    self.cancel_requested = false;
+                    self.active_job = None;
                     self.trained_pipeline = Some(pipeline);
                     self.trained_target_summaries = target_summaries;
+                    self.trained_primary_target = Some(primary_target_display_label.clone());
+                    self.importance_target_index = 0;
                     self.pipeline_bundle_bytes = Some(pipeline_bundle_bytes);
+                    self.pipeline_feature_layout = Some(ModelFeatureLayout::from_parts(
+                        descriptors.clone(),
+                        selected_feature_indices.clone(),
+                        expected_feature_names.clone(),
+                    ));
                     self.train_actuals = train_actuals;
                     self.training_predictions = train_predictions;
                     self.ad_in_domain_flags = ad_in_domain_flags;
                     self.top_feature_importances = top_feature_importances;
+                    self.sync_importance_view_from_index();
                     self.last_train_rmse = Some(rmse);
                     self.last_train_mae = Some(mae);
                     self.last_train_pearson = Some(pearson);
@@ -2460,6 +3141,17 @@ impl App {
                     self.last_split_label = Some(split_label.clone());
                     self.last_split_train_size = Some(split_train_size);
                     self.last_split_test_size = Some(split_test_size);
+                    if self.feature_matrix.is_none() {
+                        self.feature_matrix = Some(FeatureMatrix {
+                            rows: 0,
+                            cols: expected_feature_names.len(),
+                            feature_names: expected_feature_names.clone(),
+                            data: Vec::new(),
+                            descriptors,
+                            selected_feature_indices,
+                        });
+                        self.rebuild_target_columns();
+                    }
 
                     let preview = preview_predictions
                         .iter()
@@ -2468,8 +3160,17 @@ impl App {
                         .join(", ");
 
                     self.status_message = format!(
-                        "Training complete for {} target(s). Primary '{}': {} (Q2={:.4}, train R2={:.4}, holdout R2={:.4}) [{} split {}:{}]. Preview: [{}]",
-                        self.trained_target_summaries.len(), primary_target, pipeline_name, cv_q2, train_r2, holdout_r2, split_label, split_train_size, split_test_size, preview
+                        "Training complete for {} target(s). Primary {}: {} (Q2={:.4}, train R2={:.4}, holdout R2={:.4}) [{} split {}:{}]. Preview: [{}]",
+                        self.trained_target_summaries.len(),
+                        primary_target_display_label,
+                        pipeline_name,
+                        cv_q2,
+                        train_r2,
+                        holdout_r2,
+                        split_label,
+                        split_train_size,
+                        split_test_size,
+                        preview
                     );
                     self.refresh_target_overlay_cache();
                     self.state = AppState::Idle;
@@ -2488,6 +3189,8 @@ impl App {
                 skipped_rows,
             } => {
                 self.progress_percent = 0.0;
+                self.cancel_requested = false;
+                self.active_job = None;
                 self.prediction_target_names = target_names;
                 self.prediction_rows = rows;
                 self.prediction_source = Some(path.clone());
@@ -2502,6 +3205,8 @@ impl App {
             }
             WorkerResponse::PredictionsExported { path, count } => {
                 self.progress_percent = 0.0;
+                self.cancel_requested = false;
+                self.active_job = None;
                 self.status_message =
                     format!("Exported {} predictions to '{}'.", count, path.display());
                 self.state = AppState::Idle;
@@ -2514,12 +3219,14 @@ impl App {
                 filter_label,
             } => {
                 self.progress_percent = 0.0;
+                self.cancel_requested = false;
+                self.active_job = None;
                 let rows = matrix.rows;
                 let cols = matrix.cols;
                 self.feature_matrix = Some(FeatureMatrix::from_payload(matrix));
+                self.rebuild_target_columns();
                 self.descriptor_profiles = profiles;
                 self.projection = projection;
-                self.refresh_target_overlay_cache();
                 let split_fallback = self.fallback_stratified_when_target_unavailable();
                 self.profile_scroll = 0;
                 self.train_actuals.clear();
@@ -2527,8 +3234,11 @@ impl App {
                 self.ad_in_domain_flags.clear();
                 self.top_feature_importances.clear();
                 self.trained_target_summaries.clear();
+                self.trained_primary_target = None;
+                self.importance_target_index = 0;
                 self.trained_pipeline = None;
                 self.pipeline_bundle_bytes = None;
+                self.pipeline_feature_layout = None;
                 self.prediction_rows.clear();
                 self.prediction_target_names.clear();
                 self.prediction_source = None;
@@ -2546,6 +3256,7 @@ impl App {
                 self.cluster_sizes.clear();
                 self.cluster_summaries.clear();
                 self.art2a_model_bytes = None;
+                self.art2a_feature_layout = None;
                 self.color_mode = VisualizationColorMode::Uniform;
                 self.status_message = format!(
                     "{} applied: removed {} feature(s), matrix now {}x{}.",
@@ -2563,12 +3274,38 @@ impl App {
                 cluster_sizes,
                 summaries,
                 art2a_model_bytes,
+                projection,
+                descriptors,
+                selected_feature_indices,
+                expected_feature_names,
             } => {
                 self.progress_percent = 0.0;
+                self.cancel_requested = false;
+                self.active_job = None;
                 self.cluster_labels = labels;
                 self.cluster_sizes = cluster_sizes.clone();
                 self.cluster_summaries = summaries;
                 self.art2a_model_bytes = Some(art2a_model_bytes);
+                self.projection = projection;
+                self.art2a_feature_layout = Some(ModelFeatureLayout::from_parts(
+                    descriptors.clone(),
+                    selected_feature_indices.clone(),
+                    expected_feature_names.clone(),
+                ));
+                if self.feature_matrix.is_none() {
+                    self.feature_matrix = Some(FeatureMatrix {
+                        rows: 0,
+                        cols: expected_feature_names.len(),
+                        feature_names: expected_feature_names,
+                        data: Vec::new(),
+                        descriptors,
+                        selected_feature_indices,
+                    });
+                    self.rebuild_target_columns();
+                }
+                if self.color_mode == VisualizationColorMode::Uniform {
+                    self.color_mode = VisualizationColorMode::ClusterIds;
+                }
                 let top_summary = self
                     .cluster_summaries
                     .iter()
@@ -2597,6 +3334,8 @@ impl App {
             }
             WorkerResponse::FeatureMatrixExported { path, rows, cols } => {
                 self.progress_percent = 0.0;
+                self.cancel_requested = false;
+                self.active_job = None;
                 self.status_message = format!(
                     "Exported feature matrix ({}x{}) to '{}'.",
                     rows,
@@ -2605,16 +3344,80 @@ impl App {
                 );
                 self.state = AppState::Idle;
             }
-            WorkerResponse::DescriptorsCanceled => {
-                self.descriptor_cancel_requested = false;
+            WorkerResponse::ModelBundleExported { path } => {
                 self.progress_percent = 0.0;
-                self.status_message = "Descriptor calculation canceled.".to_string();
+                self.cancel_requested = false;
+                self.active_job = None;
+                self.model_bundle_path = path.clone();
+                self.status_message = format!("Exported model bundle to '{}'.", path.display());
+                self.state = AppState::Idle;
+            }
+            WorkerResponse::ModelBundleImported { path, bundle } => {
+                self.progress_percent = 0.0;
+                self.cancel_requested = false;
+                self.active_job = None;
+                self.model_bundle_path = path.clone();
+                self.trained_target_summaries.clear();
+                self.trained_primary_target = None;
+                self.importance_target_index = 0;
+                self.top_feature_importances.clear();
+                self.pipeline_bundle_bytes = bundle.pipeline_bundle_bytes;
+                self.art2a_model_bytes = bundle.art2a_model_bytes;
+                let descriptors = bundle
+                    .descriptors
+                    .iter()
+                    .map(|name| {
+                        descriptor_from_name(name).ok_or_else(|| {
+                            format!(
+                                "Imported model bundle references unknown descriptor '{}'.",
+                                name
+                            )
+                        })
+                    })
+                    .collect::<Result<Vec<_>, _>>();
+                match descriptors {
+                    Ok(descriptors) => {
+                        let layout = ModelFeatureLayout::from_parts(
+                            descriptors.clone(),
+                            bundle.selected_feature_indices.clone(),
+                            bundle.expected_feature_names.clone(),
+                        );
+                        self.pipeline_feature_layout =
+                            self.pipeline_bundle_bytes.as_ref().map(|_| layout.clone());
+                        self.art2a_feature_layout =
+                            self.art2a_model_bytes.as_ref().map(|_| layout.clone());
+                        self.feature_matrix = Some(FeatureMatrix {
+                            rows: 0,
+                            cols: bundle.expected_feature_names.len(),
+                            feature_names: bundle.expected_feature_names,
+                            data: Vec::new(),
+                            descriptors,
+                            selected_feature_indices: bundle.selected_feature_indices,
+                        });
+                        self.rebuild_target_columns();
+                        self.status_message = format!(
+                            "Imported model bundle from '{}'. You can now run prediction ('p').",
+                            path.display()
+                        );
+                        self.state = AppState::Idle;
+                    }
+                    Err(error) => {
+                        self.set_error(error);
+                    }
+                }
+            }
+            WorkerResponse::JobCanceled { job } => {
+                self.cancel_requested = false;
+                self.active_job = None;
+                self.progress_percent = 0.0;
+                self.status_message = format!("{} canceled.", job.label());
                 self.state = AppState::Idle;
             }
             WorkerResponse::Error(message) => {
-                self.descriptor_cancel_requested = false;
-                if let AppState::Computing(active) = &self.state {
-                    if active == DESCRIPTOR_COMPUTING_MESSAGE {
+                self.cancel_requested = false;
+                self.active_job = None;
+                if let AppState::Computing { job, .. } = &self.state {
+                    if *job == WorkerJobKind::DescriptorCalculation {
                         self.log_descriptor_error_and_continue(&message);
                         return;
                     }
@@ -2631,9 +3434,9 @@ impl App {
 /// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut terminal = setup_terminal()?;
-    let (worker_tx, worker_rx, worker_handle) = spawn_worker();
+    let (worker_tx, worker_rx, worker_cancel_flag, worker_handle) = spawn_worker();
 
-    let mut app = App::new(worker_tx, worker_rx);
+    let mut app = App::new(worker_tx, worker_rx, worker_cancel_flag);
     let run_result = run_app(&mut terminal, &mut app);
 
     let _ = app.worker_tx.send(WorkerRequest::Shutdown);
@@ -2720,8 +3523,8 @@ fn render(frame: &mut Frame, app: &App) {
     render_footer(frame, footer, app);
 
     match &app.state {
-        AppState::Computing(message) => {
-            render_progress_popup(frame, app, message, SPINNER_FRAMES[app.spinner_frame]);
+        AppState::Computing { message, job } => {
+            render_progress_popup(frame, app, message, *job, SPINNER_FRAMES[app.spinner_frame]);
         }
         AppState::ErrorPopup(message) => {
             render_error_popup(frame, message);
@@ -2775,10 +3578,16 @@ fn render_header(frame: &mut Frame, area: Rect, app: &App) {
 fn render_footer(frame: &mut Frame, area: Rect, app: &App) {
     let tab_help = match app.active_tab {
         0 => "Import: f=open file browser (.csv/.smi)",
-        1 => "Descriptor: Space toggle, a/n all/none, Enter calculate, Esc cancel active calc, v/c filters, e export matrix",
-        2 => "Model Select: m cycle mode (AutoQsar/ART2-A/Manual), a/A manual model, t targets, z scaler, x split",
+        1 => {
+            "Descriptor: Space toggle, a/n all/none, r fast-ML preset, Enter calculate, Esc cancel active compute, v/c filters, e export matrix"
+        }
+        2 => {
+            "Model Select: m cycle mode (AutoQsar/ART2-A/Manual), a/A manual model, t targets, z scaler, x split, b export model, u import model"
+        }
         3 => "Parameters: ,/. page, 1-6 edit, Enter save, Esc cancel",
-        4 => "Analyze: Enter train (Auto/Manual), g ART2-A cluster, p predict file, s export predictions, o color",
+        4 => {
+            "Analyze: Enter train (Auto/Manual), g ART2-A cluster, y toggle CSV extras, [/] importance target, p predict file, s export predictions, b export model, u import model, o color, Esc cancel active compute"
+        }
         _ => "",
     };
 
@@ -2819,10 +3628,18 @@ fn render_import_tab(frame: &mut Frame, area: Rect, app: &App) {
         source_text
     ))
     .wrap(Wrap { trim: true })
-    .block(Block::default().borders(Borders::ALL).title("Dataset Import"));
+    .block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title("Dataset Import"),
+    );
     frame.render_widget(top_widget, top);
 
-    let property_count = app.loaded_properties.first().map(|row| row.len()).unwrap_or(0);
+    let property_count = app
+        .loaded_properties
+        .first()
+        .map(|row| row.len())
+        .unwrap_or(0);
     let summary = Paragraph::new(format!(
         "Loaded molecules: {}\nFailed rows skipped: {}\nSMILES rows: {}\nProperty pairs (first row): {}",
         app.loaded_molecules.len(),
@@ -2835,13 +3652,13 @@ fn render_import_tab(frame: &mut Frame, area: Rect, app: &App) {
     frame.render_widget(summary, middle);
 
     let target_preview = if app.target_columns.is_empty() {
-        "No numeric target columns detected.".to_string()
+        "No target columns detected yet.".to_string()
     } else {
         app.target_columns
             .iter()
             .take(20)
             .enumerate()
-            .map(|(i, name)| format!("{:>2}. {}", i + 1, name))
+            .map(|(i, target)| format!("{:>2}. {}", i + 1, target.display_label()))
             .collect::<Vec<_>>()
             .join("\n")
     };
@@ -2850,7 +3667,7 @@ fn render_import_tab(frame: &mut Frame, area: Rect, app: &App) {
         .block(
             Block::default()
                 .borders(Borders::ALL)
-                .title("Detected Numeric Property Columns"),
+                .title("Detected Target Columns (CSV + descriptors)"),
         );
     frame.render_widget(preview, bottom);
 }
@@ -2864,6 +3681,17 @@ fn render_descriptor_tab(frame: &mut Frame, area: Rect, app: &App) {
         Layout::horizontal([Constraint::Percentage(38), Constraint::Percentage(62)]).areas(area);
 
     let selected_count = app.selected_descriptors().len();
+    let selected_value_count = app.selected_descriptor_value_count();
+    let total_value_count = app
+        .available_descriptors
+        .iter()
+        .map(|(descriptor, _)| descriptor.feature_len())
+        .sum::<usize>();
+    let fast_ml_descriptor_count = BatchDescriptor::fast_ml_preset().len();
+    let fast_ml_value_count = BatchDescriptor::fast_ml_preset()
+        .iter()
+        .map(|descriptor| descriptor.feature_len())
+        .sum::<usize>();
     let source_text = app
         .loaded_from_path
         .as_ref()
@@ -2876,12 +3704,16 @@ fn render_descriptor_tab(frame: &mut Frame, area: Rect, app: &App) {
         .unwrap_or_else(|| "(none)".to_string());
 
     let left_text = format!(
-        "Input Dataset\n\nSource file: {}\nLoaded molecules: {}\nFeature matrix: {}\n\nDescriptor selection:\nEnabled {}/{} descriptors\n\nActions:\n- Press 'f' to open file browser\n- Press Enter to calculate selected descriptors\n- Press Esc while computing to cancel descriptor calculation\n- Press 'v' variance-threshold filter\n- Press 'c' correlation filter\n- Press 'e' export current feature matrix CSV",
+        "Input Dataset\n\nSource file: {}\nLoaded molecules: {}\nFeature matrix: {}\n\nDescriptor selection:\nEnabled {}/{} descriptors\nOutput width: {}/{} values per molecule\nFast ML preset: {} descriptors, {} values/mol (press 'r')\n\nActions:\n- Press 'f' to open file browser\n- Press Enter to calculate selected descriptors\n- Press Esc while computing to cancel active compute\n- Press 'v' variance-threshold filter\n- Press 'c' correlation filter\n- Press 'e' export current feature matrix CSV",
         source_text,
         app.loaded_molecules.len(),
         matrix_text,
         selected_count,
         app.available_descriptors.len(),
+        selected_value_count,
+        total_value_count,
+        fast_ml_descriptor_count,
+        fast_ml_value_count,
     );
 
     let left_widget = Paragraph::new(left_text).wrap(Wrap { trim: true }).block(
@@ -2899,7 +3731,12 @@ fn render_descriptor_tab(frame: &mut Frame, area: Rect, app: &App) {
         .iter()
         .map(|(descriptor, enabled)| {
             let marker = if *enabled { "X" } else { " " };
-            ListItem::new(format!("[{}] {}", marker, descriptor.name()))
+            ListItem::new(format!(
+                "[{}] {} ({} values)",
+                marker,
+                descriptor.name(),
+                descriptor.feature_len()
+            ))
         })
         .collect();
 
@@ -3000,7 +3837,11 @@ fn render_model_selection_tab(frame: &mut Frame, area: Rect, app: &App) {
         let active = app.selected_ml_mode == mode;
         let border = if active { Color::Yellow } else { Color::Cyan };
         let content = if mode == MlMode::Manual {
-            format!("{}\n\nCurrent manual model:\n{}", body, app.manual_algo_selection.label())
+            format!(
+                "{}\n\nCurrent manual model:\n{}",
+                body,
+                app.manual_algo_selection.label()
+            )
         } else {
             body.to_string()
         };
@@ -3028,16 +3869,28 @@ fn render_model_selection_tab(frame: &mut Frame, area: Rect, app: &App) {
     let target_summary = if selected_targets.is_empty() {
         "(none)".to_string()
     } else {
-        truncate_label(&selected_targets.join(", "), 64)
+        truncate_label(
+            &selected_targets
+                .iter()
+                .map(|target| target.display_label())
+                .collect::<Vec<_>>()
+                .join(", "),
+            64,
+        )
     };
     let overlay = centered_rect(96, 26, area);
     let info = Paragraph::new(format!(
-        "Selected mode: {} (m to cycle)\nTargets: {} (t to choose)\nScaler: {} (z)\nSplit: {} (x)\nManual model: {} (a/A)",
+        "Selected mode: {} (m to cycle)\nTargets: {} (t to choose)\nScaler: {} (z)\nSplit: {} (x)\nManual model: {} (a/A)\nART2-A CSV extras: {} (y)",
         app.selected_ml_mode.label(),
         target_summary,
         app.training_config.scaler.label(),
         app.training_config.split_strategy.label(),
-        app.manual_algo_selection.label()
+        app.manual_algo_selection.label(),
+        if app.include_csv_numeric_in_clustering {
+            "on"
+        } else {
+            "off"
+        }
     ))
     .wrap(Wrap { trim: true })
     .block(
@@ -3053,8 +3906,7 @@ fn render_model_selection_tab(frame: &mut Frame, area: Rect, app: &App) {
 /// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
 /// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
 fn render_hyperparameter_tab(frame: &mut Frame, area: Rect, app: &App) {
-    let [top, bottom] =
-        Layout::vertical([Constraint::Length(6), Constraint::Min(8)]).areas(area);
+    let [top, bottom] = Layout::vertical([Constraint::Length(6), Constraint::Min(8)]).areas(area);
 
     let mode_text = match app.selected_ml_mode {
         MlMode::AutoQsar => {
@@ -3065,20 +3917,27 @@ fn render_hyperparameter_tab(frame: &mut Frame, area: Rect, app: &App) {
         }
         MlMode::Manual => "Manual mode: edit selected model hyperparameters below.",
     };
-    let top_widget = Paragraph::new(mode_text)
-        .wrap(Wrap { trim: true })
-        .block(Block::default().borders(Borders::ALL).title("Parameter Mode"));
+    let top_widget = Paragraph::new(mode_text).wrap(Wrap { trim: true }).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title("Parameter Mode"),
+    );
     frame.render_widget(top_widget, top);
 
     let mut lines = Vec::new();
     lines.push(format!(
         "Page {}/{} (','/'.' to cycle)",
-        app.ml_param_page.min(app.ml_param_page_count().saturating_sub(1)) + 1,
+        app.ml_param_page
+            .min(app.ml_param_page_count().saturating_sub(1))
+            + 1,
         app.ml_param_page_count()
     ));
     lines.push(String::new());
     for entry in app.ml_param_entries() {
-        lines.push(format!("{}: {} = {}", entry.hotkey, entry.label, entry.value));
+        lines.push(format!(
+            "{}: {} = {}",
+            entry.hotkey, entry.label, entry.value
+        ));
     }
     if let Some(param) = app.editing_ml_param {
         lines.push(String::new());
@@ -3094,7 +3953,8 @@ fn render_hyperparameter_tab(frame: &mut Frame, area: Rect, app: &App) {
         .block(Block::default().borders(Borders::ALL).title("Parameters"));
     frame.render_widget(bottom_widget, bottom);
 
-    if app.active_tab == 3 && app.editing_ml_param.is_some() && matches!(app.state, AppState::Idle) {
+    if app.active_tab == 3 && app.editing_ml_param.is_some() && matches!(app.state, AppState::Idle)
+    {
         let cursor_x = bottom
             .x
             .saturating_add(2)
@@ -3138,15 +3998,15 @@ fn render_predict_visual_tab(frame: &mut Frame, area: Rect, app: &App) {
 fn render_pca_panel(frame: &mut Frame, area: Rect, app: &App) {
     if let Some(projection) = &app.projection {
         let [canvas_area, info_area] =
-            Layout::horizontal([Constraint::Percentage(72), Constraint::Percentage(28)]).areas(area);
+            Layout::horizontal([Constraint::Percentage(72), Constraint::Percentage(28)])
+                .areas(area);
 
         let points_all = projection.points.clone();
         let maybe_target_overlay = bucket_points_by_values(
             &projection.points,
             app.target_overlay_values.as_deref().unwrap_or(&[]),
         );
-        let cluster_buckets =
-            bucket_points_by_clusters(&projection.points, &app.cluster_labels, 6);
+        let cluster_buckets = bucket_points_by_clusters(&projection.points, &app.cluster_labels, 6);
         let ad_buckets = bucket_points_by_binary_flags(&projection.points, &app.ad_in_domain_flags);
         let color_mode = match app.color_mode {
             VisualizationColorMode::Uniform => VisualizationColorMode::Uniform,
@@ -3176,6 +4036,8 @@ fn render_pca_panel(frame: &mut Frame, area: Rect, app: &App) {
         let cluster_buckets_for_canvas = cluster_buckets.clone();
         let ad_buckets_for_canvas = ad_buckets.clone();
 
+        let cluster_centroids = compute_cluster_centroids(&projection.points, &app.cluster_labels);
+
         let canvas = Canvas::default()
             .block(
                 Block::default()
@@ -3184,76 +4046,102 @@ fn render_pca_panel(frame: &mut Frame, area: Rect, app: &App) {
             )
             .x_bounds(projection.x_bounds)
             .y_bounds(projection.y_bounds)
-            .paint(move |ctx| {
-                match color_mode {
-                    VisualizationColorMode::TargetOverlay => {
-                        if let Some((low, mid, high)) = target_overlay_for_canvas.clone() {
-                            if !low.is_empty() {
-                                ctx.draw(&Points {
-                                    coords: &low,
-                                    color: Color::Blue,
-                                });
-                            }
-                            if !mid.is_empty() {
-                                ctx.draw(&Points {
-                                    coords: &mid,
-                                    color: Color::Yellow,
-                                });
-                            }
-                            if !high.is_empty() {
-                                ctx.draw(&Points {
-                                    coords: &high,
-                                    color: Color::Red,
-                                });
-                            }
+            .paint(move |ctx| match color_mode {
+                VisualizationColorMode::TargetOverlay => {
+                    if let Some((low, mid, high)) = target_overlay_for_canvas.clone() {
+                        if !low.is_empty() {
+                            ctx.draw(&Points {
+                                coords: &low,
+                                color: Color::Blue,
+                            });
+                        }
+                        if !mid.is_empty() {
+                            ctx.draw(&Points {
+                                coords: &mid,
+                                color: Color::Yellow,
+                            });
+                        }
+                        if !high.is_empty() {
+                            ctx.draw(&Points {
+                                coords: &high,
+                                color: Color::Red,
+                            });
                         }
                     }
-                    VisualizationColorMode::ClusterIds => {
-                        if let Some(buckets) = cluster_buckets_for_canvas.clone() {
-                            let palette = [
-                                Color::Blue,
-                                Color::Cyan,
-                                Color::Green,
-                                Color::Yellow,
-                                Color::Magenta,
-                                Color::Red,
-                            ];
-                            for (idx, bucket) in buckets.iter().enumerate() {
-                                if bucket.is_empty() {
-                                    continue;
-                                }
-                                ctx.draw(&Points {
-                                    coords: bucket,
-                                    color: palette[idx % palette.len()],
-                                });
+                }
+                VisualizationColorMode::ClusterIds => {
+                    if let Some(buckets) = cluster_buckets_for_canvas.clone() {
+                        let palette = [
+                            Color::Blue,
+                            Color::Cyan,
+                            Color::Green,
+                            Color::Yellow,
+                            Color::Magenta,
+                            Color::Red,
+                        ];
+                        for (idx, bucket) in buckets.iter().enumerate() {
+                            if bucket.is_empty() {
+                                continue;
                             }
+                            ctx.draw(&Points {
+                                coords: bucket,
+                                color: palette[idx % palette.len()],
+                            });
                         }
                     }
-                    VisualizationColorMode::ApplicabilityDomain => {
-                        if let Some((in_domain, out_domain)) = ad_buckets_for_canvas.clone() {
-                            if !in_domain.is_empty() {
-                                ctx.draw(&Points {
-                                    coords: &in_domain,
-                                    color: Color::Green,
-                                });
-                            }
-                            if !out_domain.is_empty() {
-                                ctx.draw(&Points {
-                                    coords: &out_domain,
-                                    color: Color::Red,
-                                });
-                            }
+                }
+                VisualizationColorMode::ApplicabilityDomain => {
+                    if let Some((in_domain, out_domain)) = ad_buckets_for_canvas.clone() {
+                        if !in_domain.is_empty() {
+                            ctx.draw(&Points {
+                                coords: &in_domain,
+                                color: Color::Green,
+                            });
+                        }
+                        if !out_domain.is_empty() {
+                            ctx.draw(&Points {
+                                coords: &out_domain,
+                                color: Color::Red,
+                            });
                         }
                     }
-                    VisualizationColorMode::Uniform => {
-                        ctx.draw(&Points {
-                            coords: &points_all,
-                            color: Color::Cyan,
-                        });
-                    }
+                }
+                VisualizationColorMode::Uniform => {
+                    ctx.draw(&Points {
+                        coords: &points_all,
+                        color: Color::Cyan,
+                    });
                 }
             });
         frame.render_widget(canvas, canvas_area);
+
+        // Overlay cluster centroids (cross marks) regardless of color mode when available.
+        if !cluster_centroids.is_empty() {
+            let centroid_canvas = Canvas::default()
+                .x_bounds(projection.x_bounds)
+                .y_bounds(projection.y_bounds)
+                .paint(move |ctx| {
+                    for &(x, y) in &cluster_centroids {
+                        let dx = (projection.x_bounds[1] - projection.x_bounds[0]).abs() * 0.01;
+                        let dy = (projection.y_bounds[1] - projection.y_bounds[0]).abs() * 0.01;
+                        ctx.draw(&CanvasLine {
+                            x1: x - dx,
+                            y1: y - dy,
+                            x2: x + dx,
+                            y2: y + dy,
+                            color: Color::White,
+                        });
+                        ctx.draw(&CanvasLine {
+                            x1: x - dx,
+                            y1: y + dy,
+                            x2: x + dx,
+                            y2: y - dy,
+                            color: Color::White,
+                        });
+                    }
+                });
+            frame.render_widget(centroid_canvas, canvas_area);
+        }
 
         let (ad_in_count, ad_out_count) = ad_buckets
             .as_ref()
@@ -3261,7 +4149,7 @@ fn render_pca_panel(frame: &mut Frame, area: Rect, app: &App) {
             .unwrap_or((0, 0));
 
         let info = Paragraph::new(format!(
-            "Projection Summary\n\nPoints: {}\nPC1 variance: {:.1}%\nPC2 variance: {:.1}%\nTotal: {:.1}%\n\nX range: [{:.2}, {:.2}]\nY range: [{:.2}, {:.2}]\n\nColor mode: {}\nClusters: {}\nTarget overlay: {}\nAD in/out: {}/{}",
+            "Projection Summary\n\nPoints: {}\nPC1 variance: {:.1}%\nPC2 variance: {:.1}%\nTotal: {:.1}%\n\nX range: [{:.2}, {:.2}]\nY range: [{:.2}, {:.2}]\n\nColor mode: {}\nClusters: {}\nCentroids: {}\nTarget overlay: {}\nAD in/out: {}/{}",
             projection.points.len(),
             projection.explained_variance[0] * 100.0,
             projection.explained_variance[1] * 100.0,
@@ -3272,6 +4160,7 @@ fn render_pca_panel(frame: &mut Frame, area: Rect, app: &App) {
             projection.y_bounds[1],
             color_mode.label(),
             app.cluster_sizes.len(),
+            compute_cluster_centroids(&projection.points, &app.cluster_labels).len(),
             if maybe_target_overlay.is_some() {
                 "available"
             } else if app.target_overlay_error.is_some() {
@@ -3302,6 +4191,7 @@ fn render_pca_panel(frame: &mut Frame, area: Rect, app: &App) {
 /// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
 /// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
 fn render_regression_diagnostics_panel(frame: &mut Frame, area: Rect, app: &App) {
+    let primary_target_label = app.trained_primary_target.as_deref().unwrap_or("n/a");
     if app.train_actuals.is_empty() || app.train_actuals.len() != app.training_predictions.len() {
         let placeholder = Paragraph::new(
             "No regression diagnostics available.\n\nTrain a model in Tab 2 to view Predicted vs Actual and residual diagnostics.",
@@ -3310,7 +4200,10 @@ fn render_regression_diagnostics_panel(frame: &mut Frame, area: Rect, app: &App)
         .block(
             Block::default()
                 .borders(Borders::ALL)
-                .title("Regression Diagnostics"),
+                .title(format!(
+                    "Regression Diagnostics (primary: {})",
+                    truncate_label(primary_target_label, 24)
+                )),
         );
         frame.render_widget(placeholder, area);
         return;
@@ -3319,7 +4212,11 @@ fn render_regression_diagnostics_panel(frame: &mut Frame, area: Rect, app: &App)
     let [plot_area, details_area] =
         Layout::vertical([Constraint::Percentage(66), Constraint::Percentage(34)]).areas(area);
 
-    let min_actual = app.train_actuals.iter().copied().fold(f64::INFINITY, f64::min);
+    let min_actual = app
+        .train_actuals
+        .iter()
+        .copied()
+        .fold(f64::INFINITY, f64::min);
     let max_actual = app
         .train_actuals
         .iter()
@@ -3347,14 +4244,13 @@ fn render_regression_diagnostics_panel(frame: &mut Frame, area: Rect, app: &App)
         .collect::<Vec<_>>();
 
     let canvas = Canvas::default()
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title("Predicted vs Actual"),
-        )
+        .block(Block::default().borders(Borders::ALL).title(format!(
+            "Predicted vs Actual ({})",
+            truncate_label(primary_target_label, 20)
+        )))
         .x_bounds(bounds)
         .y_bounds(bounds)
-            .paint(move |ctx| {
+        .paint(move |ctx| {
             ctx.draw(&CanvasLine {
                 x1: bounds[0],
                 y1: bounds[0],
@@ -3366,8 +4262,8 @@ fn render_regression_diagnostics_panel(frame: &mut Frame, area: Rect, app: &App)
                 coords: &points,
                 color: Color::Cyan,
             });
-            });
-        frame.render_widget(canvas, plot_area);
+        });
+    frame.render_widget(canvas, plot_area);
 
     let residuals = app
         .train_actuals
@@ -3422,10 +4318,12 @@ fn render_regression_diagnostics_panel(frame: &mut Frame, area: Rect, app: &App)
     };
 
     let [summary_area, bins_area] =
-        Layout::horizontal([Constraint::Percentage(54), Constraint::Percentage(46)]).areas(details_area);
+        Layout::horizontal([Constraint::Percentage(54), Constraint::Percentage(46)])
+            .areas(details_area);
 
     let stats = Paragraph::new(format!(
-        "Train n: {}\nTrain R2: {:.4} | RMSE: {:.4} | MAE: {:.4}\nTrain Pearson r: {:.4}\nResidual bias: {:.4} | Residual σ: {:.4}\n|Residual| p95: {:.4}\nOutliers (>2σ / >3σ): {} / {}\nHoldout R2: {:.4} | RMSE: {:.4} | MAE: {:.4}",
+        "Primary target: {}\nTrain n: {}\nTrain R2: {:.4} | RMSE: {:.4} | MAE: {:.4}\nTrain Pearson r: {:.4}\nResidual bias: {:.4} | Residual σ: {:.4}\n|Residual| p95: {:.4}\nOutliers (>2σ / >3σ): {} / {}\nHoldout R2: {:.4} | RMSE: {:.4} | MAE: {:.4}",
+        primary_target_label,
         app.train_actuals.len(),
         app.trained_pipeline.as_ref().map_or(0.0, |p| p.train_r2),
         app.last_train_rmse.unwrap_or(0.0),
@@ -3491,16 +4389,28 @@ fn render_regression_diagnostics_panel(frame: &mut Frame, area: Rect, app: &App)
 /// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
 /// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
 fn render_feature_importance_panel(frame: &mut Frame, area: Rect, app: &App) {
+    let importance_summary = app.current_importance_target_summary();
+    let title = importance_summary
+        .map(|summary| {
+            format!(
+                "Top Feature Importance: {} ({}) [ / ]",
+                truncate_label(&summary.target_display_label, 18),
+                truncate_label(&summary.pipeline_name, 12)
+            )
+        })
+        .unwrap_or_else(|| "Top Feature Importance [ / ]".to_string());
     if app.top_feature_importances.is_empty() {
-        let placeholder = Paragraph::new(
-            "No feature-importance data.\n\nAvailable after training RF, PLS, or Elastic Net models.",
-        )
-        .wrap(Wrap { trim: true })
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title("Top Feature Importance"),
-        );
+        let placeholder_text = if let Some(summary) = importance_summary {
+            format!(
+                "No feature-importance data for {} ({}).\n\nThis model may not expose importances (e.g. k-NN).\nUse '[' and ']' to switch trained targets.",
+                summary.target_display_label, summary.pipeline_name
+            )
+        } else {
+            "No feature-importance data.\n\nAvailable after training RF, PLS, or Elastic Net models.".to_string()
+        };
+        let placeholder = Paragraph::new(placeholder_text)
+            .wrap(Wrap { trim: true })
+            .block(Block::default().borders(Borders::ALL).title(title.clone()));
         frame.render_widget(placeholder, area);
         return;
     }
@@ -3544,7 +4454,7 @@ fn render_feature_importance_panel(frame: &mut Frame, area: Rect, app: &App) {
         ],
     )
     .header(header)
-    .block(Block::default().borders(Borders::ALL).title("Top Feature Importance"));
+    .block(Block::default().borders(Borders::ALL).title(title));
     frame.render_widget(table, area);
 }
 
@@ -3639,18 +4549,27 @@ fn render_descriptor_profile_table(frame: &mut Frame, area: Rect, app: &App) {
 ///
 /// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
 /// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
-fn render_progress_popup(frame: &mut Frame, app: &App, message: &str, spinner: char) {
+fn render_progress_popup(
+    frame: &mut Frame,
+    app: &App,
+    message: &str,
+    job: WorkerJobKind,
+    spinner: char,
+) {
     let area = centered_rect(60, 28, frame.area());
     frame.render_widget(Clear, area);
     let [text_area, gauge_area] =
         Layout::vertical([Constraint::Length(5), Constraint::Length(3)]).areas(area);
 
     let mut progress_hint = format!("{} {}", spinner, "Working...");
-    if message == DESCRIPTOR_COMPUTING_MESSAGE {
-        if app.descriptor_cancel_requested {
+    if !job.is_cancelable() {
+        progress_hint.push_str("\nThis step will finish automatically (cancellation disabled).");
+    }
+    if job.is_cancelable() {
+        if app.cancel_requested {
             progress_hint = "Cancellation requested... finishing current row.".to_string();
         } else {
-            progress_hint.push_str("\nPress Esc to cancel descriptor calculation.");
+            progress_hint.push_str(&format!("\nPress Esc to cancel {}.", job.label()));
         }
     }
     let text = Paragraph::new(format!("{}\n\n{}", message, progress_hint))
@@ -3715,11 +4634,16 @@ fn render_file_browser_popup(frame: &mut Frame, app: &App, current_path: &Path) 
     let mode = match app.browser_purpose {
         BrowserPurpose::Dataset => "dataset",
         BrowserPurpose::Prediction => "prediction",
+        BrowserPurpose::ModelImport => "model bundle",
     };
 
     let header_widget = Paragraph::new(format!(
-        "Select {} file (.csv/.smi)\nCurrent directory: {}",
+        "Select {} file {}\nCurrent directory: {}",
         mode,
+        match app.browser_purpose {
+            BrowserPurpose::ModelImport => "(.fcbundle/.bin)",
+            _ => "(.csv/.smi)",
+        },
         current_path.display()
     ))
     .wrap(Wrap { trim: true })
@@ -3788,30 +4712,38 @@ fn render_target_selection_popup(frame: &mut Frame, app: &App) {
         app.target_columns.len()
     ))
     .wrap(Wrap { trim: true })
-    .block(Block::default().borders(Borders::ALL).title("Target Selection"));
+    .block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title("Target Selection"),
+    );
     frame.render_widget(header_widget, header);
 
     let items: Vec<ListItem> = app
         .target_columns
         .iter()
-        .map(|name| {
-            let checked = if app.selected_target_columns.contains(name.as_str()) {
+        .map(|target| {
+            let checked = if app.selected_target_columns.contains(target.key.as_str()) {
                 "[x]"
             } else {
                 "[ ]"
             };
-            ListItem::new(format!("{} {}", checked, name))
+            ListItem::new(format!("{} {}", checked, target.display_label()))
         })
         .collect();
     let mut list_state = ListState::default();
     list_state.select(app.target_column_list_state.selected());
 
     let list = if items.is_empty() {
-        List::new(vec![ListItem::new("(no numeric target columns found)")])
+        List::new(vec![ListItem::new("(no target columns found)")])
     } else {
         List::new(items)
     }
-    .block(Block::default().borders(Borders::ALL).title("Numeric columns"))
+    .block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title("Target columns"),
+    )
     .highlight_symbol(">> ")
     .highlight_style(
         Style::default()
@@ -3820,11 +4752,14 @@ fn render_target_selection_popup(frame: &mut Frame, app: &App) {
     );
     frame.render_stateful_widget(list, list_area, &mut list_state);
 
-    let footer_widget = Paragraph::new(
-        "Up/Down: move  Space: toggle  a: all  n: none  Enter/Esc: close",
-    )
-    .wrap(Wrap { trim: true })
-    .block(Block::default().borders(Borders::ALL).title("Selection Keys"));
+    let footer_widget =
+        Paragraph::new("Up/Down: move  Space: toggle  a: all  n: none  Enter/Esc: close")
+            .wrap(Wrap { trim: true })
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title("Selection Keys"),
+            );
     frame.render_widget(footer_widget, footer);
 }
 
@@ -3888,11 +4823,14 @@ fn render_art2a_cluster_summary(frame: &mut Frame, area: Rect, app: &App) {
 /// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
 fn render_prediction_summary_panel(frame: &mut Frame, area: Rect, app: &App) {
     if app.prediction_rows.is_empty() {
-        let placeholder = Paragraph::new(
-            "No predictions loaded.\nUse 'p' to run prediction and 's' to export.",
-        )
-        .wrap(Wrap { trim: true })
-        .block(Block::default().borders(Borders::ALL).title("Prediction Summary"));
+        let placeholder =
+            Paragraph::new("No predictions loaded.\nUse 'p' to run prediction and 's' to export.")
+                .wrap(Wrap { trim: true })
+                .block(
+                    Block::default()
+                        .borders(Borders::ALL)
+                        .title("Prediction Summary"),
+                );
         frame.render_widget(placeholder, area);
         return;
     }
@@ -3914,7 +4852,12 @@ fn render_prediction_summary_panel(frame: &mut Frame, area: Rect, app: &App) {
         .enumerate()
         .map(|(idx, row)| {
             let first = row.predictions.first().copied().unwrap_or(0.0);
-            format!("#{} {} -> {:.4}", idx + 1, truncate_label(&row.smiles, 22), first)
+            format!(
+                "#{} {} -> {:.4}",
+                idx + 1,
+                truncate_label(&row.smiles, 22),
+                first
+            )
         })
         .collect::<Vec<_>>()
         .join("\n");
@@ -3931,7 +4874,11 @@ fn render_prediction_summary_panel(frame: &mut Frame, area: Rect, app: &App) {
         }
     ))
     .wrap(Wrap { trim: true })
-    .block(Block::default().borders(Borders::ALL).title("Prediction Summary"));
+    .block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title("Prediction Summary"),
+    );
     frame.render_widget(widget, area);
 }
 
@@ -3981,6 +4928,30 @@ fn append_descriptor_error_log(message: &str) -> Result<(), String> {
     .map_err(|error| format!("write {} failed: {}", DESCRIPTOR_ERROR_LOG_PATH, error))
 }
 
+/// Derives a UI label from output target key (e.g. `alogp__csv` -> `[CSV] alogp`).
+fn display_label_from_output_target_name(output_target_name: &str) -> String {
+    let Some((name, source_suffix)) = output_target_name.rsplit_once("__") else {
+        return output_target_name.to_string();
+    };
+    match source_suffix.to_ascii_lowercase().as_str() {
+        "csv" => format!("[CSV] {}", name),
+        "desc" => format!("[DESC] {}", name),
+        _ => output_target_name.to_string(),
+    }
+}
+
+/// Resolves a UI target-display label from output target key (e.g. `alogp__csv`).
+fn resolve_target_display_label(
+    output_target_name: &str,
+    target_columns: &[TargetColumn],
+) -> String {
+    target_columns
+        .iter()
+        .find(|column| column.output_name() == output_target_name)
+        .map(TargetColumn::display_label)
+        .unwrap_or_else(|| display_label_from_output_target_name(output_target_name))
+}
+
 /// Implements worker.
 ///
 /// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
@@ -3988,15 +4959,17 @@ fn append_descriptor_error_log(message: &str) -> Result<(), String> {
 fn spawn_worker() -> (
     Sender<WorkerRequest>,
     Receiver<WorkerResponse>,
+    Arc<AtomicBool>,
     thread::JoinHandle<()>,
 ) {
     let (request_tx, request_rx) = mpsc::channel::<WorkerRequest>();
     let (response_tx, response_rx) = mpsc::channel::<WorkerResponse>();
-    let descriptor_cancel_flag = Arc::new(AtomicBool::new(false));
+    let cancel_flag = Arc::new(AtomicBool::new(false));
+    let app_cancel_flag = Arc::clone(&cancel_flag);
 
-    let handle = thread::spawn(move || worker_loop(request_rx, response_tx, descriptor_cancel_flag));
+    let handle = thread::spawn(move || worker_loop(request_rx, response_tx, cancel_flag));
 
-    (request_tx, response_rx, handle)
+    (request_tx, response_rx, app_cancel_flag, handle)
 }
 
 /// Implements loop.
@@ -4006,7 +4979,7 @@ fn spawn_worker() -> (
 fn worker_loop(
     request_rx: Receiver<WorkerRequest>,
     response_tx: Sender<WorkerResponse>,
-    descriptor_cancel_flag: Arc<AtomicBool>,
+    cancel_flag: Arc<AtomicBool>,
 ) {
     while let Ok(request) = request_rx.recv() {
         if let WorkerRequest::Shutdown = &request {
@@ -4014,7 +4987,6 @@ fn worker_loop(
         }
         let request_label = match &request {
             WorkerRequest::LoadDataset(_) => "LoadDataset",
-            WorkerRequest::CancelDescriptors => "CancelDescriptors",
             WorkerRequest::CalculateDescriptors { .. } => "CalculateDescriptors",
             WorkerRequest::TrainModel { .. } => "TrainModel",
             WorkerRequest::RunArt2aClustering { .. } => "RunArt2aClustering",
@@ -4023,18 +4995,14 @@ fn worker_loop(
             WorkerRequest::ApplyVarianceFilter { .. } => "ApplyVarianceFilter",
             WorkerRequest::ApplyCorrelationFilter { .. } => "ApplyCorrelationFilter",
             WorkerRequest::ExportFeatureMatrix { .. } => "ExportFeatureMatrix",
+            WorkerRequest::ExportModelBundle { .. } => "ExportModelBundle",
+            WorkerRequest::ImportModelBundle { .. } => "ImportModelBundle",
             WorkerRequest::Shutdown => unreachable!("Shutdown handled before request execution"),
         };
 
-        if matches!(request, WorkerRequest::CancelDescriptors) {
-            descriptor_cancel_flag.store(true, AtomicOrdering::Relaxed);
-            continue;
-        }
-
         let _ = response_tx.send(WorkerResponse::Progress(0.0));
 
-        descriptor_cancel_flag.store(false, AtomicOrdering::Relaxed);
-        let cancel_flag = Arc::clone(&descriptor_cancel_flag);
+        let cancel_flag = Arc::clone(&cancel_flag);
         let guarded = panic::catch_unwind(AssertUnwindSafe(|| match request {
             WorkerRequest::LoadDataset(path) => handle_load_dataset(path),
             WorkerRequest::CalculateDescriptors {
@@ -4051,14 +5019,21 @@ fn worker_loop(
                 target_series,
                 smiles,
                 config,
-            } => handle_train_model(matrix, target_series, smiles, config, Some(&response_tx)),
+                target_columns,
+            } => handle_train_model(
+                matrix,
+                target_series,
+                smiles,
+                config,
+                target_columns,
+                Some(&response_tx),
+                &cancel_flag,
+            ),
             WorkerRequest::RunArt2aClustering {
                 matrix,
                 config,
                 scaler,
-            } => {
-                handle_art2a_clustering(matrix, config, scaler)
-            }
+            } => handle_art2a_clustering(matrix, config, scaler, &cancel_flag),
             WorkerRequest::PredictFile {
                 path,
                 pipeline_bundle_bytes,
@@ -4073,14 +5048,13 @@ fn worker_loop(
                 descriptors,
                 selected_feature_indices,
                 expected_feature_names,
+                &cancel_flag,
             ),
             WorkerRequest::ExportPredictions {
                 path,
                 target_names,
                 rows,
-            } => {
-                handle_export_predictions(path, target_names, rows)
-            }
+            } => handle_export_predictions(path, target_names, rows),
             WorkerRequest::ApplyVarianceFilter { matrix, threshold } => {
                 handle_apply_variance_filter(matrix, threshold)
             }
@@ -4092,7 +5066,10 @@ fn worker_loop(
                 smiles,
                 matrix,
             } => handle_export_feature_matrix(path, smiles, matrix),
-            WorkerRequest::CancelDescriptors => unreachable!("handled before request execution"),
+            WorkerRequest::ExportModelBundle { path, bundle } => {
+                handle_export_model_bundle(path, bundle)
+            }
+            WorkerRequest::ImportModelBundle { path } => handle_import_model_bundle(path),
             WorkerRequest::Shutdown => unreachable!("Shutdown handled before request execution"),
         }));
 
@@ -4174,7 +5151,9 @@ fn handle_calculate_descriptors(
     cancel_flag: &Arc<AtomicBool>,
 ) -> Result<WorkerResponse, String> {
     if cancel_flag.load(AtomicOrdering::Relaxed) {
-        return Ok(WorkerResponse::DescriptorsCanceled);
+        return Ok(WorkerResponse::JobCanceled {
+            job: WorkerJobKind::DescriptorCalculation,
+        });
     }
 
     if molecules.is_empty() {
@@ -4188,13 +5167,15 @@ fn handle_calculate_descriptors(
         let _ = tx.send(WorkerResponse::Progress(0.20));
     }
     let feature_names = descriptor_feature_names(&descriptors);
-    let flat = match calculate_batch_flat_static_cancellable(
-        &mut molecules,
-        &descriptors,
-        &|| cancel_flag.load(AtomicOrdering::Relaxed),
-    ) {
+    let flat = match calculate_batch_flat_static_cancellable(&mut molecules, &descriptors, &|| {
+        cancel_flag.load(AtomicOrdering::Relaxed)
+    }) {
         Ok(flat) => flat,
-        Err(()) => return Ok(WorkerResponse::DescriptorsCanceled),
+        Err(()) => {
+            return Ok(WorkerResponse::JobCanceled {
+                job: WorkerJobKind::DescriptorCalculation,
+            });
+        }
     };
     if let Some(tx) = progress_tx {
         let _ = tx.send(WorkerResponse::Progress(0.75));
@@ -4239,8 +5220,15 @@ fn handle_train_model(
     target_series: Vec<(String, Vec<f64>)>,
     smiles: Vec<String>,
     config: MlTrainingConfig,
+    target_columns: Vec<TargetColumn>,
     progress_tx: Option<&Sender<WorkerResponse>>,
+    cancel_flag: &Arc<AtomicBool>,
 ) -> Result<WorkerResponse, String> {
+    if cancel_flag.load(AtomicOrdering::Relaxed) {
+        return Ok(WorkerResponse::JobCanceled {
+            job: WorkerJobKind::ModelTraining,
+        });
+    }
     if matrix.rows == 0 || matrix.cols == 0 {
         return Err("Cannot train model: feature matrix is empty.".to_string());
     }
@@ -4262,6 +5250,7 @@ fn handle_train_model(
     let mut pipeline_bundle = Vec::with_capacity(target_series.len());
 
     let mut primary_target = String::new();
+    let mut primary_target_display_label = String::new();
     let mut primary_pipeline: Option<QsarPipeline> = None;
     let mut primary_train_actuals = Vec::new();
     let mut primary_train_predictions = Vec::new();
@@ -4279,33 +5268,80 @@ fn handle_train_model(
     let mut primary_split_train_size = 0usize;
     let mut primary_split_test_size = 0usize;
 
+    let base_features = Array2::from_shape_vec((matrix.rows, matrix.cols), matrix.data.clone())
+        .map_err(|error| format!("Failed to shape feature matrix for training: {}", error))?;
     let total_targets = target_series.len().max(1);
     for (target_idx, (target_name, targets)) in target_series.into_iter().enumerate() {
-        if let Some(tx) = progress_tx {
-            let start = (target_idx as f32 / total_targets as f32).clamp(0.0, 1.0);
-            let _ = tx.send(WorkerResponse::Progress((0.10 + 0.80 * start).min(0.95)));
+        let target_display_label = resolve_target_display_label(&target_name, &target_columns);
+        let target_start = target_idx as f32 / total_targets as f32;
+        let target_span = 1.0 / total_targets as f32;
+        let report_target_progress = |phase: f32| {
+            if let Some(tx) = progress_tx {
+                let local = phase.clamp(0.0, 1.0);
+                let global = (0.05 + 0.90 * (target_start + target_span * local)).min(0.98);
+                let _ = tx.send(WorkerResponse::Progress(global));
+            }
+        };
+        report_target_progress(0.0);
+        if cancel_flag.load(AtomicOrdering::Relaxed) {
+            return Ok(WorkerResponse::JobCanceled {
+                job: WorkerJobKind::ModelTraining,
+            });
         }
-        let features = Array2::from_shape_vec((matrix.rows, matrix.cols), matrix.data.clone())
-            .map_err(|error| format!("Failed to shape feature matrix for training: {}", error))?;
+
         let dataset = QsarDataset::new(
-            features,
+            base_features.clone(),
             Array1::from(targets),
             matrix.feature_names.clone(),
         );
+        report_target_progress(0.10);
+
+        if cancel_flag.load(AtomicOrdering::Relaxed) {
+            return Ok(WorkerResponse::JobCanceled {
+                job: WorkerJobKind::ModelTraining,
+            });
+        }
         let split = split_dataset(&dataset, &smiles, &config)?;
         if split.train.n_samples() < 2 || split.test.n_samples() < 1 {
             return Err("Split produced insufficient train/test rows for diagnostics.".to_string());
         }
+        report_target_progress(0.22);
 
-        let pipeline = train_pipeline(&dataset, &config)?;
+        if cancel_flag.load(AtomicOrdering::Relaxed) {
+            return Ok(WorkerResponse::JobCanceled {
+                job: WorkerJobKind::ModelTraining,
+            });
+        }
+        let mut report_pipeline_progress = |phase_fraction: f32, _label: &str| {
+            // Reserve [0.22, 0.62] of target-local progress for model training internals.
+            report_target_progress(0.22 + 0.40 * phase_fraction.clamp(0.0, 1.0));
+        };
+        let pipeline =
+            train_pipeline_with_progress(&dataset, &config, &mut report_pipeline_progress)?;
+        report_target_progress(0.62);
+
+        if cancel_flag.load(AtomicOrdering::Relaxed) {
+            return Ok(WorkerResponse::JobCanceled {
+                job: WorkerJobKind::ModelTraining,
+            });
+        }
         let train_predictions = pipeline.predict(&dataset.features).to_vec();
+        report_target_progress(0.72);
         let train_actuals = dataset.targets.to_vec();
-        let ad_in_domain_flags = (0..dataset.features.nrows())
-            .map(|row_idx| {
-                let sample = dataset.features.row(row_idx).to_vec();
-                pipeline.is_in_domain(&sample)
-            })
-            .collect::<Vec<_>>();
+        let ad_in_domain_flags = pipeline
+            .ad
+            .as_ref()
+            .map(|ad| ad.training_in_domain_flags())
+            .filter(|flags| flags.len() == dataset.features.nrows())
+            .unwrap_or_else(|| {
+                (0..dataset.features.nrows())
+                    .map(|row_idx| {
+                        let sample = dataset.features.row(row_idx).to_vec();
+                        pipeline.is_in_domain(&sample)
+                    })
+                    .collect::<Vec<_>>()
+            });
+        report_target_progress(0.82);
         let top_feature_importances =
             extract_top_feature_importances(&pipeline, &matrix.feature_names, 10);
         let preview_predictions = train_predictions
@@ -4322,6 +5358,7 @@ fn handle_train_model(
         let holdout_rmse = metrics::rmse(&holdout_targets, &holdout_predictions);
         let holdout_mae = metrics::mae(&holdout_targets, &holdout_predictions);
         let holdout_pearson = pearson_correlation(&holdout_targets, &holdout_predictions);
+        report_target_progress(0.94);
         let split_label = config.split_strategy.label().to_string();
         let split_train_size = split.train.n_samples();
         let split_test_size = split.test.n_samples();
@@ -4329,6 +5366,7 @@ fn handle_train_model(
         pipeline_bundle.push((target_name.clone(), pipeline.clone()));
         target_summaries.push(TargetTrainingSummary {
             target: target_name.clone(),
+            target_display_label: target_display_label.clone(),
             pipeline_name: pipeline.name.clone(),
             cv_q2: pipeline.cv_q2,
             train_r2: pipeline.train_r2,
@@ -4342,10 +5380,12 @@ fn handle_train_model(
             split_label: split_label.clone(),
             split_train_size,
             split_test_size,
+            top_feature_importances: top_feature_importances.clone(),
         });
 
         if target_idx == 0 {
             primary_target = target_name;
+            primary_target_display_label = target_display_label;
             primary_pipeline = Some(pipeline);
             primary_train_actuals = train_actuals;
             primary_train_predictions = train_predictions;
@@ -4363,11 +5403,13 @@ fn handle_train_model(
             primary_split_train_size = split_train_size;
             primary_split_test_size = split_test_size;
         }
+        report_target_progress(1.0);
+    }
 
-        if let Some(tx) = progress_tx {
-            let done = ((target_idx + 1) as f32 / total_targets as f32).clamp(0.0, 1.0);
-            let _ = tx.send(WorkerResponse::Progress((0.10 + 0.80 * done).min(0.96)));
-        }
+    if cancel_flag.load(AtomicOrdering::Relaxed) {
+        return Ok(WorkerResponse::JobCanceled {
+            job: WorkerJobKind::ModelTraining,
+        });
     }
 
     let primary_pipeline =
@@ -4380,6 +5422,7 @@ fn handle_train_model(
 
     Ok(WorkerResponse::ModelTrained {
         primary_target,
+        primary_target_display_label,
         pipeline_name: primary_pipeline.name.clone(),
         cv_q2: primary_pipeline.cv_q2,
         train_r2: primary_pipeline.train_r2,
@@ -4398,6 +5441,9 @@ fn handle_train_model(
         split_test_size: primary_split_test_size,
         target_summaries,
         pipeline_bundle_bytes,
+        descriptors: matrix.descriptors.clone(),
+        selected_feature_indices: matrix.selected_feature_indices.clone(),
+        expected_feature_names: matrix.feature_names.clone(),
         preview_predictions: primary_preview_predictions,
         train_predictions: primary_train_predictions,
     })
@@ -4411,7 +5457,13 @@ fn handle_art2a_clustering(
     matrix: FeatureMatrixPayload,
     config: Art2aConfig,
     scaler: MlScalerChoice,
+    cancel_flag: &Arc<AtomicBool>,
 ) -> Result<WorkerResponse, String> {
+    if cancel_flag.load(AtomicOrdering::Relaxed) {
+        return Ok(WorkerResponse::JobCanceled {
+            job: WorkerJobKind::Art2aClustering,
+        });
+    }
     if matrix.rows < 2 || matrix.cols == 0 {
         return Err("ART2-A requires at least 2 rows and 1 feature.".to_string());
     }
@@ -4425,7 +5477,13 @@ fn handle_art2a_clustering(
         return Err("ART2-A max_iter must be >= 1.".to_string());
     }
 
-    let data = Array2::from_shape_vec((matrix.rows, matrix.cols), matrix.data.clone())
+    let sanitized_matrix_data = matrix
+        .data
+        .iter()
+        .map(|v| if v.is_finite() { *v } else { 0.0 })
+        .collect::<Vec<_>>();
+
+    let data = Array2::from_shape_vec((matrix.rows, matrix.cols), sanitized_matrix_data)
         .map_err(|error| format!("Failed to shape matrix for ART2-A: {}", error))?;
     let (fitted_scaler, scaled) = match scaler {
         MlScalerChoice::Standard => {
@@ -4440,9 +5498,22 @@ fn handle_art2a_clustering(
         }
     };
 
-    let vectors: Vec<Vec<f64>> = scaled.rows().into_iter().map(|r| r.to_vec()).collect();
+    let vectors: Vec<Vec<f64>> = scaled
+        .rows()
+        .into_iter()
+        .map(|row| {
+            row.iter()
+                .map(|value| if value.is_finite() { *value } else { 0.0 })
+                .collect::<Vec<_>>()
+        })
+        .collect();
     let mut model = Art2a::new(config.vigilance, config.learning_rate, config.max_iter);
     model.fit(&vectors);
+    if cancel_flag.load(AtomicOrdering::Relaxed) {
+        return Ok(WorkerResponse::JobCanceled {
+            job: WorkerJobKind::Art2aClustering,
+        });
+    }
     if model.labels.len() != matrix.rows {
         return Err(format!(
             "ART2-A label length mismatch: {} labels for {} rows.",
@@ -4455,6 +5526,11 @@ fn handle_art2a_clustering(
     let cluster_sizes = model.cluster_sizes.clone();
     let mut sim_buckets: Vec<Vec<f64>> = vec![Vec::new(); model.n_clusters()];
     for (row_idx, row) in vectors.iter().enumerate() {
+        if cancel_flag.load(AtomicOrdering::Relaxed) {
+            return Ok(WorkerResponse::JobCanceled {
+                job: WorkerJobKind::Art2aClustering,
+            });
+        }
         let (pred_cluster, similarity) = model.predict_one(row);
         let assigned_cluster = labels[row_idx];
         debug_assert_eq!(pred_cluster, assigned_cluster);
@@ -4465,7 +5541,9 @@ fn handle_art2a_clustering(
     let total = labels.len().max(1) as f64;
     let mut summaries = Vec::with_capacity(cluster_sizes.len());
     for (cluster_id, &size) in cluster_sizes.iter().enumerate() {
-        let sims = sim_buckets.get(cluster_id).map_or(&[][..], |v| v.as_slice());
+        let sims = sim_buckets
+            .get(cluster_id)
+            .map_or(&[][..], |v| v.as_slice());
         let (mean_similarity, min_similarity, max_similarity) = if sims.is_empty() {
             (0.0, 0.0, 0.0)
         } else {
@@ -4486,11 +5564,16 @@ fn handle_art2a_clustering(
 
     let art2a_model_bytes = bincode::serialize(&(model, fitted_scaler, matrix.cols))
         .map_err(|error| format!("Failed to serialize ART2-A model bundle: {}", error))?;
+    let projection = build_projection(&matrix);
     Ok(WorkerResponse::ClusteringCompleted {
         labels,
         cluster_sizes,
         summaries,
         art2a_model_bytes,
+        projection,
+        descriptors: matrix.descriptors.clone(),
+        selected_feature_indices: matrix.selected_feature_indices.clone(),
+        expected_feature_names: matrix.feature_names.clone(),
     })
 }
 
@@ -4505,7 +5588,13 @@ fn handle_predict_file(
     descriptors: Vec<BatchDescriptor>,
     selected_feature_indices: Vec<usize>,
     expected_feature_names: Vec<String>,
+    cancel_flag: &Arc<AtomicBool>,
 ) -> Result<WorkerResponse, String> {
+    if cancel_flag.load(AtomicOrdering::Relaxed) {
+        return Ok(WorkerResponse::JobCanceled {
+            job: WorkerJobKind::Prediction,
+        });
+    }
     if pipeline_bundle_bytes.is_none() && art2a_model_bytes.is_none() {
         return Err(
             "Prediction failed: no supervised model or ART2-A model available. Train one first."
@@ -4539,22 +5628,30 @@ fn handle_predict_file(
         ));
     }
 
-    let flat = calculate_batch_flat_static(&mut molecules, &descriptors);
+    let flat = match calculate_batch_flat_static_cancellable(&mut molecules, &descriptors, &|| {
+        cancel_flag.load(AtomicOrdering::Relaxed)
+    }) {
+        Ok(flat) => flat,
+        Err(()) => {
+            return Ok(WorkerResponse::JobCanceled {
+                job: WorkerJobKind::Prediction,
+            });
+        }
+    };
     if flat.cols != descriptor_feature_names(&descriptors).len() {
         return Err(format!(
             "Prediction source feature mismatch: got {} columns from descriptor set.",
             flat.cols
         ));
     }
-    let selected_flat = apply_feature_subset_to_flat(&flat, &selected_feature_indices).ok_or_else(
-        || {
+    let selected_flat =
+        apply_feature_subset_to_flat(&flat, &selected_feature_indices).ok_or_else(|| {
             format!(
                 "Prediction feature subset invalid: {} selected columns for {} source columns.",
                 selected_feature_indices.len(),
                 flat.cols
             )
-        },
-    )?;
+        })?;
 
     let features = Array2::from_shape_vec(
         (selected_flat.rows, selected_flat.cols),
@@ -4589,8 +5686,7 @@ fn handle_predict_file(
         if selected_flat.cols != model_feature_count {
             return Err(format!(
                 "Prediction feature mismatch: got {} columns, model expects {}.",
-                selected_flat.cols,
-                model_feature_count
+                selected_flat.cols, model_feature_count
             ));
         }
     }
@@ -4627,8 +5723,7 @@ fn handle_predict_file(
         if *expected_feature_count != selected_flat.cols {
             return Err(format!(
                 "Prediction failed: ART2-A feature mismatch (bundle expects {}, got {}).",
-                expected_feature_count,
-                selected_flat.cols
+                expected_feature_count, selected_flat.cols
             ));
         }
         if model.prototypes[0].len() != selected_flat.cols {
@@ -4651,7 +5746,11 @@ fn handle_predict_file(
             let (cluster_id, similarity) = model.predict_one(&sample);
             cluster_ids.push(cluster_id as f64);
             similarities.push(similarity);
-            in_domains.push(if model.is_in_domain(&sample) { 1.0 } else { 0.0 });
+            in_domains.push(if model.is_in_domain(&sample) {
+                1.0
+            } else {
+                0.0
+            });
         }
         target_names.push("ART2A_ClusterId".to_string());
         target_names.push("ART2A_Similarity".to_string());
@@ -4666,6 +5765,11 @@ fn handle_predict_file(
 
     let mut rows = Vec::with_capacity(smiles.len());
     for (row_idx, smiles_value) in smiles.into_iter().enumerate() {
+        if cancel_flag.load(AtomicOrdering::Relaxed) {
+            return Ok(WorkerResponse::JobCanceled {
+                job: WorkerJobKind::Prediction,
+            });
+        }
         let predictions = target_predictions
             .iter()
             .map(|column| column[row_idx])
@@ -4688,10 +5792,7 @@ fn handle_predict_file(
 ///
 /// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
 /// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
-fn decode_pipeline_bundle(
-    bytes: &[u8],
-    primary_target: &str,
-) -> Result<QsarPipeline, String> {
+fn decode_pipeline_bundle(bytes: &[u8], primary_target: &str) -> Result<QsarPipeline, String> {
     let bundle: Vec<(String, QsarPipeline)> = bincode::deserialize(bytes)
         .map_err(|error| format!("Failed to deserialize pipeline bundle: {}", error))?;
     if bundle.is_empty() {
@@ -4711,6 +5812,18 @@ fn decode_pipeline_bundle(
 /// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
 /// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
 fn train_pipeline(data: &QsarDataset, config: &MlTrainingConfig) -> Result<QsarPipeline, String> {
+    train_pipeline_with_progress(data, config, &mut |_fraction, _label| {})
+}
+
+/// Trains pipeline with optional progress callback.
+///
+/// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+/// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
+fn train_pipeline_with_progress(
+    data: &QsarDataset,
+    config: &MlTrainingConfig,
+    on_progress: &mut dyn FnMut(f32, &str),
+) -> Result<QsarPipeline, String> {
     if data.n_samples() < 3 {
         return Err("Need at least 3 samples for training.".to_string());
     }
@@ -4719,13 +5832,42 @@ fn train_pipeline(data: &QsarDataset, config: &MlTrainingConfig) -> Result<QsarP
     if config.algorithm == MlAlgorithm::AutoQsar {
         if config.scaler != MlScalerChoice::Standard {
             return Err(
-                "AutoQsar currently requires StandardScaler. Switch scaler to Standard.".to_string(),
+                "AutoQsar currently requires StandardScaler. Switch scaler to Standard."
+                    .to_string(),
             );
         }
-        return Ok(ferrum_core::ml::pipeline::AutoQsar::regression(
+        let mut label_buf = String::new();
+        let mut bridge = |progress: AutoQsarProgress| {
+            let stage_text = match progress.stage {
+                AutoQsarProgressStage::Scaling => "AutoQsar: scaling",
+                AutoQsarProgressStage::CandidateStart { label } => {
+                    label_buf.clear();
+                    label_buf.push_str("AutoQsar: ");
+                    label_buf.push_str(label);
+                    label_buf.push_str(" CV start");
+                    &label_buf
+                }
+                AutoQsarProgressStage::CandidateDone { label, q2, best_q2 } => {
+                    label_buf.clear();
+                    label_buf.push_str("AutoQsar: ");
+                    label_buf.push_str(label);
+                    label_buf.push_str(" done (q2=");
+                    label_buf.push_str(&format!("{q2:.4}"));
+                    label_buf.push_str(", best=");
+                    label_buf.push_str(&format!("{best_q2:.4}"));
+                    label_buf.push(')');
+                    &label_buf
+                }
+                AutoQsarProgressStage::AdFit => "AutoQsar: fitting AD",
+                AutoQsarProgressStage::Complete => "AutoQsar: complete",
+            };
+            on_progress(progress.fraction(), stage_text);
+        };
+        return Ok(AutoQsar::regression_with_progress(
             data,
             cv_folds,
             config.seed,
+            &mut bridge,
         ));
     }
 
@@ -4747,7 +5889,9 @@ fn train_pipeline(data: &QsarDataset, config: &MlTrainingConfig) -> Result<QsarP
         MlAlgorithm::RandomForest => train_rf_pipeline(data, scaled, scaler, config, cv_folds),
         MlAlgorithm::Knn => train_knn_pipeline(data, scaled, scaler, config, cv_folds),
         MlAlgorithm::Pls => train_pls_pipeline(data, scaled, scaler, config, cv_folds),
-        MlAlgorithm::ElasticNet => train_elastic_net_pipeline(data, scaled, scaler, config, cv_folds),
+        MlAlgorithm::ElasticNet => {
+            train_elastic_net_pipeline(data, scaled, scaler, config, cv_folds)
+        }
     }
 }
 
@@ -4901,7 +6045,10 @@ fn train_knn_pipeline(
     config: &MlTrainingConfig,
     cv_folds: usize,
 ) -> Result<QsarPipeline, String> {
-    let k = config.knn_k.max(1).min(data.n_samples().saturating_sub(1).max(1));
+    let k = config
+        .knn_k
+        .max(1)
+        .min(data.n_samples().saturating_sub(1).max(1));
 
     let q2 = cv_regression_q2_configurable(
         &scaled,
@@ -5157,6 +6304,156 @@ fn handle_export_predictions(
     })
 }
 
+/// Exports a persisted model bundle artifact.
+///
+/// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+/// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
+fn handle_export_model_bundle(
+    path: PathBuf,
+    bundle: PersistedModelBundle,
+) -> Result<WorkerResponse, String> {
+    if bundle.pipeline_bundle_bytes.is_none() && bundle.art2a_model_bytes.is_none() {
+        return Err("Cannot export model bundle: no model payload present.".to_string());
+    }
+    if bundle.descriptors.is_empty() {
+        return Err("Cannot export model bundle: descriptor set is empty.".to_string());
+    }
+    if bundle
+        .descriptors
+        .iter()
+        .any(|name| descriptor_from_name(name).is_none())
+    {
+        return Err(
+            "Cannot export model bundle: descriptor set contains unknown names.".to_string(),
+        );
+    }
+    if bundle.expected_feature_names.is_empty() {
+        return Err("Cannot export model bundle: expected feature names are empty.".to_string());
+    }
+    if bundle.selected_feature_indices.is_empty() {
+        return Err("Cannot export model bundle: selected feature indices are empty.".to_string());
+    }
+    if bundle
+        .selected_feature_indices
+        .iter()
+        .any(|&idx| idx >= bundle.expected_feature_names.len())
+    {
+        return Err(format!(
+            "Cannot export model bundle: selected feature indices exceed feature-name width (indices={}, width={}).",
+            bundle.selected_feature_indices.len(),
+            bundle.expected_feature_names.len()
+        ));
+    }
+
+    let bytes = bincode::serialize(&bundle)
+        .map_err(|error| format!("Failed to serialize model bundle: {}", error))?;
+    fs::write(&path, bytes).map_err(|error| {
+        format!(
+            "Failed to write model bundle to '{}': {}",
+            path.display(),
+            error
+        )
+    })?;
+    Ok(WorkerResponse::ModelBundleExported { path })
+}
+
+/// Imports a persisted model bundle artifact.
+///
+/// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+/// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
+fn handle_import_model_bundle(path: PathBuf) -> Result<WorkerResponse, String> {
+    let bytes = fs::read(&path).map_err(|error| {
+        format!(
+            "Failed to read model bundle from '{}': {}",
+            path.display(),
+            error
+        )
+    })?;
+    let bundle: PersistedModelBundle = bincode::deserialize(&bytes)
+        .map_err(|error| format!("Failed to deserialize model bundle: {}", error))?;
+
+    if bundle.schema_version != MODEL_BUNDLE_SCHEMA_VERSION {
+        return Err(format!(
+            "Unsupported model bundle schema version {} (expected {}).",
+            bundle.schema_version, MODEL_BUNDLE_SCHEMA_VERSION
+        ));
+    }
+    if bundle.pipeline_bundle_bytes.is_none() && bundle.art2a_model_bytes.is_none() {
+        return Err("Imported model bundle contains no model payload.".to_string());
+    }
+    if bundle.descriptors.is_empty() {
+        return Err("Imported model bundle descriptor set is empty.".to_string());
+    }
+    let descriptors = bundle
+        .descriptors
+        .iter()
+        .map(|name| {
+            descriptor_from_name(name).ok_or_else(|| {
+                format!(
+                    "Imported model bundle references unknown descriptor '{}'.",
+                    name
+                )
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    if bundle.expected_feature_names.is_empty() {
+        return Err("Imported model bundle expected feature names are empty.".to_string());
+    }
+    if bundle.selected_feature_indices.is_empty() {
+        return Err("Imported model bundle selected feature indices are empty.".to_string());
+    }
+    if bundle
+        .selected_feature_indices
+        .iter()
+        .any(|&idx| idx >= bundle.expected_feature_names.len())
+    {
+        return Err(format!(
+            "Imported model bundle selected-feature indices exceed feature-name width (indices={}, width={}).",
+            bundle.selected_feature_indices.len(),
+            bundle.expected_feature_names.len()
+        ));
+    }
+    let expected_names = descriptor_feature_names(&descriptors);
+    let max_expected = bundle
+        .selected_feature_indices
+        .iter()
+        .copied()
+        .max()
+        .unwrap_or(0);
+    if max_expected >= expected_names.len() {
+        return Err(format!(
+            "Imported model bundle descriptor layout mismatch: max selected index {} exceeds descriptor-derived width {}.",
+            max_expected,
+            expected_names.len()
+        ));
+    }
+    for &selected_idx in &bundle.selected_feature_indices {
+        let expected_name = expected_names.get(selected_idx).ok_or_else(|| {
+            format!(
+                "Imported model bundle descriptor layout missing selected index {}.",
+                selected_idx
+            )
+        })?;
+        let bundle_name = bundle
+            .expected_feature_names
+            .get(selected_idx)
+            .ok_or_else(|| {
+                format!(
+                    "Imported model bundle missing expected feature name at selected index {}.",
+                    selected_idx
+                )
+            })?;
+        if expected_name != bundle_name {
+            return Err(format!(
+                "Imported model bundle descriptor layout mismatch at selected index {} ('{}' vs '{}').",
+                selected_idx, expected_name, bundle_name
+            ));
+        }
+    }
+
+    Ok(WorkerResponse::ModelBundleImported { path, bundle })
+}
+
 /// Implements apply variance filter.
 ///
 /// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
@@ -5364,7 +6661,10 @@ fn apply_feature_subset_to_flat(
     if selected_feature_indices.is_empty() {
         return None;
     }
-    if selected_feature_indices.iter().any(|&idx| idx >= matrix.cols) {
+    if selected_feature_indices
+        .iter()
+        .any(|&idx| idx >= matrix.cols)
+    {
         return None;
     }
     let mut data = Vec::with_capacity(matrix.rows * selected_feature_indices.len());
@@ -5492,6 +6792,17 @@ fn descriptor_feature_names(descriptors: &[BatchDescriptor]) -> Vec<String> {
     names
 }
 
+/// Resolves a descriptor by its canonical batch name.
+///
+/// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+/// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
+fn descriptor_from_name(name: &str) -> Option<BatchDescriptor> {
+    BatchDescriptor::all()
+        .iter()
+        .copied()
+        .find(|descriptor| descriptor.name() == name)
+}
+
 /// Implements targets.
 ///
 /// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
@@ -5594,10 +6905,25 @@ fn build_projection(matrix: &FeatureMatrixPayload) -> Option<ProjectionData> {
         return None;
     }
 
-    let data = Array2::from_shape_vec((matrix.rows, matrix.cols), matrix.data.clone()).ok()?;
+    let sanitized_matrix_data = matrix
+        .data
+        .iter()
+        .map(|v| if v.is_finite() { *v } else { 0.0 })
+        .collect::<Vec<_>>();
+    let data = Array2::from_shape_vec((matrix.rows, matrix.cols), sanitized_matrix_data).ok()?;
     let scaler = StandardScaler::fit(&data);
-    let scaled = scaler.transform(&data);
-    let (pca, projected) = Pca::fit_transform(&scaled, 2);
+    let mut scaled = scaler.transform(&data);
+    scaled.iter_mut().for_each(|value| {
+        if !value.is_finite() {
+            *value = 0.0;
+        }
+    });
+    let (pca, mut projected) = Pca::fit_transform(&scaled, 2);
+    projected.iter_mut().for_each(|value| {
+        if !value.is_finite() {
+            *value = 0.0;
+        }
+    });
 
     let pc1 = projected.column(0);
     let pc2 = projected.column(1);
@@ -5615,8 +6941,16 @@ fn build_projection(matrix: &FeatureMatrixPayload) -> Option<ProjectionData> {
         x_bounds: [x_min - x_pad, x_max + x_pad],
         y_bounds: [y_min - y_pad, y_max + y_pad],
         explained_variance: [
-            *pca.explained_variance_ratio.get(0).unwrap_or(&0.0),
-            *pca.explained_variance_ratio.get(1).unwrap_or(&0.0),
+            pca.explained_variance_ratio
+                .get(0)
+                .copied()
+                .filter(|value| value.is_finite())
+                .unwrap_or(0.0),
+            pca.explained_variance_ratio
+                .get(1)
+                .copied()
+                .filter(|value| value.is_finite())
+                .unwrap_or(0.0),
         ],
     })
 }
@@ -5691,6 +7025,23 @@ fn ml_param_label(param: MlParamKey) -> &'static str {
 /// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
 fn select_rows(data: &Array2<f64>, indices: &[usize]) -> Array2<f64> {
     let ncols = data.ncols();
+    if indices.is_empty() {
+        return Array2::<f64>::zeros((0, ncols));
+    }
+    if ncols == 0 {
+        return Array2::<f64>::zeros((indices.len(), 0));
+    }
+    if let Some(buf) = data.as_slice_memory_order() {
+        if buf.len() == data.nrows() * ncols {
+            let mut packed = Vec::with_capacity(indices.len() * ncols);
+            for &old_i in indices {
+                let start = old_i * ncols;
+                packed.extend_from_slice(&buf[start..start + ncols]);
+            }
+            return Array2::from_shape_vec((indices.len(), ncols), packed)
+                .expect("packed row slice must match target shape");
+        }
+    }
     let mut result = Array2::<f64>::zeros((indices.len(), ncols));
     for (new_i, &old_i) in indices.iter().enumerate() {
         result.row_mut(new_i).assign(&data.row(old_i));
@@ -5703,7 +7054,11 @@ fn select_rows(data: &Array2<f64>, indices: &[usize]) -> Array2<f64> {
 /// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
 /// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
 fn select_elements(data: &Array1<f64>, indices: &[usize]) -> Array1<f64> {
-    Array1::from_vec(indices.iter().map(|&i| data[i]).collect())
+    let mut out = Vec::with_capacity(indices.len());
+    for &idx in indices {
+        out.push(data[idx]);
+    }
+    Array1::from_vec(out)
 }
 
 /// Implements points by clusters.
@@ -5749,6 +7104,35 @@ fn bucket_points_by_clusters(
     Some(kept)
 }
 
+/// Implements cluster centroids.
+///
+/// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+/// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
+fn compute_cluster_centroids(points: &[(f64, f64)], labels: &[usize]) -> Vec<(f64, f64)> {
+    if points.is_empty() || labels.len() != points.len() {
+        return Vec::new();
+    }
+    let mut sums: HashMap<usize, (f64, f64, usize)> = HashMap::new();
+    for ((x, y), &label) in points.iter().zip(labels.iter()) {
+        let entry = sums.entry(label).or_insert((0.0, 0.0, 0));
+        entry.0 += *x;
+        entry.1 += *y;
+        entry.2 += 1;
+    }
+    let mut items = sums.into_iter().collect::<Vec<_>>();
+    items.sort_by_key(|(label, _)| *label);
+    items
+        .into_iter()
+        .filter_map(|(_, (sum_x, sum_y, count))| {
+            if count == 0 {
+                None
+            } else {
+                Some((sum_x / count as f64, sum_y / count as f64))
+            }
+        })
+        .collect()
+}
+
 /// Implements points by binary flags.
 ///
 /// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
@@ -5787,7 +7171,9 @@ fn extract_top_feature_importances(
 
     let raw_scores: Option<Vec<f64>> = match &pipeline.model {
         ModelType::RandomForestRegressor(model) => Some(model.feature_importances.clone()),
-        ModelType::PlsRegression(model) => Some(model.coefficients.iter().map(|v| v.abs()).collect()),
+        ModelType::PlsRegression(model) => {
+            Some(model.coefficients.iter().map(|v| v.abs()).collect())
+        }
         ModelType::ElasticNet(model) => Some(model.coefficients.iter().map(|v| v.abs()).collect()),
         _ => None,
     };
@@ -5884,7 +7270,7 @@ fn truncate_label(input: &str, max_len: usize) -> String {
 ///
 /// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
 /// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
-fn read_browser_entries(dir: &Path) -> io::Result<Vec<PathBuf>> {
+fn read_browser_entries(dir: &Path, purpose: BrowserPurpose) -> io::Result<Vec<PathBuf>> {
     let mut entries = Vec::new();
 
     for entry in fs::read_dir(dir)? {
@@ -5898,7 +7284,7 @@ fn read_browser_entries(dir: &Path) -> io::Result<Vec<PathBuf>> {
             continue;
         }
 
-        if path.is_dir() || is_supported_data_file(&path) {
+        if path.is_dir() || is_supported_browser_file(&path, purpose) {
             entries.push(path);
         }
     }
@@ -5924,4 +7310,510 @@ fn is_supported_data_file(path: &Path) -> bool {
         path.extension().and_then(|ext| ext.to_str()),
         Some("csv") | Some("smi") | Some("smiles")
     )
+}
+
+/// Checks whether supported model bundle file.
+///
+/// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+/// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
+fn is_supported_model_bundle_file(path: &Path) -> bool {
+    matches!(
+        path.extension().and_then(|ext| ext.to_str()),
+        Some("fcbundle") | Some("bin")
+    )
+}
+
+/// Checks whether supported browser file.
+///
+/// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+/// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
+fn is_supported_browser_file(path: &Path, purpose: BrowserPurpose) -> bool {
+    match purpose {
+        BrowserPurpose::Dataset | BrowserPurpose::Prediction => is_supported_data_file(path),
+        BrowserPurpose::ModelImport => is_supported_model_bundle_file(path),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    };
+
+    fn canceled_flag() -> Arc<AtomicBool> {
+        let flag = Arc::new(AtomicBool::new(false));
+        flag.store(true, Ordering::Relaxed);
+        flag
+    }
+
+    fn empty_matrix_payload() -> FeatureMatrixPayload {
+        FeatureMatrixPayload {
+            rows: 0,
+            cols: 0,
+            feature_names: Vec::new(),
+            data: Vec::new(),
+            descriptors: Vec::new(),
+            selected_feature_indices: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn test_supported_browser_file_filters_by_purpose() {
+        assert!(is_supported_browser_file(
+            Path::new("data.csv"),
+            BrowserPurpose::Dataset
+        ));
+        assert!(is_supported_browser_file(
+            Path::new("data.smi"),
+            BrowserPurpose::Prediction
+        ));
+        assert!(!is_supported_browser_file(
+            Path::new("model.fcbundle"),
+            BrowserPurpose::Dataset
+        ));
+
+        assert!(is_supported_browser_file(
+            Path::new("model.fcbundle"),
+            BrowserPurpose::ModelImport
+        ));
+        assert!(is_supported_browser_file(
+            Path::new("model.bin"),
+            BrowserPurpose::ModelImport
+        ));
+        assert!(!is_supported_browser_file(
+            Path::new("data.csv"),
+            BrowserPurpose::ModelImport
+        ));
+    }
+
+    fn make_test_app() -> App {
+        let (worker_tx, _worker_rx_unused) = mpsc::channel::<WorkerRequest>();
+        let (_response_tx_unused, worker_rx) = mpsc::channel::<WorkerResponse>();
+        let cancel_flag = Arc::new(AtomicBool::new(false));
+        App::new(worker_tx, worker_rx, cancel_flag)
+    }
+
+    #[test]
+    fn test_descriptor_handler_returns_job_canceled_when_flag_set() {
+        let flag = canceled_flag();
+        let response = handle_calculate_descriptors(Vec::new(), Vec::new(), None, &flag)
+            .expect("canceled path should return Ok(JobCanceled)");
+        assert!(matches!(
+            response,
+            WorkerResponse::JobCanceled {
+                job: WorkerJobKind::DescriptorCalculation
+            }
+        ));
+    }
+
+    #[test]
+    fn test_training_handler_returns_job_canceled_when_flag_set() {
+        let flag = canceled_flag();
+        let response = handle_train_model(
+            empty_matrix_payload(),
+            Vec::new(),
+            Vec::new(),
+            MlTrainingConfig::default(),
+            Vec::new(),
+            None,
+            &flag,
+        )
+        .expect("canceled path should return Ok(JobCanceled)");
+        assert!(matches!(
+            response,
+            WorkerResponse::JobCanceled {
+                job: WorkerJobKind::ModelTraining
+            }
+        ));
+    }
+
+    #[test]
+    fn test_art2a_handler_returns_job_canceled_when_flag_set() {
+        let flag = canceled_flag();
+        let response = handle_art2a_clustering(
+            empty_matrix_payload(),
+            Art2aConfig {
+                vigilance: DEFAULT_ART2A_VIGILANCE,
+                learning_rate: DEFAULT_ART2A_LEARNING_RATE,
+                max_iter: DEFAULT_ART2A_MAX_ITER,
+            },
+            MlScalerChoice::Standard,
+            &flag,
+        )
+        .expect("canceled path should return Ok(JobCanceled)");
+        assert!(matches!(
+            response,
+            WorkerResponse::JobCanceled {
+                job: WorkerJobKind::Art2aClustering
+            }
+        ));
+    }
+
+    #[test]
+    fn test_prediction_handler_returns_job_canceled_when_flag_set() {
+        let flag = canceled_flag();
+        let response = handle_predict_file(
+            PathBuf::from("/tmp/does_not_matter.csv"),
+            None,
+            None,
+            vec![BatchDescriptor::MolecularWeight],
+            Vec::new(),
+            Vec::new(),
+            &flag,
+        )
+        .expect("canceled path should return Ok(JobCanceled)");
+        assert!(matches!(
+            response,
+            WorkerResponse::JobCanceled {
+                job: WorkerJobKind::Prediction
+            }
+        ));
+    }
+
+    #[test]
+    fn test_fast_ml_preset_only_enables_preset_descriptors() {
+        let (worker_tx, _worker_rx_unused) = mpsc::channel::<WorkerRequest>();
+        let (_response_tx_unused, worker_rx) = mpsc::channel::<WorkerResponse>();
+        let cancel_flag = Arc::new(AtomicBool::new(false));
+        let mut app = App::new(worker_tx, worker_rx, cancel_flag);
+
+        app.set_all_descriptors(true);
+        app.apply_fast_ml_descriptor_preset();
+
+        let selected = app.selected_descriptors();
+        let preset = BatchDescriptor::fast_ml_preset();
+        assert_eq!(
+            selected.len(),
+            preset.len(),
+            "Preset selection size should match BatchDescriptor::fast_ml_preset"
+        );
+        for descriptor in preset {
+            assert!(
+                selected.contains(descriptor),
+                "Preset descriptor should be enabled: {:?}",
+                descriptor
+            );
+        }
+    }
+
+    #[test]
+    fn test_selected_descriptor_value_count_matches_enabled_sum() {
+        let mut app = make_test_app();
+
+        app.set_all_descriptors(false);
+        if let Some((_, enabled)) = app.available_descriptors.get_mut(0) {
+            *enabled = true;
+        }
+        if let Some((_, enabled)) = app.available_descriptors.get_mut(1) {
+            *enabled = true;
+        }
+
+        let expected = app.available_descriptors[0].0.feature_len()
+            + app.available_descriptors[1].0.feature_len();
+        assert_eq!(app.selected_descriptor_value_count(), expected);
+    }
+
+    #[test]
+    fn test_rebuild_target_columns_includes_csv_and_descriptor_sources() {
+        let mut app = make_test_app();
+        app.loaded_properties = vec![
+            vec![("alogp".to_string(), "1.2".to_string())],
+            vec![("alogp".to_string(), "2.4".to_string())],
+        ];
+        app.feature_matrix = Some(FeatureMatrix {
+            rows: 2,
+            cols: 2,
+            feature_names: vec!["alogp".to_string(), "MW".to_string()],
+            data: vec![1.2, 100.0, 2.4, 120.0],
+            descriptors: vec![BatchDescriptor::LogP],
+            selected_feature_indices: vec![0, 1],
+        });
+
+        app.rebuild_target_columns();
+
+        let labels = app
+            .target_columns
+            .iter()
+            .map(TargetColumn::display_label)
+            .collect::<Vec<_>>();
+        assert!(
+            labels.contains(&"[CSV] alogp".to_string()),
+            "CSV target should be present"
+        );
+        assert!(
+            labels.contains(&"[DESC] alogp".to_string()),
+            "Descriptor target should be present even if name overlaps CSV"
+        );
+        assert!(
+            labels.contains(&"[DESC] MW".to_string()),
+            "Descriptor-only target should be present"
+        );
+    }
+
+    #[test]
+    fn test_descriptor_target_overlay_uses_matrix_values() {
+        let mut app = make_test_app();
+        app.loaded_properties = vec![
+            vec![("alogp".to_string(), "1.0".to_string())],
+            vec![("alogp".to_string(), "2.0".to_string())],
+        ];
+        app.feature_matrix = Some(FeatureMatrix {
+            rows: 2,
+            cols: 1,
+            feature_names: vec!["MW".to_string()],
+            data: vec![101.5, 202.5],
+            descriptors: vec![BatchDescriptor::MolecularWeight],
+            selected_feature_indices: vec![0],
+        });
+        app.rebuild_target_columns();
+        app.selected_target_columns.clear();
+        let descriptor_key = app
+            .target_columns
+            .iter()
+            .find(|target| target.source == TargetColumnSource::Descriptor && target.name == "MW")
+            .expect("descriptor target should exist")
+            .key
+            .clone();
+        app.selected_target_columns.insert(descriptor_key);
+
+        app.refresh_target_overlay_cache();
+
+        assert_eq!(app.target_overlay_error, None);
+        assert_eq!(
+            app.target_overlay_values,
+            Some(vec![101.5, 202.5]),
+            "Descriptor target overlay should come from feature matrix column values"
+        );
+    }
+
+    #[test]
+    fn test_descriptor_target_resolves_drop_index_and_matrix_drop() {
+        let mut app = make_test_app();
+        app.loaded_properties = vec![vec![], vec![]];
+        app.feature_matrix = Some(FeatureMatrix {
+            rows: 2,
+            cols: 2,
+            feature_names: vec!["A".to_string(), "B".to_string()],
+            data: vec![1.0, 10.0, 2.0, 20.0],
+            descriptors: vec![BatchDescriptor::MolecularWeight, BatchDescriptor::LogP],
+            selected_feature_indices: vec![0, 1],
+        });
+        app.rebuild_target_columns();
+        let descriptor_target = app
+            .target_columns
+            .iter()
+            .find(|target| target.source == TargetColumnSource::Descriptor && target.name == "A")
+            .expect("descriptor target A should exist")
+            .clone();
+
+        let (values, drop_idx) = app
+            .resolve_training_target_values(&descriptor_target)
+            .expect("descriptor target should resolve");
+        assert_eq!(values, vec![1.0, 2.0]);
+        assert_eq!(drop_idx, Some(0));
+
+        let payload = app
+            .feature_matrix
+            .as_ref()
+            .expect("feature matrix should be present")
+            .to_payload();
+        let reduced = select_feature_columns(payload, &[1]).expect("column selection should work");
+        assert_eq!(reduced.cols, 1);
+        assert_eq!(reduced.feature_names, vec!["B".to_string()]);
+        assert_eq!(reduced.data, vec![10.0, 20.0]);
+    }
+
+    #[test]
+    fn test_build_projection_sanitizes_non_finite_values() {
+        let matrix = FeatureMatrixPayload {
+            rows: 4,
+            cols: 2,
+            feature_names: vec!["f0".to_string(), "f1".to_string()],
+            data: vec![1.0, 2.0, f64::NAN, 4.0, f64::INFINITY, 6.0, 7.0, 8.0],
+            descriptors: vec![BatchDescriptor::MolecularWeight, BatchDescriptor::AtomCount],
+            selected_feature_indices: vec![0, 1],
+        };
+
+        let projection = build_projection(&matrix).expect("projection should be built");
+        assert_eq!(projection.points.len(), matrix.rows);
+        assert!(
+            projection
+                .points
+                .iter()
+                .all(|(x, y)| x.is_finite() && y.is_finite())
+        );
+        assert!(projection.explained_variance.iter().all(|v| v.is_finite()));
+    }
+
+    #[test]
+    fn test_art2a_clustering_sanitizes_non_finite_matrix_values() {
+        let matrix = FeatureMatrixPayload {
+            rows: 4,
+            cols: 3,
+            feature_names: vec!["f0".to_string(), "f1".to_string(), "f2".to_string()],
+            data: vec![
+                1.0,
+                0.0,
+                0.1,
+                f64::NAN,
+                0.2,
+                0.0,
+                f64::INFINITY,
+                0.1,
+                0.0,
+                0.8,
+                0.1,
+                f64::NEG_INFINITY,
+            ],
+            descriptors: vec![
+                BatchDescriptor::MolecularWeight,
+                BatchDescriptor::AtomCount,
+                BatchDescriptor::BondCount,
+            ],
+            selected_feature_indices: vec![0, 1, 2],
+        };
+        let response = handle_art2a_clustering(
+            matrix,
+            Art2aConfig {
+                vigilance: 0.8,
+                learning_rate: 0.3,
+                max_iter: 20,
+            },
+            MlScalerChoice::Standard,
+            &Arc::new(AtomicBool::new(false)),
+        )
+        .expect("clustering should succeed");
+
+        match response {
+            WorkerResponse::ClusteringCompleted {
+                labels,
+                cluster_sizes,
+                summaries,
+                projection,
+                ..
+            } => {
+                assert_eq!(labels.len(), 4);
+                assert!(!cluster_sizes.is_empty());
+                assert_eq!(cluster_sizes.iter().sum::<usize>(), 4);
+                assert_eq!(summaries.len(), cluster_sizes.len());
+                assert!(
+                    projection.is_some(),
+                    "clustering should return PCA projection"
+                );
+            }
+            other => panic!("Expected ClusteringCompleted, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_clustering_payload_appends_csv_numeric_columns_row_aligned() {
+        let mut app = make_test_app();
+        app.feature_matrix = Some(FeatureMatrix {
+            rows: 2,
+            cols: 2,
+            feature_names: vec!["D0".to_string(), "D1".to_string()],
+            data: vec![1.0, 2.0, 3.0, 4.0],
+            descriptors: vec![BatchDescriptor::MolecularWeight, BatchDescriptor::LogP],
+            selected_feature_indices: vec![0, 1],
+        });
+        app.loaded_properties = vec![
+            vec![
+                ("target_a".to_string(), "10.0".to_string()),
+                ("target_b".to_string(), "20.0".to_string()),
+            ],
+            vec![
+                ("target_a".to_string(), "11.0".to_string()),
+                ("target_b".to_string(), "21.0".to_string()),
+            ],
+        ];
+        app.include_csv_numeric_in_clustering = true;
+
+        let (payload, added) = app
+            .clustering_payload_with_optional_csv_targets()
+            .expect("payload should build");
+        assert_eq!(added, 2);
+        assert_eq!(payload.rows, 2);
+        assert_eq!(payload.cols, 4);
+        assert_eq!(
+            payload.data,
+            vec![1.0, 2.0, 10.0, 20.0, 3.0, 4.0, 11.0, 21.0]
+        );
+        assert_eq!(
+            payload.feature_names,
+            vec![
+                "D0".to_string(),
+                "D1".to_string(),
+                "CSV::target_a".to_string(),
+                "CSV::target_b".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn test_compute_cluster_centroids_returns_expected_means() {
+        let points = vec![(0.0, 0.0), (2.0, 2.0), (10.0, 0.0), (12.0, 2.0)];
+        let labels = vec![0usize, 0usize, 1usize, 1usize];
+        let centroids = compute_cluster_centroids(&points, &labels);
+        assert_eq!(centroids.len(), 2);
+        assert_eq!(centroids[0], (1.0, 1.0));
+        assert_eq!(centroids[1], (11.0, 1.0));
+    }
+
+    #[test]
+    fn test_display_label_from_output_target_name_maps_known_suffixes() {
+        assert_eq!(
+            display_label_from_output_target_name("alogp__csv"),
+            "[CSV] alogp"
+        );
+        assert_eq!(
+            display_label_from_output_target_name("MW__desc"),
+            "[DESC] MW"
+        );
+        assert_eq!(
+            display_label_from_output_target_name("raw_target"),
+            "raw_target"
+        );
+    }
+
+    #[test]
+    fn test_importance_target_cycle_updates_active_importance_table() {
+        let mut app = make_test_app();
+        let mk_summary =
+            |target: &str, label: &str, pipeline: &str, score: f64| TargetTrainingSummary {
+                target: target.to_string(),
+                target_display_label: label.to_string(),
+                pipeline_name: pipeline.to_string(),
+                cv_q2: 0.0,
+                train_r2: 0.0,
+                rmse: 0.0,
+                mae: 0.0,
+                pearson: 0.0,
+                holdout_r2: 0.0,
+                holdout_rmse: 0.0,
+                holdout_mae: 0.0,
+                holdout_pearson: 0.0,
+                split_label: "Random".to_string(),
+                split_train_size: 0,
+                split_test_size: 0,
+                top_feature_importances: vec![("feat".to_string(), score)],
+            };
+        app.trained_target_summaries = vec![
+            mk_summary("alogp__csv", "[CSV] alogp", "RandomForest", 0.8),
+            mk_summary("MW__desc", "[DESC] MW", "ElasticNet", 0.3),
+        ];
+        app.importance_target_index = 0;
+        app.sync_importance_view_from_index();
+        assert_eq!(app.top_feature_importances, vec![("feat".to_string(), 0.8)]);
+
+        app.cycle_importance_target(1);
+        assert_eq!(app.importance_target_index, 1);
+        assert_eq!(app.top_feature_importances, vec![("feat".to_string(), 0.3)]);
+        assert!(app.status_message.contains("[DESC] MW"));
+
+        app.cycle_importance_target(1);
+        assert_eq!(app.importance_target_index, 0);
+        assert_eq!(app.top_feature_importances, vec![("feat".to_string(), 0.8)]);
+    }
 }

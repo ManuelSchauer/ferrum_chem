@@ -5,7 +5,6 @@
 //! Reference: Bickerton et al. (2012) "Quantifying the chemical beauty of drugs"
 //! Nature Chemistry 4, 90-98.
 
-
 //! ## File guide: Qed
 //!
 //! This file belongs to FerrumChem's **descriptor/fingerprint feature layer**.
@@ -49,7 +48,7 @@ use crate::desc::hbond::{compute_hbond_donors, compute_hbond_donors_cached};
 use crate::desc::logp::{compute_logp, compute_logp_cached};
 use crate::desc::molecular_weight::compute_molecular_weight;
 use crate::desc::tpsa::{compute_tpsa, compute_tpsa_cached};
-use crate::io::smarts::{parse_smarts, AtomPrimitive, QueryAtom, QueryGraph};
+use crate::io::smarts::{AtomPrimitive, QueryAtom, QueryGraph, parse_smarts};
 use crate::mol::molecule::Molecule;
 use once_cell::sync::Lazy;
 use smallvec::SmallVec;
@@ -590,7 +589,10 @@ fn compute_qed_hbond_acceptors_with_stats(mol: &Molecule, stats: &MoleculeScreen
 ///
 /// Function context: `crates/ferrum_core/src/desc/qed.rs`.
 /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-fn ring_membership_from_bond_cycles(mol: &Molecule, cycles: &[smallvec::SmallVec<[usize; 8]>]) -> Vec<bool> {
+fn ring_membership_from_bond_cycles(
+    mol: &Molecule,
+    cycles: &[smallvec::SmallVec<[usize; 8]>],
+) -> Vec<bool> {
     let mut in_ring = vec![false; mol.num_atoms()];
     for cycle in cycles {
         for &bond_idx in cycle {
@@ -648,7 +650,10 @@ fn build_qed_aromatic_subgraph(mol: &Molecule, in_ring: &[bool]) -> Option<Molec
 ///
 /// Function context: `crates/ferrum_core/src/desc/qed.rs`.
 /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-fn compute_qed_aromatic_ring_count_with_cycles(mol: &Molecule, cycles: &[smallvec::SmallVec<[usize; 8]>]) -> u32 {
+fn compute_qed_aromatic_ring_count_with_cycles(
+    mol: &Molecule,
+    cycles: &[smallvec::SmallVec<[usize; 8]>],
+) -> u32 {
     let in_ring = ring_membership_from_bond_cycles(mol, cycles);
     let Some(mut subgraph) = build_qed_aromatic_subgraph(mol, &in_ring) else {
         return 0;
@@ -977,7 +982,11 @@ impl Descriptor for Qed {
     ///
     /// Function context: `crates/ferrum_core/src/desc/qed.rs`.
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-    fn calculate(&self, mol: &mut Molecule, ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
+    fn calculate(
+        &self,
+        mol: &mut Molecule,
+        ctx: &mut crate::desc::context::CalculationContext,
+    ) -> DescriptorValue {
         DescriptorValue::Float(compute_qed_cached(mol) as f32)
     }
 }
@@ -1002,7 +1011,11 @@ mod tests {
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn calc_qed(smiles: &str) -> f32 {
         let mut mol = parse_smiles(smiles).expect("valid SMILES");
-        Qed.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()).as_float()
+        Qed.calculate(
+            &mut mol,
+            &mut crate::desc::context::CalculationContext::new(),
+        )
+        .as_float()
     }
 
     #[test]
@@ -1122,11 +1135,8 @@ mod tests {
         let cnp0538427 = parse_smiles("CCCNC(=N)NCCC[C@H](N)C(=O)O").unwrap();
         assert_eq!(compute_structural_alerts(&cnp0538427), 3);
 
-        let cnp0334248 = parse_smiles(
-            "O=C1CCC[C@@H]2[C@H]3CCC[N@@+]4([O-])CCC[C@@H](CN12)[C@@H]34",
-        )
-        .unwrap();
+        let cnp0334248 =
+            parse_smiles("O=C1CCC[C@@H]2[C@H]3CCC[N@@+]4([O-])CCC[C@@H](CN12)[C@@H]34").unwrap();
         assert_eq!(compute_structural_alerts(&cnp0334248), 2);
     }
-
 }

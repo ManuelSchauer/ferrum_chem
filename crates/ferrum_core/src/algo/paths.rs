@@ -8,7 +8,6 @@
 //! - Graph traversal and indexing patterns over atom/bond adjacency.
 //! - Performance-oriented Rust design in numerically heavy code paths.
 
-
 //! ## File guide: Paths
 //!
 //! This file belongs to FerrumChem's **cheminformatics algorithm layer**.
@@ -237,7 +236,7 @@ mod tests {
         let mut paths_3 = 0;
         find_all_paths_of_length(&mol, 3, |_| paths_3 += 1);
         assert_eq!(paths_3, 4);
-        
+
         let mut paths_4 = 0;
         find_all_paths_of_length(&mol, 4, |_| paths_4 += 1);
         assert_eq!(paths_4, 1);
@@ -249,7 +248,10 @@ use crate::desc::context::CalculationContext;
 /// Compute all-pairs unweighted shortest paths using BFS, utilizing the CalculationContext
 /// to avoid repeated allocations, and caching the result on the Molecule.
 
-pub fn compute_unweighted_distance_matrix_cached<'a>(mol: &crate::mol::molecule::Molecule, ctx: &'a mut CalculationContext) -> &'a [u8] {
+pub fn compute_unweighted_distance_matrix_cached<'a>(
+    mol: &crate::mol::molecule::Molecule,
+    ctx: &'a mut CalculationContext,
+) -> &'a [u8] {
     if ctx.has_dist_u8 {
         return &ctx.dist_u8;
     }
@@ -257,7 +259,7 @@ pub fn compute_unweighted_distance_matrix_cached<'a>(mol: &crate::mol::molecule:
     let n = mol.num_atoms();
     ctx.dist_u8.clear();
     ctx.dist_u8.resize(n * n, 255);
-    
+
     if n > 0 {
         ctx.bfs_queue.reserve(n);
         ctx.bfs_dist.resize(n, 255);
@@ -265,18 +267,18 @@ pub fn compute_unweighted_distance_matrix_cached<'a>(mol: &crate::mol::molecule:
         for start in 0..n {
             ctx.bfs_queue.clear();
             ctx.bfs_dist.fill(255);
-            
+
             ctx.bfs_dist[start] = 0;
             ctx.bfs_queue.push(start);
-            
+
             let mut head = 0;
             while head < ctx.bfs_queue.len() {
                 let current = ctx.bfs_queue[head];
                 head += 1;
-                
+
                 let current_dist = ctx.bfs_dist[current];
                 let next_dist = current_dist + 1;
-                
+
                 for &bond_idx in &mol.adjacency[current] {
                     let bond = &mol.bonds[bond_idx as usize];
                     let neighbor = if bond.source as usize == current {
@@ -284,14 +286,14 @@ pub fn compute_unweighted_distance_matrix_cached<'a>(mol: &crate::mol::molecule:
                     } else {
                         bond.source as usize
                     };
-                    
+
                     if ctx.bfs_dist[neighbor] == 255 {
                         ctx.bfs_dist[neighbor] = next_dist;
                         ctx.bfs_queue.push(neighbor);
                     }
                 }
             }
-            
+
             let start_offset = start * n;
             for i in 0..n {
                 ctx.dist_u8[start_offset + i] = ctx.bfs_dist[i].min(255) as u8;

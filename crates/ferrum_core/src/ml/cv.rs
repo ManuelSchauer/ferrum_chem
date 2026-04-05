@@ -1,6 +1,5 @@
 //! Cross-validation — K-Fold, Leave-One-Out, Y-randomization.
 
-
 //! ## File guide: Cv
 //!
 //! This file belongs to FerrumChem's **machine-learning pipeline layer**.

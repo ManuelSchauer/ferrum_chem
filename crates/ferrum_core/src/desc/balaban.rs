@@ -11,7 +11,6 @@
 //!
 //! Reference: Balaban, A.T. (1982) Chemical Applications of Graph Theory
 
-
 //! ## File guide: Balaban
 //!
 //! This file belongs to FerrumChem's **descriptor/fingerprint feature layer**.
@@ -338,7 +337,11 @@ impl Descriptor for BalabanIndex {
     ///
     /// Function context: `crates/ferrum_core/src/desc/balaban.rs`.
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-    fn calculate(&self, mol: &mut Molecule, ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
+    fn calculate(
+        &self,
+        mol: &mut Molecule,
+        ctx: &mut crate::desc::context::CalculationContext,
+    ) -> DescriptorValue {
         DescriptorValue::Float(calculate_cached(mol) as f32)
     }
 }

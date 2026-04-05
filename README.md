@@ -26,11 +26,10 @@ FerrumChem is a high-performance molecular descriptor calculation engine designe
 - **📈 Latest 100k parity campaign**: Scalar 99.3%, Rings 99.2%, VSA 99.5%, Chi/Kappa 99.8% (release mode)
 - **⚡ Latest 100k matched CSV benchmark**: Ferrum `2340.81 mol/s` vs RDKit `603.29 mol/s` (**3.88x faster**)
 - **💾 Latest 100k matched CSV memory**: Ferrum `21.80 MB` peak RSS vs RDKit `202.56 MB` (**9.29x lower**)
-- **📊 Latest pinned CSV benchmark (57 outputs, single-thread)**:
-  - 1k rows buffered: `2514.32 mol/s`, `5.94 MB` peak RSS
-  - 1k rows stream (`chunk=1`): `2460.29 mol/s`, `7.70 MB` peak RSS
-  - 10k rows buffered: `2292.07 mol/s`, `9.88 MB` peak RSS
-  - 10k rows stream (`chunk=1`): `2249.53 mol/s`, `10.16 MB` peak RSS
+- **📊 Latest pinned CSV benchmark (57 outputs, single-thread, 10k, median of 3 runs)**:
+  - Ferrum buffered: `2187.70 mol/s`, `9.12 MiB` peak RSS
+  - RDKit: `531.30 mol/s`, `97.81 MiB` peak RSS
+  - Relative: Ferrum is **4.12x faster** with **10.72x lower** peak RSS
 - **🔧 Parallel processing**: Built-in Rayon support for batch calculations
 - **📊 ML-ready**: Single `Descriptor` trait + direct ndarray integration
 - **🔒 Thread-safe**: All data structures are `Send + Sync`
@@ -46,6 +45,10 @@ FerrumChem still has **100% RDKit match** across the 27-molecule torture set (**
 - **Latest 100k campaign**: **Scalar 2,184,572/2,200,000 = 99.3%**, **Ring 396,931/400,000 = 99.2%**, **VSA 3,583,114/3,600,000 = 99.5%**, **Chi/Kappa 998,286/1,000,000 = 99.8%**
 
 The only remaining validated parity gap in the current 1000-row RDKit suite is `Ipc` numerical divergence. Non-`Ipc` scalar/ring/VSA/Chi/Kappa descriptors are now fully aligned on that slice; exact `Ipc` emulation remains a deferred item unless strict RDKit bit-level reproducibility becomes a hard requirement.
+
+`Ipc` also exposes an optional mode gate for experiments:
+- `FERRUM_IPC_MODE=fast` (default): current `Ipc = sum(|coeffs|) * entropy(|coeffs|)` behavior.
+- `FERRUM_IPC_MODE=avg`: entropy-only average-Ipc variant (useful for stability/performance tradeoff studies; not a strict RDKit `Ipc` parity mode).
 
 ✅ **Implemented**:
 - **72 Typed Descriptors** with DescriptorValue enum (Int, Float, IntVec, IntU16Vec, FloatVec, Binary)
@@ -165,7 +168,66 @@ OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 VECLIB_MAXIMUM_THREAD
 OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 VECLIB_MAXIMUM_THREADS=1 \
   FERRUM_BENCH_CSV_LIMIT=1000 FERRUM_BENCH_REPEATS=5 FERRUM_BENCH_WARMUP=100 \
   python scripts/benchmark_rdkit_parity_bundle_csv.py
+
+# Per-descriptor Ferrum vs RDKit benchmark matrix (10k rows example)
+FERRUM_BENCH_CSV=coconut_csv_lite-10000-tui.csv FERRUM_BENCH_CSV_COLUMN=canonical_smiles \
+  FERRUM_BENCH_CSV_LIMIT=10000 FERRUM_BENCH_WARMUP=100 \
+  cargo run -p ferrum_cli --release --bin descriptor_100k_benchmark --quiet > /tmp/ferrum_each_descriptor.tsv
+python scripts/benchmark_rdkit_each_descriptor.py > /tmp/rdkit_each_descriptor.tsv
+
+# CI performance guardrail checker (expects Ferrum and RDKit TSV rows with throughput + peak_rss_bytes)
+PERF_GUARD_MIN_SPEEDUP=2.0 PERF_GUARD_MIN_RSS_REDUCTION=1.5 \
+  FERRUM_BENCH_RESULT=/tmp/ferrum_parity57.tsv \
+  RDKIT_BENCH_RESULT=/tmp/rdkit_parity57.tsv \
+  python scripts/check_perf_guardrails.py
+
+# ML synthetic guardrails (100k x 1)
+FERRUM_ML_BENCH_ROWS=100000 FERRUM_ML_BENCH_COLS=1 FERRUM_ML_BENCH_REPEATS=3 \
+  cargo run -p ferrum_cli --release --bin ml_benchmark --quiet > /tmp/ml_bench_100k.tsv
+FERRUM_ML_AUTOQSAR_ROWS=100000 FERRUM_ML_AUTOQSAR_COLS=1 FERRUM_ML_AUTOQSAR_FOLDS=3 FERRUM_ML_AUTOQSAR_REPEATS=3 \
+  cargo run -p ferrum_cli --release --bin autoqsar_benchmark --quiet > /tmp/autoqsar_100k.tsv
+PERF_ML_AD_FIT_MAX_MS=12000 PERF_ML_AD_PREDICT_MAX_MS=12000 PERF_ML_AUTOQSAR_MAX_MS=120000 \
+  FERRUM_ML_BENCH_RESULT=/tmp/ml_bench_100k.tsv \
+  FERRUM_AUTOQSAR_BENCH_RESULT=/tmp/autoqsar_100k.tsv \
+  python scripts/check_ml_perf_guardrails.py
+
+# AutoQsar parallel policy and optional pruning knobs
+# FERRUM_AUTOQSAR_PARALLEL_MODE: candidate (default) | fold
+# FERRUM_AUTOQSAR_MAX_THREADS: optional thread cap for AutoQsar internal work
+# FERRUM_AUTOQSAR_PRUNE_KEEP: optional top-K candidates to keep after quick pass
+# FERRUM_AUTOQSAR_PRUNE_FOLDS: quick-pass folds when pruning is enabled (default 2)
+FERRUM_AUTOQSAR_PARALLEL_MODE=candidate \
+FERRUM_AUTOQSAR_MAX_THREADS=8 \
+FERRUM_AUTOQSAR_PRUNE_KEEP=6 \
+FERRUM_AUTOQSAR_PRUNE_FOLDS=2 \
+FERRUM_ML_AUTOQSAR_ROWS=100000 FERRUM_ML_AUTOQSAR_COLS=1 FERRUM_ML_AUTOQSAR_FOLDS=3 FERRUM_ML_AUTOQSAR_REPEATS=3 \
+  cargo run -p ferrum_cli --release --bin autoqsar_benchmark --quiet > /tmp/autoqsar_100k_pruned.tsv
+
+# Real-data AutoQsar benchmark with stage timestamps (uses precomputed feature matrix CSV)
+FERRUM_ML_REAL_FEATURES_CSV=coconut_csv_lite-100000-tui_features.csv \
+FERRUM_ML_REAL_TARGETS_CSV=coconut_csv_lite-100000-tui.csv \
+FERRUM_ML_REAL_TARGET_COL=alogp \
+FERRUM_ML_REAL_LIMIT=100000 FERRUM_ML_REAL_FOLDS=3 FERRUM_ML_REAL_REPEATS=1 \
+  cargo run -p ferrum_cli --release --bin autoqsar_csv_benchmark --quiet > /tmp/autoqsar_csv_100k.tsv
+
+# Optional large-N AD approximation mode (default remains exact)
+FERRUM_AD_MODE=approx FERRUM_AD_APPROX_MIN_ROWS=50000 FERRUM_AD_APPROX_STEP=4 \
+  cargo run -p ferrum_cli --release --bin autoqsar_benchmark --quiet
 ```
+
+### CI guardrails
+
+The repository now includes a GitHub Actions workflow at `.github/workflows/ci.yml` with two jobs:
+- `test-release`: runs release-mode `ferrum_core` and `ferrum_cli` tests.
+- `perf-guardrails`: runs the matched 57-output 10k Ferrum/RDKit CSV parity benchmarks and enforces minimum performance thresholds via `scripts/check_perf_guardrails.py`.
+
+Default guardrail thresholds:
+- Ferrum speedup over RDKit (`molecules_per_second`): `>= 2.0x`
+- Ferrum RSS reduction versus RDKit (`peak_rss_bytes`): `>= 1.5x`
+
+Reproducibility details:
+- CI pins thread-related env vars (`OMP_NUM_THREADS`, `OPENBLAS_NUM_THREADS`, `MKL_NUM_THREADS`, `VECLIB_MAXIMUM_THREADS`, and `RAYON_NUM_THREADS` where applicable) to keep benchmark runs single-threaded.
+- CI uploads `/tmp/ferrum_parity57.tsv`, `/tmp/rdkit_parity57.tsv`, and `/tmp/perf_guardrail_summary.json` as workflow artifacts for auditability.
 
 ### Phase 14 TUI — Interactive QSAR Workbench (Tab-Based, Non-Blocking)
 
@@ -174,7 +236,7 @@ FerrumChem now includes a rewritten TUI designed for lab workflows:
 - **Non-blocking architecture** (UI thread + worker thread over `mpsc`)
 - **60 FPS rendering loop** with computing popup/spinner during long operations
 - **Target toggle list** for selecting one or many supervised prediction targets
-- **Visual file picker modal** for `.csv` and `.smi` files (no path typing required)
+- **Visual file picker modal** for datasets, prediction inputs, and model bundles (no path typing required)
 
 #### Quick Launch
 
@@ -184,9 +246,11 @@ cargo run -p ferrum_cli --release --bin tui
 
 #### Data Input
 
-- The file browser (key: `f` or `p`, depending on tab) supports:
+- The file browser supports:
   - `.csv` files (parsed through `CsvReader`, auto SMILES detection)
   - `.smi` / `.smiles` files (first token per non-empty, non-comment line)
+- Model-bundle import browser (key: `u` in ML/Analyze) supports:
+  - `.fcbundle` / `.bin` persisted bundle artifacts
 - Invalid molecule rows are skipped and reported in status.
 
 #### Tab 1: Descriptor Studio
@@ -196,8 +260,12 @@ cargo run -p ferrum_cli --release --bin tui
   - `Space`: toggle selected descriptor
   - `a`: select all descriptors
   - `n`: select none
+  - `r`: apply curated **Fast ML** preset (balanced speed/coverage, no high-dimensional fingerprints)
   - `↑/↓` or `j/k`: move selection
+- Each descriptor row now shows how many values it contributes (e.g., scalar `1`, vector families, and fingerprints).
+- The left control pane shows the total selected output width (`values per molecule`) so feature-matrix size is visible before running.
 - Press `Enter` to compute descriptors in the worker thread.
+- Press `Esc` during long-running compute to request cancellation (descriptor calculation, model training, ART2-A clustering, prediction feature generation).
 - Press `v` to apply variance-threshold filtering (default `1e-12`) on the current matrix.
 - Press `c` to apply correlation filtering (default `|r| > 0.95`) on the current matrix.
 - Press `e` to export `SMILES + current (possibly filtered) feature matrix` to CSV.
@@ -206,13 +274,13 @@ cargo run -p ferrum_cli --release --bin tui
 #### Tab 2: ML Pipeline
 
 - `t`: open target selection popup (numeric CSV columns); toggle one target or many.
-- `a`: toggle training mode:
+- `m`: toggle training mode:
   - `AutoQsar` (default): one-click automatic model selection/tuning.
   - `Manual`: choose one explicit model and tune its parameters.
 - Mode behavior:
   - no selected targets => unsupervised/vector-only workflows (`ART2-A`, PCA, feature profiling)
   - one or more selected targets => supervised training is enabled
-- `m` / `M`: in `Manual` mode, cycle manual model (`Random Forest`, `k-NN`, `PLS`, `Elastic Net`).
+- `a` / `A`: in `Manual` mode, cycle manual model (`Random Forest`, `k-NN`, `PLS`, `Elastic Net`).
 - `z`: toggle scaler (`StandardScaler` / `MinMaxScaler`).
 - `x`: cycle train/test split strategy (`Random`, `Stratified`, `Scaffold`).
   - `Stratified` is target-dependent and only available when a valid primary target vector is present.
@@ -220,6 +288,7 @@ cargo run -p ferrum_cli --release --bin tui
 - `,` / `.`: in `Manual` mode, cycle hyperparameter pages for models with extended controls.
 - `1..6`: edit currently visible hyperparameters (CV/test/seed + model-specific page + dedicated ART2-A page).
 - `g`: run ART2-A clustering on current feature matrix (target not required).
+- `y`: toggle adding aligned CSV numeric columns into ART2-A clustering features (default: on).
 - ART2-A clustering uses the currently selected scaler (`z`) before clustering.
 - ART2-A quick tuning keys in Tab 2:
   - `[` / `]`: decrease/increase vigilance (`rho`)
@@ -233,6 +302,8 @@ cargo run -p ferrum_cli --release --bin tui
 - `Enter`: train supervised model bundle (one model per selected target) on the current descriptor matrix.
 - `p`: choose a prediction input file (`.csv` / `.smi`).
 - `s`: export current prediction table to CSV.
+- `b`: export persisted model bundle (`.fcbundle`) for reuse.
+- `u`: import persisted model bundle (`.fcbundle` / `.bin`) for prediction without retraining.
 - Training status now includes `Q2`, train metrics (`R2`, `RMSE`, `MAE`, Pearson `r`) and holdout split metrics.
 - Prediction now returns one column per selected target (full multi-output prediction by default).
 - If ART2-A clustering is available, prediction additionally emits:
@@ -255,7 +326,11 @@ cargo run -p ferrum_cli --release --bin tui
   - Predicted vs Actual scatter with `y=x` reference
   - residual summary (`Train R²/RMSE/MAE/Pearson`, residual bias, residual `σ`, `|residual| p95`, outlier counts, holdout metrics)
   - residual z-score distribution bins (histogram-like table)
+- Regression diagnostics explicitly label the current **primary trained target** (`[CSV]` or `[DESC]` source visible).
 - **Bottom-right top pane**: top-10 feature-importance table (RF/PLS/Elastic Net).
+- Use `[` / `]` in Tab 3 to cycle which trained target is shown in feature-importance view.
+  - The panel title now shows the active target + model.
+  - Targets whose model does not expose importances (e.g., k-NN) show a clear placeholder.
 - **Bottom-right bottom pane**: descriptor profiling table:
   - `Descriptor | Mean | Min | Max | StdDev | ZeroVar`
   - zero-variance rows highlighted
@@ -264,8 +339,8 @@ cargo run -p ferrum_cli --release --bin tui
 #### Worker-Thread Architecture (Implementation Notes)
 
 The TUI uses explicit request/response channels:
-- `WorkerRequest::{LoadDataset, CalculateDescriptors, TrainModel, RunArt2aClustering, PredictFile, ExportPredictions, ApplyVarianceFilter, ApplyCorrelationFilter, ExportFeatureMatrix}`
-- `WorkerResponse::{DatasetLoaded, DescriptorsCalculated, ModelTrained, ClusteringCompleted, PredictionsReady, PredictionsExported, FeatureFilterApplied, FeatureMatrixExported, Error}`
+- `WorkerRequest::{LoadDataset, CalculateDescriptors, TrainModel, RunArt2aClustering, PredictFile, ExportPredictions, ApplyVarianceFilter, ApplyCorrelationFilter, ExportFeatureMatrix, ExportModelBundle, ImportModelBundle}`
+- `WorkerResponse::{DatasetLoaded, DescriptorsCalculated, ModelTrained, ClusteringCompleted, PredictionsReady, PredictionsExported, FeatureFilterApplied, FeatureMatrixExported, ModelBundleExported, ModelBundleImported, JobCanceled, Error}`
 
 Heavy tasks (`calculate_batch_flat_static`, configurable model training/CV/splitting, ART2-A clustering, batch prediction, export I/O) run off the render thread, so the interface remains responsive.
 
@@ -278,25 +353,29 @@ Heavy tasks (`calculate_batch_flat_static`, configurable model training/CV/split
 | `Esc` | Close popup / cancel current edit |
 | `f` (Tab 1) | Open dataset file browser |
 | `Enter` (Tab 1) | Run descriptor calculation |
-| `Space`, `a`, `n` (Tab 1) | Toggle descriptor selection |
+| `Space`, `a`, `n`, `r` (Tab 1) | Toggle descriptor selection (`r` = Fast ML preset) |
 | `v` (Tab 1) | Apply variance threshold filter to current feature matrix |
 | `c` (Tab 1) | Apply correlation filter to current feature matrix |
 | `e` (Tab 1) | Export current feature matrix CSV |
 | `t` (Tab 2) | Open target selection popup (Space toggle, `a` all, `n` none) |
-| `a` (Tab 2) | Toggle training mode (`AutoQsar` / `Manual`) |
-| `m` / `M` (Tab 2) | In Manual mode, cycle model (`RF` / `k-NN` / `PLS` / `Elastic Net`) |
+| `m` (Tab 2) | Toggle training mode (`AutoQsar` / `Manual`) |
+| `a` / `A` (Tab 2) | In Manual mode, cycle model (`RF` / `k-NN` / `PLS` / `Elastic Net`) |
 | `z` (Tab 2) | Toggle scaler (`StandardScaler` / `MinMaxScaler`) |
 | `x` (Tab 2) | Cycle split strategy (`Random` / `Stratified` / `Scaffold`, stratified requires valid primary target) |
 | `,` / `.` (Tab 2) | In Manual mode, cycle hyperparameter page |
 | `1..6` (Tab 2) | Edit visible hyperparameters (includes ART2-A page) |
 | `g` (Tab 2) | Run ART2-A clustering on current feature matrix |
+| `y` (Tab 3) | Toggle CSV numeric columns included in ART2-A clustering |
 | `[` / `]` (Tab 2) | ART2-A vigilance down/up |
 | `;` / `'` (Tab 2) | ART2-A learning rate down/up |
 | `-` / `=` (Tab 2) | ART2-A max-iter down/up |
 | `Enter` (Tab 2) | Train selected model bundle (one model per selected target) |
 | `p` (Tab 2) | Open prediction file browser |
 | `s` (Tab 2) | Export prediction CSV |
+| `b` (Tab 2/3) | Export current model bundle (`.fcbundle`) |
+| `u` (Tab 2/3) | Import model bundle (`.fcbundle` / `.bin`) |
 | `o` (Tab 3) | Cycle color mode (`uniform` / `target overlay` / `cluster` / `AD`) |
+| `[` / `]` (Tab 3) | Cycle feature-importance target across trained outputs |
 | `↑/↓` or `j/k` | List/table navigation and profile scrolling |
 
 #### Descriptor/Fingerprint Coverage in TUI
@@ -358,19 +437,14 @@ Latest normalized snapshot (10,000 iterations, median of repeated runs):
 | Caffeine | 14 | 0.798840 s total, 12,518.15 mol/s | 5.976980 s total, 1,673.09 mol/s | FerrumChem 7.48x faster |
 | Large drug-like amide | 30 | 2.358389 s total, 4,240.18 mol/s | 12.143051 s total, 823.52 mol/s | FerrumChem 5.15x faster |
 
-CSV bundle slice (`coconut_csv_lite-02-2026.csv`, 57 outputs) currently reports both throughput and peak RSS in matched output columns:
+CSV bundle slice (`coconut_csv_lite-10000-tui.csv`, 57 outputs) currently reports both throughput and peak RSS in matched output columns:
 
-- FerrumChem (1k rows, buffered): `2502.38 mol/s`, peak RSS `6.23 MB`
-- FerrumChem (1k rows, stream, `chunk=1`): `2460.29 mol/s`, peak RSS `7.70 MB`
-- RDKit (1k rows): `608.20 mol/s`, peak RSS `71.36 MB`
+- FerrumChem (10k rows, buffered, median of 3 runs): `2187.70 mol/s`, peak RSS `9.12 MiB`
+- RDKit (10k rows, median of 3 runs): `531.30 mol/s`, peak RSS `97.81 MiB`
 
-This is roughly:
-- **4.11x throughput advantage** for Ferrum buffered vs RDKit on the pinned 1k run
-- **11.45x lower peak RSS** for Ferrum buffered vs RDKit
-
-Larger pinned slices (10k rows):
-- FerrumChem (10k, buffered): `2292.07 mol/s`, peak RSS `9.88 MB`
-- FerrumChem (10k, stream, `chunk=1`): `2249.53 mol/s`, peak RSS `10.16 MB`
+This is currently:
+- **4.12x throughput advantage** for Ferrum vs RDKit
+- **10.72x lower peak RSS** for Ferrum vs RDKit
 
 The CSV benchmark output includes `peak_rss_bytes` and `peak_rss_mb` for direct memory-footprint comparisons.
 
@@ -413,6 +487,34 @@ Fresh rerun (2026-03-31) on `coconut_csv_lite-100000-tui.csv`, single-threaded r
 Relative 100k result:
 - FerrumChem is **3.88x faster** than RDKit on matched throughput.
 - FerrumChem uses **9.29x lower** peak RSS.
+
+#### Per-descriptor Ferrum vs RDKit speed matrix (10k molecules)
+
+Generated artifacts:
+- Ferrum: `/tmp/ferrum_each_descriptor.tsv`
+- RDKit: `/tmp/rdkit_each_descriptor.tsv` (via `scripts/benchmark_rdkit_each_descriptor.py`)
+- Joined matrix: `/tmp/descriptor_speed_matrix.tsv`
+
+Snapshot:
+- Total matrix rows: `66`
+- Directly comparable: `24`
+- Ferrum-only: `42`
+- RDKit-only: `0`
+
+Top direct Ferrum speedups:
+- `AromaticAtomCount`: `1017.61x`
+- `HeteroatomCount`: `93.10x`
+- `RotatableBondCount`: `35.80x`
+- `FormalCharge`: `30.75x`
+- `BondCount`: `24.75x`
+
+Latest rerun after cache/cancellation work:
+- Directly comparable: `24`
+- Ferrum faster: `24`
+- RDKit faster: `0`
+
+Notable updates:
+- `AromaticRingCount` now uses cached minimum cycle basis seeded at parse time and is no longer a Ferrum slowdown in direct comparison.
 
 #### FerrumChem per-descriptor throughput on 100k molecules
 
@@ -552,6 +654,16 @@ The source files now include module-level rustdoc headers focused on:
 - chemistry intent (what problem is being solved),
 - implementation strategy (how it is solved in Rust),
 - and where each module sits in the end-to-end QSAR pipeline.
+
+### Cancellation smoke-test coverage
+
+TUI cancellation now has release-tested smoke coverage for all cancelable long-running worker paths:
+- descriptor calculation
+- supervised model training
+- ART2-A clustering
+- prediction feature generation
+
+These tests assert that each handler returns `WorkerResponse::JobCanceled` when the shared cancellation flag is raised.
 
 ## 🏆 Comparison with Other Tools
 

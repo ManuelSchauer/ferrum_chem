@@ -7,7 +7,6 @@
 //! parameters by atomic contributions. Journal of chemical information and computer
 //! sciences, 39(5), 868-873.
 
-
 //! ## File guide: Logp
 //!
 //! This file belongs to FerrumChem's **descriptor/fingerprint feature layer**.
@@ -45,7 +44,7 @@ use super::typed::Descriptor;
 #[cfg(test)]
 use crate::algo::iso::find_all_matches;
 use crate::algo::iso::visit_matches;
-use crate::io::smarts::{parse_smarts, QueryGraph};
+use crate::io::smarts::{QueryGraph, parse_smarts};
 use crate::mol::molecule::Molecule;
 use crate::types::BondType;
 use once_cell::sync::Lazy;
@@ -129,6 +128,37 @@ pub fn crippen_atom_contributions(mol: &Molecule) -> (Vec<f64>, Vec<f64>) {
     }
 
     (logp, mr)
+}
+
+/// Per-atom Crippen molar refractivity contributions for heavy atoms only.
+///
+/// This avoids allocating/filling an additional LogP vector when the caller
+/// only needs MR (e.g., `MolarRefractivity` in isolation benchmarks).
+fn crippen_mr_contributions(mol: &Molecule) -> Vec<f64> {
+    let n = mol.atoms.len();
+    let mut mr = vec![0.0f64; n];
+    let mut assigned = vec![false; n];
+    let mut remaining_heavy = mol.atoms.iter().filter(|a| a.atomic_number > 1).count();
+
+    for pattern in PARSED_HEAVY_PATTERNS.iter() {
+        visit_matches(mol, &pattern.query, |m: &[u16]| {
+            if m.is_empty() {
+                return true;
+            }
+            let idx = m[0] as usize;
+            if mol.atoms[idx].atomic_number > 1 && !assigned[idx] {
+                assigned[idx] = true;
+                mr[idx] = pattern.mr;
+                remaining_heavy = remaining_heavy.saturating_sub(1);
+            }
+            remaining_heavy > 0
+        });
+        if remaining_heavy == 0 {
+            break;
+        }
+    }
+
+    mr
 }
 
 /// Implements crippen atom contributions cached.
@@ -353,6 +383,38 @@ pub(crate) fn compute_logp_cached(mol: &mut Molecule) -> (f64, f64) {
     (total_logp, total_mr)
 }
 
+/// Computes molar refractivity with cache-aware fast paths.
+///
+/// Uses already cached Crippen totals when available. If only per-atom cached
+/// contributions exist, it reuses those; otherwise it computes MR-only heavy-atom
+/// contributions to avoid unnecessary LogP vector work.
+pub(crate) fn compute_molar_refractivity_cached(mol: &mut Molecule) -> f64 {
+    if !*CRIPPEN_CACHE_ENABLED {
+        let (_, mr) = compute_logp(mol);
+        return mr;
+    }
+
+    if let Some((_, mr)) = mol.cached_crippen_totals() {
+        return mr;
+    }
+
+    let mut total_mr = if let Some((_, mr_contribs)) = cached_crippen_atom_contributions_ref(mol) {
+        mr_contribs.iter().sum::<f64>()
+    } else {
+        crippen_mr_contributions(mol).iter().sum::<f64>()
+    };
+
+    for i in 0..mol.atoms.len() {
+        let ih = mol.atoms[i].total_h();
+        if ih > 0 {
+            let (_, h_mr) = classify_implicit_h(mol, i);
+            total_mr += h_mr * ih as f64;
+        }
+    }
+
+    total_mr
+}
+
 /// Wildman-Crippen LogP descriptor.
 ///
 /// Returns `DescriptorValue::Float(f32)`: the predicted octanol-water
@@ -379,7 +441,11 @@ impl Descriptor for LogP {
     ///
     /// Function context: `crates/ferrum_core/src/desc/logp.rs`.
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-    fn calculate(&self, mol: &mut Molecule, ctx: &mut crate::desc::context::CalculationContext) -> super::typed::DescriptorValue {
+    fn calculate(
+        &self,
+        mol: &mut Molecule,
+        ctx: &mut crate::desc::context::CalculationContext,
+    ) -> super::typed::DescriptorValue {
         let (logp, _) = compute_logp_cached(mol);
         super::typed::DescriptorValue::Float(logp as f32)
     }
@@ -406,9 +472,12 @@ impl Descriptor for MolarRefractivity {
     ///
     /// Function context: `crates/ferrum_core/src/desc/logp.rs`.
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-    fn calculate(&self, mol: &mut Molecule, ctx: &mut crate::desc::context::CalculationContext) -> super::typed::DescriptorValue {
-        let (_, mr) = compute_logp_cached(mol);
-        super::typed::DescriptorValue::Float(mr as f32)
+    fn calculate(
+        &self,
+        mol: &mut Molecule,
+        ctx: &mut crate::desc::context::CalculationContext,
+    ) -> super::typed::DescriptorValue {
+        super::typed::DescriptorValue::Float(compute_molar_refractivity_cached(mol) as f32)
     }
 }
 

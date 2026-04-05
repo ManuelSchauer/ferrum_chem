@@ -8,7 +8,6 @@
 //! - Spiro[4.5]decane: 1 spiro atom
 //! - Bicyclo[2.2.1]heptane: 2 bridge atoms, 0 spiro atoms
 
-
 //! ## File guide: Spiro
 //!
 //! This file belongs to FerrumChem's **descriptor/fingerprint feature layer**.

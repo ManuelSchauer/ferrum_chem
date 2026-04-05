@@ -13,7 +13,6 @@
 //! This function modifies the molecule in-place and is not thread-safe.
 //! Call it once per molecule before parallel descriptor calculations.
 
-
 //! ## File guide: Kekulize
 //!
 //! This file belongs to FerrumChem's **cheminformatics algorithm layer**.

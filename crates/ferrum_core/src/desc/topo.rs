@@ -8,7 +8,6 @@
 //! - Implementing stateless descriptor structs in Rust.
 //! - Mapping chemistry concepts to reproducible numeric features.
 
-
 //! ## File guide: Topo
 //!
 //! This file belongs to FerrumChem's **descriptor/fingerprint feature layer**.

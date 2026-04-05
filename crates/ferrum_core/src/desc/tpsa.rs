@@ -18,7 +18,6 @@
 //! - TPSA ≤ 60 Ų: Good blood-brain barrier penetration
 //! - TPSA > 140 Ų: Poor oral absorption
 
-
 //! ## File guide: Tpsa
 //!
 //! This file belongs to FerrumChem's **descriptor/fingerprint feature layer**.
@@ -767,7 +766,11 @@ impl Descriptor for Tpsa {
     ///
     /// Function context: `crates/ferrum_core/src/desc/tpsa.rs`.
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-    fn calculate(&self, mol: &mut Molecule, ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
+    fn calculate(
+        &self,
+        mol: &mut Molecule,
+        ctx: &mut crate::desc::context::CalculationContext,
+    ) -> DescriptorValue {
         let tpsa = compute_tpsa_cached(mol, false) as f32;
         DescriptorValue::Float(tpsa)
     }

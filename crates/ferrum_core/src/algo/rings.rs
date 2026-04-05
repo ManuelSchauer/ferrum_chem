@@ -8,7 +8,6 @@
 //! - Graph traversal and indexing patterns over atom/bond adjacency.
 //! - Performance-oriented Rust design in numerically heavy code paths.
 
-
 //! ## File guide: Rings
 //!
 //! This file belongs to FerrumChem's **cheminformatics algorithm layer**.
@@ -147,7 +146,9 @@ pub fn find_minimum_cycle_basis_bonds(mol: &Molecule) -> Vec<smallvec::SmallVec<
 ///
 /// Function context: `crates/ferrum_core/src/algo/rings.rs`.
 /// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
-pub(crate) fn find_minimum_cycle_basis_bonds_cached(mol: &mut Molecule) -> Vec<smallvec::SmallVec<[usize; 8]>> {
+pub(crate) fn find_minimum_cycle_basis_bonds_cached(
+    mol: &mut Molecule,
+) -> Vec<smallvec::SmallVec<[usize; 8]>> {
     if let Some(cached) = mol.cached_min_cycle_basis_bonds() {
         return cached.clone();
     }
@@ -252,11 +253,17 @@ pub fn find_symmetrized_sssr_bonds(mol: &Molecule) -> Vec<smallvec::SmallVec<[us
     cycles.dedup();
 
     if cycles.len() == base_count + 1 {
-        let max_len = cycles.iter().map(|cycle: &smallvec::SmallVec<[usize; 8]>| cycle.len()).max().unwrap_or(0);
+        let max_len = cycles
+            .iter()
+            .map(|cycle: &smallvec::SmallVec<[usize; 8]>| cycle.len())
+            .max()
+            .unwrap_or(0);
         let max_cycles: Vec<usize> = cycles
             .iter()
             .enumerate()
-            .filter_map(|(idx, cycle): (usize, &smallvec::SmallVec<[usize; 8]>)| (cycle.len() == max_len).then_some(idx))
+            .filter_map(|(idx, cycle): (usize, &smallvec::SmallVec<[usize; 8]>)| {
+                (cycle.len() == max_len).then_some(idx)
+            })
             .collect();
 
         if max_cycles.len() == 2 {
@@ -274,7 +281,9 @@ pub fn find_symmetrized_sssr_bonds(mol: &Molecule) -> Vec<smallvec::SmallVec<[us
 ///
 /// Function context: `crates/ferrum_core/src/algo/rings.rs`.
 /// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
-pub(crate) fn find_symmetrized_sssr_bonds_cached(mol: &mut Molecule) -> Vec<smallvec::SmallVec<[usize; 8]>> {
+pub(crate) fn find_symmetrized_sssr_bonds_cached(
+    mol: &mut Molecule,
+) -> Vec<smallvec::SmallVec<[usize; 8]>> {
     if let Some(cached) = mol.cached_symmetrized_sssr_bonds() {
         return cached.clone();
     }
@@ -298,8 +307,11 @@ pub(crate) fn ensure_symmetrized_sssr_bonds_cached(mol: &mut Molecule) {
 ///
 /// Function context: `crates/ferrum_core/src/algo/rings.rs`.
 /// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
-pub(crate) fn cached_symmetrized_sssr_bonds_ref(mol: &Molecule) -> Option<&[smallvec::SmallVec<[usize; 8]>]> {
-    mol.cached_symmetrized_sssr_bonds().map(|rings| rings.as_slice())
+pub(crate) fn cached_symmetrized_sssr_bonds_ref(
+    mol: &Molecule,
+) -> Option<&[smallvec::SmallVec<[usize; 8]>]> {
+    mol.cached_symmetrized_sssr_bonds()
+        .map(|rings| rings.as_slice())
 }
 
 struct ShortestPathWorkspace {

@@ -3,7 +3,6 @@
 //! Automatic feature selection via L1 regularization.
 //! α controls overall regularization strength, l1_ratio controls L1/L2 mix.
 
-
 //! ## File guide: Elastic Net
 //!
 //! This file belongs to FerrumChem's **machine-learning pipeline layer**.
@@ -37,7 +36,7 @@
 //! - OECD QSAR validation principles where `Elastic Net` is used in predictive chemistry contexts.
 //! - Code-local source of truth: symbols and tests declared in `crates/ferrum_core/src/ml/elastic_net.rs`.
 
-use ndarray::{Array1, Array2, Axis, Zip};
+use ndarray::{Array1, Array2, Axis};
 use serde::{Deserialize, Serialize};
 
 /// Elastic Net regression model.
@@ -97,8 +96,8 @@ impl ElasticNet {
         }
 
         let mut x = features.clone();
-        Zip::from(x.rows_mut()).for_each(|mut row| {
-            Zip::from(&mut row)
+        ndarray::Zip::from(x.rows_mut()).for_each(|mut row| {
+            ndarray::Zip::from(&mut row)
                 .and(&x_mean)
                 .and(&x_std)
                 .for_each(|xv, &m, &s| *xv = (*xv - m) / s);
@@ -129,7 +128,7 @@ impl ElasticNet {
                 // Partial residual (add back contribution of feature j)
                 if old_beta != 0.0 {
                     let col_j = x.column(j);
-                    Zip::from(&mut residual)
+                    ndarray::Zip::from(&mut residual)
                         .and(col_j)
                         .for_each(|r, &xij| *r += xij * old_beta);
                 }
@@ -145,7 +144,7 @@ impl ElasticNet {
                 // Update residual
                 if new_beta != 0.0 {
                     let col_j = x.column(j);
-                    Zip::from(&mut residual)
+                    ndarray::Zip::from(&mut residual)
                         .and(col_j)
                         .for_each(|r, &xij| *r -= xij * new_beta);
                 }

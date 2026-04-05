@@ -328,6 +328,7 @@ dependencies = [
  "ndarray",
  "ratatui",
  "rayon",
+ "serde",
  "tui-input",
 ]
 

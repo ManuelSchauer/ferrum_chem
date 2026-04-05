@@ -8,7 +8,6 @@
 //! - Implementing stateless descriptor structs in Rust.
 //! - Mapping chemistry concepts to reproducible numeric features.
 
-
 //! ## File guide: Molecular Weight
 //!
 //! This file belongs to FerrumChem's **descriptor/fingerprint feature layer**.
@@ -60,6 +59,7 @@ pub fn compute_molecular_weight(mol: &Molecule) -> f32 {
 /// summation can exceed tight comparison tolerances.
 pub fn compute_molecular_weight_f64(mol: &Molecule) -> f64 {
     let mut total_mass: f64 = 0.0;
+    let hydrogen_mass = ATOMIC_MASSES[1] as f64;
 
     for atom in &mol.atoms {
         let mass = if atom.isotope > 0 {
@@ -71,11 +71,11 @@ pub fn compute_molecular_weight_f64(mol: &Molecule) -> f64 {
         total_mass += mass;
 
         if atom.num_explicit_h > 0 {
-            total_mass += (ATOMIC_MASSES[1] as f64) * (atom.num_explicit_h as f64);
+            total_mass = hydrogen_mass.mul_add(atom.num_explicit_h as f64, total_mass);
         }
 
         if atom.num_implicit_h > 0 {
-            total_mass += (ATOMIC_MASSES[1] as f64) * (atom.num_implicit_h as f64);
+            total_mass = hydrogen_mass.mul_add(atom.num_implicit_h as f64, total_mass);
         }
     }
 
@@ -119,7 +119,11 @@ impl Descriptor for MolecularWeight {
     ///
     /// Function context: `crates/ferrum_core/src/desc/molecular_weight.rs`.
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-    fn calculate(&self, mol: &mut Molecule, ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
+    fn calculate(
+        &self,
+        mol: &mut Molecule,
+        ctx: &mut crate::desc::context::CalculationContext,
+    ) -> DescriptorValue {
         DescriptorValue::Float64(compute_molecular_weight_f64(mol))
     }
 }
@@ -148,7 +152,10 @@ mod tests {
         // Water: H2O = 2*1.008 + 15.999 = 18.015
         let mut mol = parse_smiles("O").unwrap();
         let desc = MolecularWeight;
-        match desc.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()) {
+        match desc.calculate(
+            &mut mol,
+            &mut crate::desc::context::CalculationContext::new(),
+        ) {
             DescriptorValue::Float(v) => assert!(((v as f64) - 18.015).abs() < 0.01),
             DescriptorValue::Float64(v) => assert!((v - 18.015).abs() < 0.01),
             _ => panic!("Expected Float"),
@@ -164,7 +171,10 @@ mod tests {
         // Methane: CH4
         let mut mol = parse_smiles("C").unwrap();
         let desc = MolecularWeight;
-        match desc.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()) {
+        match desc.calculate(
+            &mut mol,
+            &mut crate::desc::context::CalculationContext::new(),
+        ) {
             DescriptorValue::Float(v) => assert!(((v as f64) - 16.043).abs() < 0.01),
             DescriptorValue::Float64(v) => assert!((v - 16.043).abs() < 0.01),
             _ => panic!("Expected Float"),
@@ -180,7 +190,10 @@ mod tests {
         // Methane with explicit H: [CH4]
         let mut mol = parse_smiles("[CH4]").unwrap();
         let desc = MolecularWeight;
-        match desc.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()) {
+        match desc.calculate(
+            &mut mol,
+            &mut crate::desc::context::CalculationContext::new(),
+        ) {
             DescriptorValue::Float(v) => assert!(((v as f64) - 16.043).abs() < 0.01),
             DescriptorValue::Float64(v) => assert!((v - 16.043).abs() < 0.01),
             _ => panic!("Expected Float"),
@@ -196,7 +209,10 @@ mod tests {
         // Benzene: C6H6
         let mut mol = parse_smiles("c1ccccc1").unwrap();
         let desc = MolecularWeight;
-        match desc.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()) {
+        match desc.calculate(
+            &mut mol,
+            &mut crate::desc::context::CalculationContext::new(),
+        ) {
             DescriptorValue::Float(v) => assert!(((v as f64) - 78.114).abs() < 0.01),
             DescriptorValue::Float64(v) => assert!((v - 78.114).abs() < 0.01),
             _ => panic!("Expected Float"),
@@ -212,7 +228,10 @@ mod tests {
         // Ethanol: C2H6O = 2*12.011 + 6*1.008 + 15.999 = 46.069
         let mut mol = parse_smiles("CCO").unwrap();
         let desc = MolecularWeight;
-        match desc.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()) {
+        match desc.calculate(
+            &mut mol,
+            &mut crate::desc::context::CalculationContext::new(),
+        ) {
             DescriptorValue::Float(v) => assert!(((v as f64) - 46.069).abs() < 0.01),
             DescriptorValue::Float64(v) => assert!((v - 46.069).abs() < 0.01),
             _ => panic!("Expected Float"),
@@ -228,7 +247,10 @@ mod tests {
         // Heavy water: [2H]O[2H]
         let mut mol = parse_smiles("[2H]O[2H]").unwrap();
         let desc = MolecularWeight;
-        match desc.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()) {
+        match desc.calculate(
+            &mut mol,
+            &mut crate::desc::context::CalculationContext::new(),
+        ) {
             DescriptorValue::Float(v) => assert!(((v as f64) - 19.999).abs() < 0.01),
             DescriptorValue::Float64(v) => assert!((v - 19.999).abs() < 0.01),
             _ => panic!("Expected Float"),

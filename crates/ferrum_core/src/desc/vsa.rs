@@ -14,7 +14,6 @@
 //! - Labute (2000) J. Mol. Graph. Model. 18, 464
 //! - Wildman & Crippen (1999) JCICS 39(5), 868
 
-
 //! ## File guide: Vsa
 //!
 //! This file belongs to FerrumChem's **descriptor/fingerprint feature layer**.
@@ -369,7 +368,11 @@ impl Descriptor for SlogpVSA {
     ///
     /// Function context: `crates/ferrum_core/src/desc/vsa.rs`.
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-    fn calculate(&self, mol: &mut Molecule, ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
+    fn calculate(
+        &self,
+        mol: &mut Molecule,
+        ctx: &mut crate::desc::context::CalculationContext,
+    ) -> DescriptorValue {
         let mut values = vec![0.0f32; 12];
         fill_slogp_vsa_into(mol, &mut values, ctx);
         DescriptorValue::FloatVec(values)
@@ -437,7 +440,11 @@ impl Descriptor for SmrVSA {
     ///
     /// Function context: `crates/ferrum_core/src/desc/vsa.rs`.
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-    fn calculate(&self, mol: &mut Molecule, ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
+    fn calculate(
+        &self,
+        mol: &mut Molecule,
+        ctx: &mut crate::desc::context::CalculationContext,
+    ) -> DescriptorValue {
         let mut values = vec![0.0f32; 10];
         fill_smr_vsa_into(mol, &mut values, ctx);
         DescriptorValue::FloatVec(values)
@@ -466,7 +473,11 @@ impl Descriptor for LabuteASA {
     ///
     /// Function context: `crates/ferrum_core/src/desc/vsa.rs`.
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-    fn calculate(&self, mol: &mut Molecule, ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
+    fn calculate(
+        &self,
+        mol: &mut Molecule,
+        ctx: &mut crate::desc::context::CalculationContext,
+    ) -> DescriptorValue {
         ensure_labute_contribs_cached(mol, ctx);
         let (total, h_contrib) = if let Some((vsa, h_contrib)) = mol.cached_labute_contribs() {
             (vsa.iter().sum::<f64>(), h_contrib)
@@ -547,7 +558,11 @@ impl Descriptor for PeoeVsa {
     ///
     /// Function context: `crates/ferrum_core/src/desc/vsa.rs`.
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-    fn calculate(&self, mol: &mut Molecule, ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
+    fn calculate(
+        &self,
+        mol: &mut Molecule,
+        ctx: &mut crate::desc::context::CalculationContext,
+    ) -> DescriptorValue {
         let mut values = vec![0.0f32; 14];
         fill_peoe_vsa_into(mol, &mut values, ctx);
         DescriptorValue::FloatVec(values)
@@ -598,7 +613,10 @@ mod tests {
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn calc_float_vec(d: &dyn Descriptor, smiles: &str) -> Vec<f32> {
         let mut mol = parse_smiles(smiles).expect("valid SMILES");
-        match d.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()) {
+        match d.calculate(
+            &mut mol,
+            &mut crate::desc::context::CalculationContext::new(),
+        ) {
             DescriptorValue::FloatVec(v) => v,
             other => panic!("expected FloatVec, got {:?}", other),
         }
@@ -610,7 +628,10 @@ mod tests {
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn calc_float(d: &dyn Descriptor, smiles: &str) -> f32 {
         let mut mol = parse_smiles(smiles).expect("valid SMILES");
-        match d.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()) {
+        match d.calculate(
+            &mut mol,
+            &mut crate::desc::context::CalculationContext::new(),
+        ) {
             DescriptorValue::Float(v) => v,
             other => panic!("expected Float, got {:?}", other),
         }

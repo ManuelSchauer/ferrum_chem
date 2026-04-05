@@ -1,6 +1,5 @@
 //! Applicability Domain — k-NN distance AD, leverage AD.
 
-
 //! ## File guide: Ad
 //!
 //! This file belongs to FerrumChem's **machine-learning pipeline layer**.
@@ -37,6 +36,130 @@
 use ndarray::{Array1, Array2, Axis};
 use serde::{Deserialize, Serialize};
 
+/// Default AD sampling step (exact mode).
+fn default_knn_ad_sample_step() -> usize {
+    1
+}
+
+/// Read positive usize env var or return None.
+fn env_positive_usize(name: &str) -> Option<usize> {
+    std::env::var(name)
+        .ok()
+        .and_then(|raw| raw.parse::<usize>().ok())
+        .filter(|&v| v > 0)
+}
+
+/// Resolve AD neighbor sampling stride from environment.
+///
+/// `FERRUM_AD_MODE=approx` enables sampled neighbor scans for large datasets.
+/// `FERRUM_AD_APPROX_MIN_ROWS` controls activation threshold (default: 50000).
+/// `FERRUM_AD_APPROX_STEP` controls stride (default: 4, clamped to >=1).
+fn resolve_knn_ad_sample_step(n_rows: usize) -> usize {
+    let mode = std::env::var("FERRUM_AD_MODE").unwrap_or_else(|_| "exact".to_string());
+    let min_rows = env_positive_usize("FERRUM_AD_APPROX_MIN_ROWS").unwrap_or(50_000);
+    let step = env_positive_usize("FERRUM_AD_APPROX_STEP").unwrap_or(4);
+    resolve_knn_ad_sample_step_with(&mode, min_rows, step, n_rows)
+}
+
+/// Pure helper for resolving AD sample-step behavior.
+fn resolve_knn_ad_sample_step_with(
+    mode: &str,
+    min_rows: usize,
+    step: usize,
+    n_rows: usize,
+) -> usize {
+    if !mode.eq_ignore_ascii_case("approx") {
+        return default_knn_ad_sample_step();
+    }
+    if n_rows < min_rows {
+        return default_knn_ad_sample_step();
+    }
+    step.max(default_knn_ad_sample_step())
+}
+
+/// Return index and value of the largest item among first `count` entries.
+fn largest_entry(values: &[f64], count: usize) -> (usize, f64) {
+    let mut idx = 0usize;
+    let mut val = values[0];
+    for i in 1..count {
+        if values[i] > val {
+            val = values[i];
+            idx = i;
+        }
+    }
+    (idx, val)
+}
+
+/// Compute squared Euclidean distance between equal-length vectors.
+fn squared_euclidean_distance(a: &[f64], b: &[f64]) -> f64 {
+    squared_euclidean_distance_with_cutoff(a, b, f64::INFINITY)
+}
+
+/// Compute squared Euclidean distance with early exit if partial sum exceeds cutoff.
+fn squared_euclidean_distance_with_cutoff(a: &[f64], b: &[f64], cutoff: f64) -> f64 {
+    let mut acc = 0.0;
+    for i in 0..a.len() {
+        let d = a[i] - b[i];
+        acc = d.mul_add(d, acc);
+        if acc > cutoff {
+            break;
+        }
+    }
+    acc
+}
+
+/// Select k nearest distances for a sample.
+fn knn_select_k_distances(
+    train_features: &Array2<f64>,
+    sample: &[f64],
+    skip_index: Option<usize>,
+    step: usize,
+    best_dists: &mut [f64],
+) -> usize {
+    let k = best_dists.len();
+    let mut filled = 0usize;
+    let mut worst_idx = 0usize;
+    let mut worst_dist = f64::NEG_INFINITY;
+    let stride = step.max(1);
+
+    scan_rows(train_features, |i, row| {
+        if Some(i) == skip_index {
+            return;
+        }
+        if stride > 1 && i % stride != 0 {
+            return;
+        }
+        let cutoff = if filled < k {
+            f64::INFINITY
+        } else {
+            worst_dist
+        };
+        let candidate = squared_euclidean_distance_with_cutoff(sample, row, cutoff);
+        if filled < k {
+            best_dists[filled] = candidate;
+            if candidate > worst_dist {
+                worst_dist = candidate;
+                worst_idx = filled;
+            }
+            filled += 1;
+            if filled == k {
+                let (idx, val) = largest_entry(best_dists, k);
+                worst_idx = idx;
+                worst_dist = val;
+            }
+            return;
+        }
+        if candidate < worst_dist {
+            best_dists[worst_idx] = candidate;
+            let (idx, val) = largest_entry(best_dists, k);
+            worst_idx = idx;
+            worst_dist = val;
+        }
+    });
+
+    filled
+}
+
 /// Applicability Domain trait.
 pub trait ApplicabilityDomain: Send + Sync {
     /// Check if a sample is within the domain.
@@ -53,10 +176,16 @@ pub trait ApplicabilityDomain: Send + Sync {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct KnnDistanceAD {
     pub train_features: Array2<f64>,
+    #[serde(default)]
+    pub train_features_t: Array2<f64>,
     pub k: usize,
     pub threshold: f64,
     pub mean_dist: f64,
     pub std_dist: f64,
+    #[serde(skip, default)]
+    pub train_mean_knn_distances: Vec<f64>,
+    #[serde(default = "default_knn_ad_sample_step")]
+    pub sample_step: usize,
 }
 
 impl KnnDistanceAD {
@@ -66,29 +195,39 @@ impl KnnDistanceAD {
     pub fn fit(features: &Array2<f64>, k: usize, z_cutoff: f64) -> Self {
         let n = features.nrows();
         let k = k.min(n - 1).max(1);
+        let train_features_t = features.t().to_owned();
+        let sample_step = resolve_knn_ad_sample_step(n);
 
         // Compute mean k-NN distance for each training sample
         let mut distances = Vec::with_capacity(n);
-        for i in 0..n {
-            let sample = features.row(i);
-            let mut dists: Vec<f64> = (0..n)
-                .filter(|&j| j != i)
-                .map(|j| {
-                    sample
-                        .iter()
-                        .zip(features.row(j).iter())
-                        .map(|(&a, &b)| {
-                            let d = a - b;
-                            d * d
-                        })
-                        .sum::<f64>()
-                        .sqrt()
-                })
-                .collect();
-            dists.sort_by(|a, b| a.total_cmp(b));
-            let mean_k_dist: f64 = dists.iter().take(k).sum::<f64>() / k as f64;
+        let mut best_dists = vec![f64::INFINITY; k];
+        scan_rows(features, |i, sample| {
+            let filled = if train_features_t.nrows() == features.ncols()
+                && train_features_t.ncols() == features.nrows()
+            {
+                knn_select_k_distances_colmajor(
+                    features,
+                    &train_features_t,
+                    sample,
+                    Some(i),
+                    sample_step,
+                    &mut best_dists,
+                )
+            } else {
+                knn_select_k_distances(features, sample, Some(i), sample_step, &mut best_dists)
+            };
+            if filled == 0 {
+                distances.push(0.0);
+                return;
+            }
+            let mean_k_dist = best_dists
+                .iter()
+                .take(filled)
+                .map(|d| d.sqrt())
+                .sum::<f64>()
+                / filled as f64;
             distances.push(mean_k_dist);
-        }
+        });
 
         let mean_dist = distances.iter().sum::<f64>() / n as f64;
         let std_dist = (distances
@@ -102,10 +241,13 @@ impl KnnDistanceAD {
 
         Self {
             train_features: features.clone(),
+            train_features_t,
             k,
             threshold,
             mean_dist,
             std_dist,
+            train_mean_knn_distances: distances,
+            sample_step,
         }
     }
 
@@ -114,22 +256,154 @@ impl KnnDistanceAD {
     /// Function context: `crates/ferrum_core/src/ml/ad.rs`.
     /// ML-layer note: numerical stability and reproducibility are important for comparable model evaluation.
     fn mean_knn_distance(&self, sample: &[f64]) -> f64 {
-        let mut dists: Vec<f64> = (0..self.train_features.nrows())
-            .map(|i| {
-                sample
-                    .iter()
-                    .zip(self.train_features.row(i).iter())
-                    .map(|(&a, &b)| {
-                        let d = a - b;
-                        d * d
-                    })
-                    .sum::<f64>()
-                    .sqrt()
-            })
-            .collect();
-        dists.sort_by(|a, b| a.total_cmp(b));
-        dists.iter().take(self.k).sum::<f64>() / self.k as f64
+        let mut best_dists = vec![f64::INFINITY; self.k];
+        let filled = if self.train_features_t.nrows() == self.train_features.ncols()
+            && self.train_features_t.ncols() == self.train_features.nrows()
+        {
+            knn_select_k_distances_colmajor(
+                &self.train_features,
+                &self.train_features_t,
+                sample,
+                None,
+                self.sample_step,
+                &mut best_dists,
+            )
+        } else {
+            knn_select_k_distances(
+                &self.train_features,
+                sample,
+                None,
+                self.sample_step,
+                &mut best_dists,
+            )
+        };
+        if filled == 0 {
+            return 0.0;
+        }
+        best_dists
+            .iter()
+            .take(filled)
+            .map(|d| d.sqrt())
+            .sum::<f64>()
+            / filled as f64
     }
+
+    /// Returns cached in-domain flags for the training rows used during AD fitting.
+    pub fn training_in_domain_flags(&self) -> Vec<bool> {
+        self.train_mean_knn_distances
+            .iter()
+            .map(|dist| *dist <= self.threshold)
+            .collect()
+    }
+}
+
+/// Iterate rows of a feature matrix with a contiguous fast path.
+#[inline]
+fn scan_rows(features: &Array2<f64>, mut f: impl FnMut(usize, &[f64])) {
+    let nrows = features.nrows();
+    let ncols = features.ncols();
+    if ncols == 0 {
+        for i in 0..nrows {
+            f(i, &[]);
+        }
+        return;
+    }
+
+    if let Some(buf) = features.as_slice_memory_order() {
+        if buf.len() == nrows * ncols {
+            for (i, row) in buf.chunks_exact(ncols).enumerate() {
+                f(i, row);
+            }
+            return;
+        }
+    }
+
+    for i in 0..nrows {
+        let row = features.row(i);
+        if let Some(slice) = row.as_slice() {
+            f(i, slice);
+        } else {
+            let owned = row.to_vec();
+            f(i, &owned);
+        }
+    }
+}
+
+/// Select k nearest distances for a sample using pre-transposed feature storage.
+fn knn_select_k_distances_colmajor(
+    train_features: &Array2<f64>,
+    train_features_t: &Array2<f64>,
+    sample: &[f64],
+    skip_index: Option<usize>,
+    step: usize,
+    best_dists: &mut [f64],
+) -> usize {
+    let k = best_dists.len();
+    let mut filled = 0usize;
+    let mut worst_idx = 0usize;
+    let mut worst_dist = f64::NEG_INFINITY;
+    let nrows = train_features.nrows();
+    let ncols = train_features.ncols();
+    let stride = step.max(1);
+
+    if nrows == 0 || ncols == 0 {
+        return 0;
+    }
+
+    let Some(features_t) = train_features_t.as_slice_memory_order() else {
+        return knn_select_k_distances(train_features, sample, skip_index, stride, best_dists);
+    };
+    if features_t.len() != nrows * ncols {
+        return knn_select_k_distances(train_features, sample, skip_index, stride, best_dists);
+    }
+
+    for row_idx in 0..nrows {
+        if Some(row_idx) == skip_index {
+            continue;
+        }
+        if stride > 1 && row_idx % stride != 0 {
+            continue;
+        }
+        let cutoff = if filled < k {
+            f64::INFINITY
+        } else {
+            worst_dist
+        };
+
+        let mut acc = 0.0f64;
+        for col in 0..ncols {
+            let x = features_t[col * nrows + row_idx];
+            let d = sample[col] - x;
+            acc = d.mul_add(d, acc);
+            if acc > cutoff {
+                break;
+            }
+        }
+
+        if filled < k {
+            best_dists[filled] = acc;
+            if acc > worst_dist {
+                worst_dist = acc;
+                worst_idx = filled;
+            }
+            filled += 1;
+            if filled == k {
+                let (idx, val) = largest_entry(best_dists, k);
+                worst_idx = idx;
+                worst_dist = val;
+            }
+            continue;
+        }
+
+        if acc < worst_dist {
+            best_dists[worst_idx] = acc;
+            let (idx, val) = largest_entry(best_dists, k);
+            worst_idx = idx;
+            worst_dist = val;
+        }
+    }
+
+    filled
 }
 
 impl ApplicabilityDomain for KnnDistanceAD {
@@ -406,6 +680,46 @@ mod tests {
         let conf_in = ad.confidence(&[1.5]);
         let conf_out = ad.confidence(&[100.0]);
         assert!(conf_in > conf_out, "in={conf_in}, out={conf_out}");
+    }
+
+    #[test]
+    /// Runs regression test for knn ad cached training flags.
+    ///
+    /// Function context: `crates/ferrum_core/src/ml/ad.rs`.
+    /// ML-layer note: numerical stability and reproducibility are important for comparable model evaluation.
+    fn test_knn_ad_training_flags_cover_all_rows() {
+        let features = Array2::from_shape_vec((5, 1), vec![0.0, 0.2, 0.4, 0.6, 0.8]).unwrap();
+        let ad = KnnDistanceAD::fit(&features, 2, 2.0);
+        let flags = ad.training_in_domain_flags();
+        assert_eq!(flags.len(), features.nrows());
+    }
+
+    #[test]
+    /// Runs regression test for knn ad defaults to exact sampling.
+    ///
+    /// Function context: `crates/ferrum_core/src/ml/ad.rs`.
+    /// ML-layer note: numerical stability and reproducibility are important for comparable model evaluation.
+    fn test_knn_ad_defaults_to_exact_sampling() {
+        let features = Array2::from_shape_vec((6, 1), vec![0.0, 0.2, 0.4, 0.6, 0.8, 1.0]).unwrap();
+        let mut ad = KnnDistanceAD::fit(&features, 2, 2.0);
+        ad.sample_step = resolve_knn_ad_sample_step_with("exact", 1, 7, features.nrows());
+        assert_eq!(ad.sample_step, 1);
+    }
+
+    #[test]
+    /// Runs regression test for knn ad approx mode sampling env.
+    ///
+    /// Function context: `crates/ferrum_core/src/ml/ad.rs`.
+    /// ML-layer note: numerical stability and reproducibility are important for comparable model evaluation.
+    fn test_knn_ad_approx_mode_sampling_env() {
+        let features = Array2::from_shape_vec(
+            (10, 1),
+            vec![0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9],
+        )
+        .unwrap();
+        let mut ad = KnnDistanceAD::fit(&features, 2, 2.0);
+        ad.sample_step = resolve_knn_ad_sample_step_with("approx", 1, 3, features.nrows());
+        assert_eq!(ad.sample_step, 3);
     }
 
     #[test]

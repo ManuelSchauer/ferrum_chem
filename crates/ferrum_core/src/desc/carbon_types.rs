@@ -11,7 +11,6 @@
 //! - C3SP3: 3 neighbors, sp³ hybridization (methine)
 //! - C4SP3: 4 neighbors, sp³ hybridization (quaternary)
 
-
 //! ## File guide: Carbon Types
 //!
 //! This file belongs to FerrumChem's **descriptor/fingerprint feature layer**.
@@ -310,7 +309,11 @@ impl Descriptor for CarbonTypes {
     ///
     /// Function context: `crates/ferrum_core/src/desc/carbon_types.rs`.
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-    fn calculate(&self, mol: &mut Molecule, ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
+    fn calculate(
+        &self,
+        mol: &mut Molecule,
+        ctx: &mut crate::desc::context::CalculationContext,
+    ) -> DescriptorValue {
         use crate::types::BondType;
 
         let mut counts = vec![0u16; 9];

@@ -3,7 +3,6 @@
 //! Supports both regression and classification.
 //! Optimized for binary fingerprint features.
 
-
 //! ## File guide: Random Forest
 //!
 //! This file belongs to FerrumChem's **machine-learning pipeline layer**.
@@ -51,11 +50,11 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 enum TreeNode {
     Leaf {
-        value: f64,
+        value: f32,
     },
     Split {
         feature_idx: usize,
-        threshold: f64,
+        threshold: f32,
         left: Box<TreeNode>,
         right: Box<TreeNode>,
     },
@@ -68,14 +67,14 @@ impl TreeNode {
     /// ML-layer note: numerical stability and reproducibility are important for comparable model evaluation.
     fn predict(&self, sample: &[f64]) -> f64 {
         match self {
-            TreeNode::Leaf { value } => *value,
+            TreeNode::Leaf { value } => f64::from(*value),
             TreeNode::Split {
                 feature_idx,
                 threshold,
                 left,
                 right,
             } => {
-                if sample[*feature_idx] <= *threshold {
+                if sample[*feature_idx] <= f64::from(*threshold) {
                     left.predict(sample)
                 } else {
                     right.predict(sample)
@@ -113,7 +112,7 @@ impl DecisionTreeBuilder {
         // Stop conditions
         if depth >= self.max_depth || indices.len() < self.min_samples_split || indices.len() <= 1 {
             return TreeNode::Leaf {
-                value: self.leaf_value(targets, indices),
+                value: self.leaf_value(targets, indices) as f32,
             };
         }
 
@@ -124,7 +123,7 @@ impl DecisionTreeBuilder {
             .all(|&i| (targets[i] - first_target).abs() < 1e-15)
         {
             return TreeNode::Leaf {
-                value: first_target,
+                value: first_target as f32,
             };
         }
 
@@ -133,36 +132,37 @@ impl DecisionTreeBuilder {
 
         // Random feature subset
         let mut feature_indices: Vec<usize> = (0..n_features).collect();
-        feature_indices.shuffle(rng);
-        feature_indices.truncate(n_try);
+        let (selected_features, _) = feature_indices.partial_shuffle(rng, n_try);
 
         let mut best_score = f64::INFINITY;
         let mut best_feature = 0usize;
         let mut best_threshold = 0.0;
         let mut found_split = false;
 
-        for &feat_idx in &feature_indices {
+        for &feat_idx in selected_features.iter() {
             // Sort candidate rows once by this feature.
-            let mut sorted_indices = indices.to_vec();
-            sorted_indices.sort_by(|&a, &b| features[[a, feat_idx]].total_cmp(&features[[b, feat_idx]]));
-            if sorted_indices.len() <= 1 {
+            let mut sorted_rows: Vec<(f64, usize)> = Vec::with_capacity(indices.len());
+            for &idx in indices {
+                sorted_rows.push((features[[idx, feat_idx]], idx));
+            }
+            sorted_rows.sort_unstable_by(|a, b| a.0.total_cmp(&b.0));
+            if sorted_rows.len() <= 1 {
                 continue;
             }
 
             if self.is_classifier {
-                let total_count = sorted_indices.len();
+                let total_count = sorted_rows.len();
                 let mut left_count = 0usize;
                 let mut right_count = total_count;
                 let mut left_pos = 0usize;
-                let mut right_pos = sorted_indices
+                let mut right_pos = sorted_rows
                     .iter()
-                    .filter(|&&idx| targets[idx] >= 0.5)
+                    .filter(|(_, idx)| targets[*idx] >= 0.5)
                     .count();
 
                 for split_idx in 0..(total_count - 1) {
-                    let idx = sorted_indices[split_idx];
-                    let current_val = features[[idx, feat_idx]];
-                    let next_val = features[[sorted_indices[split_idx + 1], feat_idx]];
+                    let (current_val, idx) = sorted_rows[split_idx];
+                    let next_val = sorted_rows[split_idx + 1].0;
 
                     left_count += 1;
                     right_count -= 1;
@@ -198,23 +198,22 @@ impl DecisionTreeBuilder {
                     }
                 }
             } else {
-                let total_count = sorted_indices.len();
+                let total_count = sorted_rows.len();
                 let mut left_count = 0usize;
                 let mut right_count = total_count;
                 let mut left_sum = 0.0f64;
                 let mut left_sum_sq = 0.0f64;
                 let mut right_sum = 0.0f64;
                 let mut right_sum_sq = 0.0f64;
-                for &idx in &sorted_indices {
-                    let t = targets[idx];
+                for (_, idx) in &sorted_rows {
+                    let t = targets[*idx];
                     right_sum += t;
                     right_sum_sq += t * t;
                 }
 
                 for split_idx in 0..(total_count - 1) {
-                    let idx = sorted_indices[split_idx];
-                    let current_val = features[[idx, feat_idx]];
-                    let next_val = features[[sorted_indices[split_idx + 1], feat_idx]];
+                    let (current_val, idx) = sorted_rows[split_idx];
+                    let next_val = sorted_rows[split_idx + 1].0;
                     let t = targets[idx];
 
                     left_count += 1;
@@ -255,7 +254,7 @@ impl DecisionTreeBuilder {
 
         if !found_split {
             return TreeNode::Leaf {
-                value: self.leaf_value(targets, indices),
+                value: self.leaf_value(targets, indices) as f32,
             };
         }
 
@@ -271,13 +270,13 @@ impl DecisionTreeBuilder {
 
         if best_left.is_empty() || best_right.is_empty() {
             return TreeNode::Leaf {
-                value: self.leaf_value(targets, indices),
+                value: self.leaf_value(targets, indices) as f32,
             };
         }
 
         TreeNode::Split {
             feature_idx: best_feature,
-            threshold: best_threshold,
+            threshold: best_threshold as f32,
             left: Box::new(self.build(features, targets, &best_left, depth + 1, rng)),
             right: Box::new(self.build(features, targets, &best_right, depth + 1, rng)),
         }
@@ -301,7 +300,6 @@ impl DecisionTreeBuilder {
             sum / indices.len() as f64
         }
     }
-
 }
 
 // ---------------------------------------------------------------------------

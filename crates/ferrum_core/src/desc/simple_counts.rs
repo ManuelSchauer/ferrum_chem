@@ -8,7 +8,6 @@
 //! - Implementing stateless descriptor structs in Rust.
 //! - Mapping chemistry concepts to reproducible numeric features.
 
-
 //! ## File guide: Simple Counts
 //!
 //! This file belongs to FerrumChem's **descriptor/fingerprint feature layer**.
@@ -72,7 +71,11 @@ impl Descriptor for ValenceElectrons {
     ///
     /// Function context: `crates/ferrum_core/src/desc/simple_counts.rs`.
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-    fn calculate(&self, mol: &mut Molecule, ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
+    fn calculate(
+        &self,
+        mol: &mut Molecule,
+        ctx: &mut crate::desc::context::CalculationContext,
+    ) -> DescriptorValue {
         let mut count: i32 = 0;
         for atom in &mol.atoms {
             let outer_elec = elements::outer_electrons(atom.atomic_number) as i32;
@@ -106,7 +109,11 @@ impl Descriptor for RadicalElectrons {
     ///
     /// Function context: `crates/ferrum_core/src/desc/simple_counts.rs`.
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-    fn calculate(&self, mol: &mut Molecule, ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
+    fn calculate(
+        &self,
+        mol: &mut Molecule,
+        ctx: &mut crate::desc::context::CalculationContext,
+    ) -> DescriptorValue {
         let count: u32 = mol
             .atoms
             .iter()
@@ -138,7 +145,11 @@ impl Descriptor for HeteroatomCount {
     ///
     /// Function context: `crates/ferrum_core/src/desc/simple_counts.rs`.
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-    fn calculate(&self, mol: &mut Molecule, ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
+    fn calculate(
+        &self,
+        mol: &mut Molecule,
+        ctx: &mut crate::desc::context::CalculationContext,
+    ) -> DescriptorValue {
         let count = mol
             .atoms
             .iter()
@@ -171,7 +182,11 @@ impl Descriptor for HybridizationRatio {
     ///
     /// Function context: `crates/ferrum_core/src/desc/simple_counts.rs`.
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-    fn calculate(&self, mol: &mut Molecule, ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
+    fn calculate(
+        &self,
+        mol: &mut Molecule,
+        ctx: &mut crate::desc::context::CalculationContext,
+    ) -> DescriptorValue {
         let mut sp3_count = 0u32;
         let mut sp2_count = 0u32;
         for (idx, atom) in mol.atoms.iter().enumerate() {
@@ -186,11 +201,7 @@ impl Descriptor for HybridizationRatio {
             }
         }
         let ratio = if sp2_count == 0 {
-            if sp3_count > 0 {
-                f32::INFINITY
-            } else {
-                0.0
-            }
+            if sp3_count > 0 { f32::INFINITY } else { 0.0 }
         } else {
             sp3_count as f32 / sp2_count as f32
         };
@@ -220,7 +231,11 @@ impl Descriptor for VAdjMa {
     ///
     /// Function context: `crates/ferrum_core/src/desc/simple_counts.rs`.
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-    fn calculate(&self, mol: &mut Molecule, ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
+    fn calculate(
+        &self,
+        mol: &mut Molecule,
+        ctx: &mut crate::desc::context::CalculationContext,
+    ) -> DescriptorValue {
         let m = mol.num_bonds() as f32;
         let val = if m == 0.0 { 0.0 } else { 1.0 + m.log2() };
         DescriptorValue::Float(val)
@@ -251,7 +266,11 @@ mod tests {
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn calc_float(desc: &dyn Descriptor, smiles: &str) -> f32 {
         let mut mol = parse_smiles(smiles).expect("Invalid SMILES");
-        desc.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()).as_float()
+        desc.calculate(
+            &mut mol,
+            &mut crate::desc::context::CalculationContext::new(),
+        )
+        .as_float()
     }
 
     /// Implements int.
@@ -260,7 +279,11 @@ mod tests {
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn calc_int(desc: &dyn Descriptor, smiles: &str) -> u32 {
         let mut mol = parse_smiles(smiles).expect("Invalid SMILES");
-        desc.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()).as_int()
+        desc.calculate(
+            &mut mol,
+            &mut crate::desc::context::CalculationContext::new(),
+        )
+        .as_int()
     }
 
     // Valence Electrons Tests

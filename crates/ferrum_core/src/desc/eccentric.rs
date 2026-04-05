@@ -10,7 +10,6 @@
 //!
 //! Reference: Sharma et al. (1997) Eccentric Connectivity Index
 
-
 //! ## File guide: Eccentric
 //!
 //! This file belongs to FerrumChem's **descriptor/fingerprint feature layer**.
@@ -256,8 +255,14 @@ mod tests {
     fn test_eccentric_path_vs_branched() {
         let mut linear = parse("CCCCC"); // Pentane
         let mut branched = parse("CC(C)CC"); // Isopentane
-        let lin_eci = calculate(&mut linear, &mut crate::desc::context::CalculationContext::new());
-        let bra_eci = calculate(&mut branched, &mut crate::desc::context::CalculationContext::new());
+        let lin_eci = calculate(
+            &mut linear,
+            &mut crate::desc::context::CalculationContext::new(),
+        );
+        let bra_eci = calculate(
+            &mut branched,
+            &mut crate::desc::context::CalculationContext::new(),
+        );
         // Linear should have higher ECI (more extended)
         assert!(lin_eci > bra_eci);
     }

@@ -2,7 +2,6 @@
 //!
 //! Both store fitted parameters for consistent inference-time transforms.
 
-
 //! ## File guide: Scaling
 //!
 //! This file belongs to FerrumChem's **machine-learning pipeline layer**.
@@ -42,8 +41,8 @@ use serde::{Deserialize, Serialize};
 /// Z-score normalisation: x' = (x − μ) / σ
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StandardScaler {
-    pub mean: Array1<f64>,
-    pub std: Array1<f64>,
+    pub mean: Array1<f32>,
+    pub std: Array1<f32>,
 }
 
 impl StandardScaler {
@@ -63,7 +62,10 @@ impl StandardScaler {
         }
         let mut std = sq_sum;
         std.mapv_inplace(|v| (v / n).sqrt().max(1e-12));
-        Self { mean, std }
+        Self {
+            mean: mean.mapv(|v| v as f32),
+            std: std.mapv(|v| v as f32),
+        }
     }
 
     /// Transform data using fitted params.
@@ -73,7 +75,7 @@ impl StandardScaler {
             Zip::from(&mut row)
                 .and(&self.mean)
                 .and(&self.std)
-                .for_each(|x, &m, &s| *x = (*x - m) / s);
+                .for_each(|x, &m, &s| *x = (*x - f64::from(m)) / f64::from(s));
         });
         result
     }
@@ -91,7 +93,7 @@ impl StandardScaler {
             .iter()
             .zip(self.mean.iter())
             .zip(self.std.iter())
-            .map(|((&x, &m), &s)| (x - m) / s)
+            .map(|((&x, &m), &s)| (x - f64::from(m)) / f64::from(s))
             .collect()
     }
 
@@ -109,7 +111,7 @@ impl StandardScaler {
             Zip::from(&mut row)
                 .and(&self.std)
                 .and(&self.mean)
-                .for_each(|x, &s, &m| *x = *x * s + m);
+                .for_each(|x, &s, &m| *x = *x * f64::from(s) + f64::from(m));
         });
         result
     }
@@ -118,8 +120,8 @@ impl StandardScaler {
 /// Min-max scaling: x' = (x − min) / (max − min) → [0, 1]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MinMaxScaler {
-    pub min: Array1<f64>,
-    pub range: Array1<f64>, // max - min, clamped to avoid div-by-zero
+    pub min: Array1<f32>,
+    pub range: Array1<f32>, // max - min, clamped to avoid div-by-zero
 }
 
 impl MinMaxScaler {
@@ -143,7 +145,10 @@ impl MinMaxScaler {
         let mut range = &max - &min;
         range.mapv_inplace(|v| if v.abs() < 1e-12 { 1.0 } else { v });
 
-        Self { min, range }
+        Self {
+            min: min.mapv(|v| v as f32),
+            range: range.mapv(|v| v as f32),
+        }
     }
 
     /// Transform data to [0, 1].
@@ -153,7 +158,9 @@ impl MinMaxScaler {
             Zip::from(&mut row)
                 .and(&self.min)
                 .and(&self.range)
-                .for_each(|x, &min, &range| *x = (*x - min) / range);
+                .for_each(|x, &min, &range| {
+                    *x = (*x - f64::from(min)) / f64::from(range);
+                });
         });
         result
     }
@@ -171,7 +178,7 @@ impl MinMaxScaler {
             .iter()
             .zip(self.min.iter())
             .zip(self.range.iter())
-            .map(|((&x, &min), &range)| (x - min) / range)
+            .map(|((&x, &min), &range)| (x - f64::from(min)) / f64::from(range))
             .collect()
     }
 
@@ -189,7 +196,9 @@ impl MinMaxScaler {
             Zip::from(&mut row)
                 .and(&self.range)
                 .and(&self.min)
-                .for_each(|x, &range, &min| *x = *x * range + min);
+                .for_each(|x, &range, &min| {
+                    *x = *x * f64::from(range) + f64::from(min);
+                });
         });
         result
     }
@@ -211,13 +220,13 @@ mod tests {
         let (scaler, transformed) = StandardScaler::fit_transform(&data);
         // Mean of each column should be ~0
         let col_means = transformed.mean_axis(Axis(0)).unwrap();
-        assert!(col_means[0].abs() < 1e-10);
-        assert!(col_means[1].abs() < 1e-10);
+        assert!(col_means[0].abs() < 1e-6);
+        assert!(col_means[1].abs() < 1e-6);
         // Inverse should recover original
         let recovered = scaler.inverse_transform(&transformed);
         for i in 0..4 {
             for j in 0..2 {
-                assert!((recovered[[i, j]] - data[[i, j]]).abs() < 1e-10);
+                assert!((recovered[[i, j]] - data[[i, j]]).abs() < 1e-6);
             }
         }
     }
@@ -236,7 +245,7 @@ mod tests {
             let col = transformed.column(j);
             let mean = col.mean().unwrap();
             let var: f64 = col.iter().map(|&x| (x - mean).powi(2)).sum::<f64>() / col.len() as f64;
-            assert!((var - 1.0).abs() < 1e-10, "Variance of col {j} = {var}");
+            assert!((var - 1.0).abs() < 1e-6, "Variance of col {j} = {var}");
         }
     }
 
@@ -253,14 +262,14 @@ mod tests {
             let col = transformed.column(j);
             let min = col.iter().cloned().fold(f64::INFINITY, f64::min);
             let max = col.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
-            assert!((min - 0.0).abs() < 1e-10);
-            assert!((max - 1.0).abs() < 1e-10);
+            assert!((min - 0.0).abs() < 1e-6);
+            assert!((max - 1.0).abs() < 1e-6);
         }
         // Inverse
         let recovered = scaler.inverse_transform(&transformed);
         for i in 0..3 {
             for j in 0..2 {
-                assert!((recovered[[i, j]] - data[[i, j]]).abs() < 1e-10);
+                assert!((recovered[[i, j]] - data[[i, j]]).abs() < 1e-6);
             }
         }
     }
@@ -285,8 +294,7 @@ mod tests {
     /// Function context: `crates/ferrum_core/src/ml/scaling.rs`.
     /// ML-layer note: numerical stability and reproducibility are important for comparable model evaluation.
     fn test_transform_one_matches_batch_standard() {
-        let data =
-            Array2::from_shape_vec((3, 2), vec![1.0, 10.0, 2.0, 20.0, 3.0, 30.0]).unwrap();
+        let data = Array2::from_shape_vec((3, 2), vec![1.0, 10.0, 2.0, 20.0, 3.0, 30.0]).unwrap();
         let scaler = StandardScaler::fit(&data);
         let sample = [2.5, 25.0];
         let one = scaler.transform_one(&sample);
@@ -295,7 +303,7 @@ mod tests {
             .row(0)
             .to_vec();
         for (a, b) in one.iter().zip(batch.iter()) {
-            assert!((a - b).abs() < 1e-12);
+            assert!((a - b).abs() < 1e-6);
         }
     }
 
@@ -314,7 +322,7 @@ mod tests {
             .row(0)
             .to_vec();
         for (a, b) in one.iter().zip(batch.iter()) {
-            assert!((a - b).abs() < 1e-12);
+            assert!((a - b).abs() < 1e-6);
         }
     }
 }

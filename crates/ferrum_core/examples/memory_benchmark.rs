@@ -2,7 +2,6 @@
 //!
 //! Demonstrates memory-efficient bit-packed fingerprints.
 
-
 //! ## File guide: Memory Benchmark
 //!
 //! This file belongs to FerrumChem's **library support layer**.
@@ -56,7 +55,10 @@ fn main() {
     // -----------------------------------------------------------------------
 
     let maccs = MaccsKeys;
-    let value = maccs.calculate(&mut mol, &mut ferrum_core::desc::context::CalculationContext::new());
+    let value = maccs.calculate(
+        &mut mol,
+        &mut ferrum_core::desc::context::CalculationContext::new(),
+    );
 
     let bitvec = value.as_binary();
     let typed_size = std::mem::size_of_val(bitvec.as_raw_slice());

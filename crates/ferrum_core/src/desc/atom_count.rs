@@ -8,7 +8,6 @@
 //! - Implementing stateless descriptor structs in Rust.
 //! - Mapping chemistry concepts to reproducible numeric features.
 
-
 //! ## File guide: Atom Count
 //!
 //! This file belongs to FerrumChem's **descriptor/fingerprint feature layer**.
@@ -90,7 +89,11 @@ impl Descriptor for AtomCount {
     ///
     /// Function context: `crates/ferrum_core/src/desc/atom_count.rs`.
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-    fn calculate(&self, mol: &mut Molecule, ctx: &mut crate::desc::context::CalculationContext) -> super::typed::DescriptorValue {
+    fn calculate(
+        &self,
+        mol: &mut Molecule,
+        ctx: &mut crate::desc::context::CalculationContext,
+    ) -> super::typed::DescriptorValue {
         super::typed::DescriptorValue::Int(compute_atom_count(mol))
     }
 }
@@ -111,7 +114,11 @@ impl Descriptor for HeavyAtomCount {
     ///
     /// Function context: `crates/ferrum_core/src/desc/atom_count.rs`.
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-    fn calculate(&self, mol: &mut Molecule, ctx: &mut crate::desc::context::CalculationContext) -> super::typed::DescriptorValue {
+    fn calculate(
+        &self,
+        mol: &mut Molecule,
+        ctx: &mut crate::desc::context::CalculationContext,
+    ) -> super::typed::DescriptorValue {
         super::typed::DescriptorValue::Int(compute_heavy_atom_count(mol))
     }
 }
@@ -135,7 +142,11 @@ impl Descriptor for ElementCounts {
     ///
     /// Function context: `crates/ferrum_core/src/desc/atom_count.rs`.
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-    fn calculate(&self, mol: &mut Molecule, ctx: &mut crate::desc::context::CalculationContext) -> super::typed::DescriptorValue {
+    fn calculate(
+        &self,
+        mol: &mut Molecule,
+        ctx: &mut crate::desc::context::CalculationContext,
+    ) -> super::typed::DescriptorValue {
         let mut counts = vec![0u16; 12]; // C, N, O, S, P, F, Cl, Br, I, Others, H, Heavy
 
         let mut hydrogen_count = 0u16;
@@ -215,7 +226,11 @@ impl Descriptor for SingleAtomCount {
     ///
     /// Function context: `crates/ferrum_core/src/desc/atom_count.rs`.
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-    fn calculate(&self, mol: &mut Molecule, ctx: &mut crate::desc::context::CalculationContext) -> super::typed::DescriptorValue {
+    fn calculate(
+        &self,
+        mol: &mut Molecule,
+        ctx: &mut crate::desc::context::CalculationContext,
+    ) -> super::typed::DescriptorValue {
         if self.atomic_number == 1 {
             // Hydrogen: count explicit + implicit
             let count: u32 = mol.atoms.iter().map(|a| a.total_h() as u32).sum();
@@ -247,7 +262,11 @@ impl Descriptor for AromaticAtomCount {
     ///
     /// Function context: `crates/ferrum_core/src/desc/atom_count.rs`.
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-    fn calculate(&self, mol: &mut Molecule, ctx: &mut crate::desc::context::CalculationContext) -> super::typed::DescriptorValue {
+    fn calculate(
+        &self,
+        mol: &mut Molecule,
+        ctx: &mut crate::desc::context::CalculationContext,
+    ) -> super::typed::DescriptorValue {
         super::typed::DescriptorValue::Int(compute_aromatic_atom_count(mol))
     }
 }
@@ -279,7 +298,15 @@ mod tests {
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_atom_count() {
         let mut mol = parse_smiles("CCO").unwrap(); // Ethanol: C2H6O
-        assert_eq!(AtomCount.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()).as_int(), 9); // 2C + 1O + 6H
+        assert_eq!(
+            AtomCount
+                .calculate(
+                    &mut mol,
+                    &mut crate::desc::context::CalculationContext::new()
+                )
+                .as_int(),
+            9
+        ); // 2C + 1O + 6H
     }
 
     #[test]
@@ -289,7 +316,15 @@ mod tests {
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_atom_count_methane() {
         let mut mol = parse_smiles("C").unwrap(); // Methane: CH4
-        assert_eq!(AtomCount.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()).as_int(), 5); // 1C + 4H
+        assert_eq!(
+            AtomCount
+                .calculate(
+                    &mut mol,
+                    &mut crate::desc::context::CalculationContext::new()
+                )
+                .as_int(),
+            5
+        ); // 1C + 4H
     }
 
     #[test]
@@ -299,7 +334,15 @@ mod tests {
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_atom_count_benzene() {
         let mut mol = parse_smiles("c1ccccc1").unwrap(); // Benzene: C6H6
-        assert_eq!(AtomCount.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()).as_int(), 12); // 6C + 6H
+        assert_eq!(
+            AtomCount
+                .calculate(
+                    &mut mol,
+                    &mut crate::desc::context::CalculationContext::new()
+                )
+                .as_int(),
+            12
+        ); // 6C + 6H
     }
 
     #[test]
@@ -309,7 +352,15 @@ mod tests {
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_heavy_atom_count() {
         let mut mol = parse_smiles("CCO").unwrap(); // Ethanol
-        assert_eq!(HeavyAtomCount.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()).as_int(), 3);
+        assert_eq!(
+            HeavyAtomCount
+                .calculate(
+                    &mut mol,
+                    &mut crate::desc::context::CalculationContext::new()
+                )
+                .as_int(),
+            3
+        );
     }
 
     #[test]
@@ -320,7 +371,15 @@ mod tests {
     fn test_aromatic_atom_count() {
         let mut mol = parse_smiles("c1ccccc1").unwrap(); // Benzene
         perceive_aromaticity(&mut mol);
-        assert_eq!(AromaticAtomCount.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()).as_int(), 6);
+        assert_eq!(
+            AromaticAtomCount
+                .calculate(
+                    &mut mol,
+                    &mut crate::desc::context::CalculationContext::new()
+                )
+                .as_int(),
+            6
+        );
     }
 
     #[test]
@@ -331,7 +390,15 @@ mod tests {
     fn test_aromatic_atom_count_non_aromatic() {
         let mut mol = parse_smiles("CCCC").unwrap(); // Butane
         perceive_aromaticity(&mut mol);
-        assert_eq!(AromaticAtomCount.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()).as_int(), 0);
+        assert_eq!(
+            AromaticAtomCount
+                .calculate(
+                    &mut mol,
+                    &mut crate::desc::context::CalculationContext::new()
+                )
+                .as_int(),
+            0
+        );
     }
 
     #[test]
@@ -373,7 +440,14 @@ mod tests {
     fn test_single_atom_count_carbon() {
         let mut mol = parse_smiles("CCO").unwrap();
         let desc = SingleAtomCount::new("C");
-        assert_eq!(desc.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()).as_int(), 2);
+        assert_eq!(
+            desc.calculate(
+                &mut mol,
+                &mut crate::desc::context::CalculationContext::new()
+            )
+            .as_int(),
+            2
+        );
     }
 
     #[test]
@@ -384,7 +458,14 @@ mod tests {
     fn test_single_atom_count_oxygen() {
         let mut mol = parse_smiles("CCO").unwrap();
         let desc = SingleAtomCount::new("O");
-        assert_eq!(desc.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()).as_int(), 1);
+        assert_eq!(
+            desc.calculate(
+                &mut mol,
+                &mut crate::desc::context::CalculationContext::new()
+            )
+            .as_int(),
+            1
+        );
     }
 
     #[test]
@@ -395,7 +476,14 @@ mod tests {
     fn test_single_atom_count_nitrogen() {
         let mut mol = parse_smiles("CCN").unwrap();
         let desc = SingleAtomCount::new("N");
-        assert_eq!(desc.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()).as_int(), 1);
+        assert_eq!(
+            desc.calculate(
+                &mut mol,
+                &mut crate::desc::context::CalculationContext::new()
+            )
+            .as_int(),
+            1
+        );
     }
 
     #[test]
@@ -406,7 +494,14 @@ mod tests {
     fn test_single_atom_count_absent_element() {
         let mut mol = parse_smiles("CCCC").unwrap();
         let desc = SingleAtomCount::new("O");
-        assert_eq!(desc.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()).as_int(), 0);
+        assert_eq!(
+            desc.calculate(
+                &mut mol,
+                &mut crate::desc::context::CalculationContext::new()
+            )
+            .as_int(),
+            0
+        );
     }
 
     #[test]
@@ -417,6 +512,13 @@ mod tests {
     fn test_single_atom_count_hydrogen() {
         let mut mol = parse_smiles("C").unwrap(); // CH4
         let desc = SingleAtomCount::new("H");
-        assert_eq!(desc.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()).as_int(), 4);
+        assert_eq!(
+            desc.calculate(
+                &mut mol,
+                &mut crate::desc::context::CalculationContext::new()
+            )
+            .as_int(),
+            4
+        );
     }
 }

@@ -16,7 +16,6 @@
 //! Reference: Kier, L.B. & Hall, L.H. (1999) "Molecular Structure
 //!            Description: The Electrotopological State", Academic Press.
 
-
 //! ## File guide: Estate
 //!
 //! This file belongs to FerrumChem's **descriptor/fingerprint feature layer**.
@@ -87,7 +86,10 @@ fn intrinsic_states(mol: &Molecule) -> Vec<f64> {
 
 /// Compute E-State values for all heavy atoms.
 /// Returns (e_states, atom_types) where atom_types[i] is the E-State atom type index.
-fn compute_estates(mol: &mut Molecule, ctx: &mut crate::desc::context::CalculationContext) -> Vec<f64> {
+fn compute_estates(
+    mol: &mut Molecule,
+    ctx: &mut crate::desc::context::CalculationContext,
+) -> Vec<f64> {
     let n = mol.num_atoms();
     if n == 0 {
         return vec![];
@@ -366,7 +368,10 @@ mod tests {
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn calc_estate(smiles: &str) -> Vec<f32> {
         let mut mol = parse_smiles(smiles).expect("valid SMILES");
-        match EStateIndices.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()) {
+        match EStateIndices.calculate(
+            &mut mol,
+            &mut crate::desc::context::CalculationContext::new(),
+        ) {
             DescriptorValue::FloatVec(v) => v,
             other => panic!("expected FloatVec, got {:?}", other),
         }
@@ -378,7 +383,10 @@ mod tests {
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn estates_raw(smiles: &str) -> Vec<f64> {
         let mut mol = parse_smiles(smiles).expect("valid SMILES");
-        compute_estates(&mut mol, &mut crate::desc::context::CalculationContext::new())
+        compute_estates(
+            &mut mol,
+            &mut crate::desc::context::CalculationContext::new(),
+        )
     }
 
     #[test]
@@ -426,7 +434,10 @@ mod tests {
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_estate_sum_conservation() {
         let mut mol = parse_smiles("CCCC").expect("valid");
-        let estates = compute_estates(&mut mol, &mut crate::desc::context::CalculationContext::new());
+        let estates = compute_estates(
+            &mut mol,
+            &mut crate::desc::context::CalculationContext::new(),
+        );
         let n = mol.num_atoms();
         let intrinsic_sum: f64 = (0..n)
             .map(|i| {
@@ -540,7 +551,11 @@ impl Descriptor for EStateIndices {
     ///
     /// Function context: `crates/ferrum_core/src/desc/estate.rs`.
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-    fn calculate(&self, mol: &mut Molecule, ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
+    fn calculate(
+        &self,
+        mol: &mut Molecule,
+        ctx: &mut crate::desc::context::CalculationContext,
+    ) -> DescriptorValue {
         let mut values = Vec::with_capacity(47);
 
         let estates = compute_estates(mol, ctx);

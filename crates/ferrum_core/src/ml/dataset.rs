@@ -1,6 +1,5 @@
 //! QsarDataset — typed container for feature matrices and targets.
 
-
 //! ## File guide: Dataset
 //!
 //! This file belongs to FerrumChem's **machine-learning pipeline layer**.

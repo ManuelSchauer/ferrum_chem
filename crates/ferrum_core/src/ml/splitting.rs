@@ -1,6 +1,5 @@
 //! Train/test splitting — random, stratified, scaffold-based.
 
-
 //! ## File guide: Splitting
 //!
 //! This file belongs to FerrumChem's **machine-learning pipeline layer**.

@@ -14,7 +14,6 @@
 //! - Bertz (1981) JACS 103, 3599 (BertzCT)
 //! - Kier & Hall (1986) Molecular Connectivity (HallKierAlpha)
 
-
 //! ## File guide: Extra Counts
 //!
 //! This file belongs to FerrumChem's **descriptor/fingerprint feature layer**.
@@ -53,6 +52,7 @@ use crate::mol::molecule::Molecule;
 use crate::types::BondType;
 use smallvec::SmallVec;
 use std::hash::{BuildHasherDefault, Hasher};
+use std::sync::OnceLock;
 
 /// Minimal hasher for `u64` keys used in Bertz connection counting.
 ///
@@ -168,7 +168,11 @@ impl Descriptor for FractionCSP3 {
     ///
     /// Function context: `crates/ferrum_core/src/desc/extra_counts.rs`.
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-    fn calculate(&self, mol: &mut Molecule, ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
+    fn calculate(
+        &self,
+        mol: &mut Molecule,
+        ctx: &mut crate::desc::context::CalculationContext,
+    ) -> DescriptorValue {
         DescriptorValue::Float(compute_fraction_csp3(mol))
     }
 }
@@ -298,7 +302,11 @@ impl Descriptor for NumAmideBonds {
     ///
     /// Function context: `crates/ferrum_core/src/desc/extra_counts.rs`.
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-    fn calculate(&self, mol: &mut Molecule, ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
+    fn calculate(
+        &self,
+        mol: &mut Molecule,
+        ctx: &mut crate::desc::context::CalculationContext,
+    ) -> DescriptorValue {
         DescriptorValue::Int(compute_num_amide_bonds(mol))
     }
 }
@@ -340,7 +348,11 @@ impl Descriptor for AromaticAtomFraction {
     ///
     /// Function context: `crates/ferrum_core/src/desc/extra_counts.rs`.
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-    fn calculate(&self, mol: &mut Molecule, ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
+    fn calculate(
+        &self,
+        mol: &mut Molecule,
+        ctx: &mut crate::desc::context::CalculationContext,
+    ) -> DescriptorValue {
         DescriptorValue::Float(compute_aromatic_atom_fraction(mol))
     }
 }
@@ -382,11 +394,7 @@ const HALL_KIER_ALPHA_TABLE: [[f64; 3]; 119] = build_hall_kier_alpha_table();
 /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
 fn hall_kier_alpha_lookup(atomic_number: u8, hyb_idx: usize) -> Option<f64> {
     let value = HALL_KIER_ALPHA_TABLE[atomic_number as usize][hyb_idx];
-    if value.is_nan() {
-        None
-    } else {
-        Some(value)
-    }
+    if value.is_nan() { None } else { Some(value) }
 }
 
 /// Computes hall kier alpha sum.
@@ -447,7 +455,11 @@ impl Descriptor for HallKierAlpha {
     ///
     /// Function context: `crates/ferrum_core/src/desc/extra_counts.rs`.
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-    fn calculate(&self, mol: &mut Molecule, ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
+    fn calculate(
+        &self,
+        mol: &mut Molecule,
+        ctx: &mut crate::desc::context::CalculationContext,
+    ) -> DescriptorValue {
         DescriptorValue::Float(compute_hall_kier_alpha(mol))
     }
 }
@@ -538,16 +550,16 @@ fn compute_bertz_ct(mol: &mut Molecule, ctx: &mut crate::desc::context::Calculat
     super::balaban::ensure_bo_distance_matrix_cached(mol);
     let bo_dist = super::balaban::cached_bo_distance_matrix_ref(mol)
         .expect("Balaban BO distance cache initialized");
-        
+
     ctx.bfs_dist.clear();
     ctx.bfs_dist.resize(n, 0);
     let sym_classes = &mut ctx.bfs_dist;
     let cutoff = n.min(100);
-    
-    let mut class_by_key: std::collections::HashMap<SmallVec<[i32; 64]>, usize> = 
+
+    let mut class_by_key: std::collections::HashMap<SmallVec<[i32; 64]>, usize> =
         std::collections::HashMap::with_capacity(n);
     let mut next_class = 1usize;
-    
+
     let sorted_distances = &mut ctx.vec_a;
     let mut key_buf = SmallVec::<[i32; 64]>::new();
     for i in 0..n {
@@ -640,7 +652,7 @@ fn compute_bertz_ct(mol: &mut Molecule, ctx: &mut crate::desc::context::Calculat
     let mut sum_c_log_c = 0.0f64;
     for &v in connection_counts.values() {
         if v > 0.0 {
-            sum_c_log_c += v * v.log2();
+            sum_c_log_c = v.mul_add(v.log2(), sum_c_log_c);
         }
     }
     let conn_ie = 2.0 * tot_conn * tot_conn.log2() - sum_c_log_c;
@@ -652,7 +664,7 @@ fn compute_bertz_ct(mol: &mut Molecule, ctx: &mut crate::desc::context::Calculat
     for &count in &atom_type_counts {
         if count > 0 {
             let c = count as f64;
-            atom_ie += c * (n_f64 / c).log2();
+            atom_ie = c.mul_add((n_f64 / c).log2(), atom_ie);
         }
     }
 
@@ -688,7 +700,11 @@ impl Descriptor for BertzCT {
     ///
     /// Function context: `crates/ferrum_core/src/desc/extra_counts.rs`.
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-    fn calculate(&self, mol: &mut Molecule, ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
+    fn calculate(
+        &self,
+        mol: &mut Molecule,
+        ctx: &mut crate::desc::context::CalculationContext,
+    ) -> DescriptorValue {
         DescriptorValue::Float(compute_bertz_ct(mol, ctx))
     }
 }
@@ -726,25 +742,62 @@ fn shannon_entropy(counts: &[u32]) -> f64 {
 /// Reference: D. Bonchev & N. Trinajstic, J. Chem. Phys. 67, 4517-4533 (1977)
 pub struct Ipc;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum IpcMode {
+    Fast,
+    Avg,
+}
+
+fn ipc_mode() -> IpcMode {
+    static MODE: OnceLock<IpcMode> = OnceLock::new();
+    *MODE.get_or_init(|| {
+        match std::env::var("FERRUM_IPC_MODE")
+            .ok()
+            .as_deref()
+            .map(|s| s.trim().to_ascii_lowercase())
+        {
+            Some(mode) if mode == "avg" => IpcMode::Avg,
+            _ => IpcMode::Fast,
+        }
+    })
+}
+
+fn compute_ipc_fast(mol: &Molecule, ctx: &mut crate::desc::context::CalculationContext) -> f64 {
+    compute_ipc_recurrence(mol, ctx, false)
+}
+
+fn compute_ipc_avg(mol: &Molecule, ctx: &mut crate::desc::context::CalculationContext) -> f64 {
+    compute_ipc_recurrence(mol, ctx, true)
+}
+
 /// Computes ipc.
 ///
 /// Function context: `crates/ferrum_core/src/desc/extra_counts.rs`.
 /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-fn compute_ipc(mol: &Molecule, ctx: &mut crate::desc::context::CalculationContext) -> f64 {
+fn compute_ipc_recurrence(
+    mol: &Molecule,
+    ctx: &mut crate::desc::context::CalculationContext,
+    average: bool,
+) -> f64 {
     let n = mol.num_atoms();
     if n < 2 {
         return 0.0;
     }
 
     let n2 = n * n;
-    
+
     // Borrow context buffers
-    ctx.mat_a.clear(); ctx.mat_a.resize(n2, 0.0);
-    ctx.mat_b.clear(); ctx.mat_b.resize(n2, 0.0);
-    ctx.mat_c.clear(); ctx.mat_c.resize(n2, 0.0);
-    ctx.mat_d.clear(); ctx.mat_d.resize(n2, 0.0);
-    ctx.vec_a.clear(); ctx.vec_a.resize(n + 1, 0.0);
-    
+    ctx.mat_a.clear();
+    ctx.mat_a.resize(n2, 0.0);
+    ctx.mat_b.clear();
+    ctx.mat_b.resize(n2, 0.0);
+    ctx.mat_c.clear();
+    ctx.mat_c.resize(n2, 0.0);
+    ctx.mat_d.clear();
+    ctx.mat_d.resize(n2, 0.0);
+    ctx.vec_a.clear();
+    ctx.vec_a.resize(n + 1, 0.0);
+
     let adj = &mut ctx.mat_a;
     let mut an = &mut ctx.mat_b;
     let mut bn = &mut ctx.mat_c;
@@ -786,7 +839,7 @@ fn compute_ipc(mol: &Molecule, ctx: &mut crate::desc::context::CalculationContex
                     }
                     let bn_row = l * n;
                     for j in 0..n {
-                        next[row + j] += a_il * bn[bn_row + j];
+                        next[row + j] = a_il.mul_add(bn[bn_row + j], next[row + j]);
                     }
                 }
             }
@@ -815,7 +868,14 @@ fn compute_ipc(mol: &Molecule, ctx: &mut crate::desc::context::CalculationContex
         }
     }
 
-    total * ie
+    if average { ie } else { total * ie }
+}
+
+fn compute_ipc(mol: &Molecule, ctx: &mut crate::desc::context::CalculationContext) -> f64 {
+    match ipc_mode() {
+        IpcMode::Fast => compute_ipc_fast(mol, ctx),
+        IpcMode::Avg => compute_ipc_avg(mol, ctx),
+    }
 }
 
 impl Descriptor for Ipc {
@@ -831,7 +891,11 @@ impl Descriptor for Ipc {
     ///
     /// Function context: `crates/ferrum_core/src/desc/extra_counts.rs`.
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-    fn calculate(&self, mol: &mut Molecule, ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
+    fn calculate(
+        &self,
+        mol: &mut Molecule,
+        ctx: &mut crate::desc::context::CalculationContext,
+    ) -> DescriptorValue {
         DescriptorValue::Float64(compute_ipc(mol, ctx))
     }
 }
@@ -873,7 +937,11 @@ impl Descriptor for FragmentComplexity {
     ///
     /// Function context: `crates/ferrum_core/src/desc/extra_counts.rs`.
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-    fn calculate(&self, mol: &mut Molecule, ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
+    fn calculate(
+        &self,
+        mol: &mut Molecule,
+        ctx: &mut crate::desc::context::CalculationContext,
+    ) -> DescriptorValue {
         DescriptorValue::Float(compute_fragment_complexity(mol))
     }
 }
@@ -910,7 +978,11 @@ mod tests {
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn calc_float(desc: &dyn Descriptor, smiles: &str) -> f32 {
         let mut mol = parse_smiles(smiles).expect("valid SMILES");
-        desc.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()).as_float()
+        desc.calculate(
+            &mut mol,
+            &mut crate::desc::context::CalculationContext::new(),
+        )
+        .as_float()
     }
 
     /// Implements int.
@@ -919,7 +991,11 @@ mod tests {
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn calc_int(desc: &dyn Descriptor, smiles: &str) -> u32 {
         let mut mol = parse_smiles(smiles).expect("valid SMILES");
-        desc.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()).as_int()
+        desc.calculate(
+            &mut mol,
+            &mut crate::desc::context::CalculationContext::new(),
+        )
+        .as_int()
     }
 
     // -- FractionCSP3 --
@@ -1348,6 +1424,26 @@ mod tests {
     fn test_ipc_diverse() {
         let v = calc_float(&Ipc, "CC=O");
         assert!(v > 0.0, "should have info content: {}", v);
+    }
+
+    #[test]
+    /// Runs regression test for ipc avg mode returns smaller value.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/extra_counts.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
+    fn test_ipc_avg_mode_is_entropy_only() {
+        // This test exercises the average-Ipc mode gate without affecting default behavior.
+        // `Ipc(avg)` should be <= `Ipc` for positive total coefficient mass.
+        if std::env::var("FERRUM_IPC_MODE")
+            .ok()
+            .as_deref()
+            .map(|v| v.eq_ignore_ascii_case("avg"))
+            .unwrap_or(false)
+        {
+            let avg = calc_float(&Ipc, "c1ccccc1");
+            assert!(avg > 0.0, "avg Ipc should be positive: {avg}");
+            assert!(avg < 10.0, "avg Ipc should be entropy-scale, got {avg}");
+        }
     }
 
     // -- FragmentComplexity --

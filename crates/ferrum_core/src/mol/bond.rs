@@ -8,7 +8,6 @@
 //! - Data-oriented Rust struct design for scientific computing.
 //! - Graph-centric chemistry representations.
 
-
 //! ## File guide: Bond
 //!
 //! This file belongs to FerrumChem's **molecular graph model layer**.

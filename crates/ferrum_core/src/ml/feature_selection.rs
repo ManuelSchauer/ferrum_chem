@@ -1,6 +1,5 @@
 //! Feature selection — variance threshold and correlation filter.
 
-
 //! ## File guide: Feature Selection
 //!
 //! This file belongs to FerrumChem's **machine-learning pipeline layer**.
@@ -76,12 +75,7 @@ pub fn correlation_filter(data: &Array2<f64>, threshold: f64) -> Vec<usize> {
     // Compute stds from centered matrix.
     let mut std_devs = vec![0.0f64; n_feat];
     for j in 0..n_feat {
-        let var: f64 = centered_data
-            .column(j)
-            .iter()
-            .map(|&x| x * x)
-            .sum::<f64>()
-            / n;
+        let var: f64 = centered_data.column(j).iter().map(|&x| x * x).sum::<f64>() / n;
         std_devs[j] = var.sqrt().max(1e-12);
     }
 

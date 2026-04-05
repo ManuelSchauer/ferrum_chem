@@ -4,7 +4,6 @@
 //! algorithms, descriptors, and ML surfaces. It captures real-world edge cases
 //! so regressions are caught before parity or performance runs.
 
-
 //! ## File guide: Debug Core
 //!
 //! This file belongs to FerrumChem's **integration/diagnostic validation layer**.
@@ -105,7 +104,10 @@ fn debug_molecules() {
             );
         }
         let mut mw_mol = parse_smiles(smiles).unwrap();
-        let mw_val = MolecularWeight.calculate(&mut mw_mol, &mut ferrum_core::desc::context::CalculationContext::new());
+        let mw_val = MolecularWeight.calculate(
+            &mut mw_mol,
+            &mut ferrum_core::desc::context::CalculationContext::new(),
+        );
         eprintln!("MW: {:?}", mw_val);
         eprintln!("Candidate C(=O)-N single bonds:");
         for (bi, b) in mol.bonds.iter().enumerate() {
@@ -509,7 +511,10 @@ fn debug_rotatable_failures() {
 
         // Also confirm via descriptor
         let mut mol2 = parse_smiles(smiles).expect("parse2");
-        let desc_val = RotatableBondCount.calculate(&mut mol2, &mut ferrum_core::desc::context::CalculationContext::new());
+        let desc_val = RotatableBondCount.calculate(
+            &mut mol2,
+            &mut ferrum_core::desc::context::CalculationContext::new(),
+        );
         eprintln!("  descriptor output: {:?}", desc_val);
     }
 }
@@ -706,7 +711,10 @@ fn debug_hka_failures() {
 
         // Also invoke the descriptor directly
         let mut mol2 = parse_smiles(smiles).expect("parse2");
-        let ferrum_hka = match HallKierAlpha.calculate(&mut mol2, &mut ferrum_core::desc::context::CalculationContext::new()) {
+        let ferrum_hka = match HallKierAlpha.calculate(
+            &mut mol2,
+            &mut ferrum_core::desc::context::CalculationContext::new(),
+        ) {
             ferrum_core::desc::typed::DescriptorValue::Float(v) => v as f64,
             _ => f64::NAN,
         };

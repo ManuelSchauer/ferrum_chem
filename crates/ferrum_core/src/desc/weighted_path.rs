@@ -9,7 +9,6 @@
 //! Reference: Randić, M. (1993) "Novel graph theoretical approach to
 //!            heteroatoms in QSAR", Chemometrics & Intell. Lab. Systems.
 
-
 //! ## File guide: Weighted Path
 //!
 //! This file belongs to FerrumChem's **descriptor/fingerprint feature layer**.
@@ -129,7 +128,11 @@ impl Descriptor for WeightedPath {
     ///
     /// Function context: `crates/ferrum_core/src/desc/weighted_path.rs`.
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-    fn calculate(&self, mol: &mut Molecule, ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
+    fn calculate(
+        &self,
+        mol: &mut Molecule,
+        ctx: &mut crate::desc::context::CalculationContext,
+    ) -> DescriptorValue {
         let mut values = vec![0.0f32; MAX_PATH_LEN * 2];
 
         let n = mol.num_atoms();
@@ -177,7 +180,10 @@ mod tests {
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn calc_wp(smiles: &str) -> Vec<f32> {
         let mut mol = parse_smiles(smiles).expect("valid SMILES");
-        match WeightedPath.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()) {
+        match WeightedPath.calculate(
+            &mut mol,
+            &mut crate::desc::context::CalculationContext::new(),
+        ) {
             DescriptorValue::FloatVec(v) => v,
             other => panic!("expected FloatVec, got {:?}", other),
         }

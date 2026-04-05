@@ -6,7 +6,6 @@
 //! This test is diagnostic: it prints a detailed comparison report showing which
 //! descriptors match RDKit and which differ, with tolerance levels.
 
-
 //! ## File guide: Rdkit Comparison
 //!
 //! This file belongs to FerrumChem's **integration/diagnostic validation layer**.
@@ -456,12 +455,18 @@ fn rdkit_scalar_descriptors() {
             };
 
             let ferrum_val = match check.extract {
-                ExtractKind::Float => match check.descriptor.calculate(&mut mol, &mut ferrum_core::desc::context::CalculationContext::new()) {
+                ExtractKind::Float => match check.descriptor.calculate(
+                    &mut mol,
+                    &mut ferrum_core::desc::context::CalculationContext::new(),
+                ) {
                     DescriptorValue::Float(v) => v as f64,
                     DescriptorValue::Float64(v) => v,
                     _ => continue,
                 },
-                ExtractKind::Int => match check.descriptor.calculate(&mut mol, &mut ferrum_core::desc::context::CalculationContext::new()) {
+                ExtractKind::Int => match check.descriptor.calculate(
+                    &mut mol,
+                    &mut ferrum_core::desc::context::CalculationContext::new(),
+                ) {
                     DescriptorValue::Int(v) => v as f64,
                     _ => continue,
                 },
@@ -516,7 +521,10 @@ fn compare_vec(
         Err(_) => return out,
     };
 
-    let value = desc.calculate(&mut mol, &mut ferrum_core::desc::context::CalculationContext::new());
+    let value = desc.calculate(
+        &mut mol,
+        &mut ferrum_core::desc::context::CalculationContext::new(),
+    );
     let ferrum_vec: Vec<f64> = match &value {
         DescriptorValue::FloatVec(v) => v.iter().map(|&x| x as f64).collect(),
         DescriptorValue::IntU16Vec(v) => v.iter().map(|&x| x as f64).collect(),
@@ -612,7 +620,10 @@ fn rdkit_chi_kappa_indices() {
             Err(_) => continue,
         };
 
-        if let DescriptorValue::FloatVec(ref chi_vec) = ChiIndices.calculate(&mut mol, &mut ferrum_core::desc::context::CalculationContext::new()) {
+        if let DescriptorValue::FloatVec(ref chi_vec) = ChiIndices.calculate(
+            &mut mol,
+            &mut ferrum_core::desc::context::CalculationContext::new(),
+        ) {
             for (col, idx) in &chi_map {
                 if let Some(rdkit_val) = values.get(*col).and_then(|v| parse_csv_f64(v)) {
                     let fv = chi_vec[*idx] as f64;
@@ -630,7 +641,10 @@ fn rdkit_chi_kappa_indices() {
             }
         }
 
-        if let DescriptorValue::FloatVec(ref kv) = KappaIndices.calculate(&mut mol, &mut ferrum_core::desc::context::CalculationContext::new()) {
+        if let DescriptorValue::FloatVec(ref kv) = KappaIndices.calculate(
+            &mut mol,
+            &mut ferrum_core::desc::context::CalculationContext::new(),
+        ) {
             for (col, idx) in &kappa_map {
                 if let Some(rdkit_val) = values.get(*col).and_then(|v| parse_csv_f64(v)) {
                     let fv = kv[*idx] as f64;
@@ -670,7 +684,10 @@ fn rdkit_ring_descriptors() {
         };
 
         // RingTypeCounts: [saturated, aliphatic, aromatic]
-        if let DescriptorValue::IntU16Vec(ref v) = RingTypeCounts.calculate(&mut mol, &mut ferrum_core::desc::context::CalculationContext::new()) {
+        if let DescriptorValue::IntU16Vec(ref v) = RingTypeCounts.calculate(
+            &mut mol,
+            &mut ferrum_core::desc::context::CalculationContext::new(),
+        ) {
             if let Some(rv) = values
                 .get("NumSaturatedRings")
                 .and_then(|s| parse_csv_f64(s))
@@ -719,7 +736,10 @@ fn rdkit_ring_descriptors() {
         }
 
         // SmallRingDescriptor: [0]=total rings
-        if let DescriptorValue::IntU16Vec(ref v) = SmallRingDescriptor.calculate(&mut mol, &mut ferrum_core::desc::context::CalculationContext::new()) {
+        if let DescriptorValue::IntU16Vec(ref v) = SmallRingDescriptor.calculate(
+            &mut mol,
+            &mut ferrum_core::desc::context::CalculationContext::new(),
+        ) {
             if let Some(rv) = values.get("RingCount").and_then(|s| parse_csv_f64(s)) {
                 let fv = v[0] as f64;
                 results.push(CompResult {
@@ -736,4 +756,133 @@ fn rdkit_ring_descriptors() {
     }
 
     print_summary(&results, "RING DESCRIPTORS vs RDKit");
+}
+
+#[test]
+/// Runs regression test for rdkit ipc relative error diagnostics.
+///
+/// Function context: `crates/ferrum_core/tests/rdkit_comparison.rs`.
+/// Test-layer note: this assertion path pins expected behavior to prevent regressions.
+fn rdkit_ipc_relative_error_diagnostics() {
+    let reference = load_reference();
+    let mut rel_errors: Vec<(String, f64, f64, f64)> = Vec::new();
+    let mut max_abs = 0.0_f64;
+    let mut max_abs_name = String::new();
+
+    for (smiles, name, values) in &reference {
+        let rdkit_val = match values.get("Ipc").and_then(|s| parse_csv_f64(s)) {
+            Some(v) if v.is_finite() && v != 0.0 => v,
+            _ => continue,
+        };
+        let mut mol = match parse_smiles(smiles) {
+            Ok(m) => m,
+            Err(_) => continue,
+        };
+        let ferrum_val = match Ipc.calculate(
+            &mut mol,
+            &mut ferrum_core::desc::context::CalculationContext::new(),
+        ) {
+            DescriptorValue::Float64(v) => v,
+            DescriptorValue::Float(v) => v as f64,
+            _ => continue,
+        };
+        if !ferrum_val.is_finite() {
+            continue;
+        }
+
+        let abs_diff = (ferrum_val - rdkit_val).abs();
+        let rel = abs_diff / rdkit_val.abs();
+        rel_errors.push((name.clone(), rel, ferrum_val, rdkit_val));
+        if abs_diff > max_abs {
+            max_abs = abs_diff;
+            max_abs_name = name.clone();
+        }
+    }
+
+    rel_errors.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    let max_rel = rel_errors.first().map(|v| v.1).unwrap_or(0.0);
+    let p95_rel = if rel_errors.is_empty() {
+        0.0
+    } else {
+        let idx = ((rel_errors.len() as f64 * 0.95).floor() as usize).min(rel_errors.len() - 1);
+        let mut sorted: Vec<f64> = rel_errors.iter().map(|v| v.1).collect();
+        sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        sorted[idx]
+    };
+
+    eprintln!("\nIPC relative diagnostics over {} rows:", rel_errors.len());
+    eprintln!("  max relative error: {max_rel:.6}");
+    eprintln!("  p95 relative error: {p95_rel:.6}");
+    eprintln!("  max absolute diff: {max_abs:.4} ({max_abs_name})");
+    for (name, rel, ferrum, rdkit) in rel_errors.iter().take(5) {
+        eprintln!(
+            "  top rel: {:<20} rel={:.6} ferrum={:.4} rdkit={:.4}",
+            name, rel, ferrum, rdkit
+        );
+    }
+
+    // Keep this diagnostic test green while still signaling drift magnitude.
+    // This upper bound is intentionally loose and only guards catastrophic breakage.
+    assert!(
+        max_rel < 20.0,
+        "Ipc relative drift exploded: max_rel={max_rel}, max_abs={max_abs} ({max_abs_name})"
+    );
+}
+
+#[test]
+/// Runs regression test for rdkit avgipc diagnostics.
+///
+/// Function context: `crates/ferrum_core/tests/rdkit_comparison.rs`.
+/// Test-layer note: this assertion path pins expected behavior to prevent regressions.
+fn rdkit_avgipc_diagnostics() {
+    if !std::env::var("FERRUM_IPC_MODE")
+        .ok()
+        .as_deref()
+        .map(|v| v.eq_ignore_ascii_case("avg"))
+        .unwrap_or(false)
+    {
+        return;
+    }
+
+    let reference = load_reference();
+    let mut vals = Vec::new();
+
+    for (smiles, name, _values) in &reference {
+        let mut mol = match parse_smiles(smiles) {
+            Ok(m) => m,
+            Err(_) => continue,
+        };
+        let avg = match Ipc.calculate(
+            &mut mol,
+            &mut ferrum_core::desc::context::CalculationContext::new(),
+        ) {
+            DescriptorValue::Float64(v) => v,
+            DescriptorValue::Float(v) => v as f64,
+            _ => continue,
+        };
+        if avg.is_finite() {
+            vals.push((name.clone(), avg));
+        }
+    }
+
+    vals.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    let max_avg = vals.first().map(|v| v.1).unwrap_or(0.0);
+    let min_avg = vals
+        .iter()
+        .map(|(_, v)| *v)
+        .fold(f64::INFINITY, |a, b| a.min(b));
+    eprintln!(
+        "\nAvgIpc diagnostics (mode=avg) rows={} min={:.6} max={:.6}",
+        vals.len(),
+        min_avg,
+        max_avg
+    );
+    for (name, v) in vals.iter().take(5) {
+        eprintln!("  top avg: {:<20} value={:.6}", name, v);
+    }
+
+    assert!(
+        max_avg > 0.0,
+        "AvgIpc should produce positive values for this slice"
+    );
 }

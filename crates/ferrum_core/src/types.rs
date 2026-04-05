@@ -1,4 +1,3 @@
-
 //! ## File guide: Types
 //!
 //! This file belongs to FerrumChem's **library support layer**.

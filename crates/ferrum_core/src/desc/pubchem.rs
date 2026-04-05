@@ -14,7 +14,6 @@
 //!
 //! Reference: ftp://ftp.ncbi.nlm.nih.gov/pubchem/specifications/pubchem_fingerprints.txt
 
-
 //! ## File guide: Pubchem
 //!
 //! This file belongs to FerrumChem's **descriptor/fingerprint feature layer**.
@@ -343,7 +342,11 @@ impl Descriptor for PubChem881 {
     ///
     /// Function context: `crates/ferrum_core/src/desc/pubchem.rs`.
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-    fn calculate(&self, mol: &mut Molecule, _ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
+    fn calculate(
+        &self,
+        mol: &mut Molecule,
+        _ctx: &mut crate::desc::context::CalculationContext,
+    ) -> DescriptorValue {
         let mut bits = bitvec![u8, Lsb0; 0; 881];
         let stats = MoleculeScreenStats::from_molecule(mol);
 
@@ -1493,7 +1496,13 @@ mod tests {
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn calc_pubchem(smiles: &str) -> BitVec<u8, Lsb0> {
         let mut mol = parse_smiles(smiles).expect("valid SMILES");
-        PubChem881.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()).as_binary().clone()
+        PubChem881
+            .calculate(
+                &mut mol,
+                &mut crate::desc::context::CalculationContext::new(),
+            )
+            .as_binary()
+            .clone()
     }
 
     #[test]
@@ -1503,7 +1512,10 @@ mod tests {
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_pubchem_size() {
         let mut mol = parse_smiles("C").unwrap();
-        let fp = PubChem881.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new());
+        let fp = PubChem881.calculate(
+            &mut mol,
+            &mut crate::desc::context::CalculationContext::new(),
+        );
         assert_eq!(fp.len(), 881);
     }
 

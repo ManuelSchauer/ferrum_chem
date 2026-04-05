@@ -8,7 +8,6 @@
 //! - Implementing stateless descriptor structs in Rust.
 //! - Mapping chemistry concepts to reproducible numeric features.
 
-
 //! ## File guide: Small Ring
 //!
 //! This file belongs to FerrumChem's **descriptor/fingerprint feature layer**.
@@ -42,9 +41,7 @@
 //! - Repository unit and parity tests covering `Small Ring` behavior and edge molecules.
 //! - Code-local source of truth: symbols and tests declared in `crates/ferrum_core/src/desc/small_ring.rs`.
 
-use crate::algo::rings::{
-    cached_symmetrized_sssr_bonds_ref, ensure_symmetrized_sssr_bonds_cached,
-};
+use crate::algo::rings::{cached_symmetrized_sssr_bonds_ref, ensure_symmetrized_sssr_bonds_cached};
 use crate::desc::typed::{Descriptor, DescriptorValue};
 use crate::mol::molecule::Molecule;
 use crate::types::AtomIdx;
@@ -78,7 +75,11 @@ impl Descriptor for SmallRingDescriptor {
     ///
     /// Function context: `crates/ferrum_core/src/desc/small_ring.rs`.
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-    fn calculate(&self, mol: &mut Molecule, ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
+    fn calculate(
+        &self,
+        mol: &mut Molecule,
+        ctx: &mut crate::desc::context::CalculationContext,
+    ) -> DescriptorValue {
         let mut counts = vec![0u16; 11];
 
         // RDKit ring counts are based on a symmetrized SSSR-like set, so bridged
@@ -468,7 +469,10 @@ mod tests {
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn calc_small_ring(smiles: &str) -> Vec<u16> {
         let mut mol = prepare_molecule(smiles);
-        match SmallRingDescriptor.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()) {
+        match SmallRingDescriptor.calculate(
+            &mut mol,
+            &mut crate::desc::context::CalculationContext::new(),
+        ) {
             DescriptorValue::IntU16Vec(v) => v,
             other => panic!("expected IntU16Vec, got {:?}", other),
         }

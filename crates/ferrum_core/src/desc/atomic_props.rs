@@ -1,6 +1,5 @@
 //! Shared atomic property lookup tables used by multiple descriptors.
 
-
 //! ## File guide: Atomic Props
 //!
 //! This file belongs to FerrumChem's **descriptor/fingerprint feature layer**.

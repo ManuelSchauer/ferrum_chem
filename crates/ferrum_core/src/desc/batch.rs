@@ -8,7 +8,6 @@
 //! - Implementing stateless descriptor structs in Rust.
 //! - Mapping chemistry concepts to reproducible numeric features.
 
-
 //! ## File guide: Batch
 //!
 //! This file belongs to FerrumChem's **descriptor/fingerprint feature layer**.
@@ -53,7 +52,7 @@ use super::chains::{LargestChain, LongestAliphaticChain};
 use super::chi::ChiIndices;
 use super::estate::EStateIndices;
 use super::extra_counts::{
-    AromaticAtomFraction, BertzCT, FragmentComplexity, FractionCSP3, HallKierAlpha, Ipc,
+    AromaticAtomFraction, BertzCT, FractionCSP3, FragmentComplexity, HallKierAlpha, Ipc,
     NumAmideBonds,
 };
 use super::fingerprint::{ECFP, FCFP};
@@ -83,8 +82,8 @@ use super::small_ring::SmallRingDescriptor;
 use super::tpsa::Tpsa;
 use super::typed::{Descriptor, DescriptorValue};
 use super::vsa::{
-    fill_peoe_vsa_into, fill_slogp_vsa_into, fill_smr_vsa_into, LabuteASA, PeoeVsa, SlogpVSA,
-    SmrVSA,
+    LabuteASA, PeoeVsa, SlogpVSA, SmrVSA, fill_peoe_vsa_into, fill_slogp_vsa_into,
+    fill_smr_vsa_into,
 };
 use super::weighted_path::WeightedPath;
 use super::wiener_numbers::WienerIndex;
@@ -295,6 +294,62 @@ impl BatchDescriptor {
         &ALL
     }
 
+    /// Returns a curated descriptor subset for fast, broad-coverage ML featurization.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/batch.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
+    pub fn fast_ml_preset() -> &'static [Self] {
+        const FAST_ML: [BatchDescriptor; 46] = [
+            BatchDescriptor::MolecularWeight,
+            BatchDescriptor::LogP,
+            BatchDescriptor::MolarRefractivity,
+            BatchDescriptor::Tpsa,
+            BatchDescriptor::HBondDonor,
+            BatchDescriptor::HBondAcceptor,
+            BatchDescriptor::RotatableBondCount,
+            BatchDescriptor::HeavyAtomCount,
+            BatchDescriptor::AtomCount,
+            BatchDescriptor::ElementCounts,
+            BatchDescriptor::AromaticAtomCount,
+            BatchDescriptor::HeteroatomCount,
+            BatchDescriptor::AromaticRingCount,
+            BatchDescriptor::BondCount,
+            BatchDescriptor::BondCountDetailed,
+            BatchDescriptor::ValenceElectrons,
+            BatchDescriptor::HybridizationRatio,
+            BatchDescriptor::VAdjMa,
+            BatchDescriptor::FormalCharge,
+            BatchDescriptor::FractionCSP3,
+            BatchDescriptor::BertzCT,
+            BatchDescriptor::FragmentComplexity,
+            BatchDescriptor::LabuteAsa,
+            BatchDescriptor::Qed,
+            BatchDescriptor::NumAmideBonds,
+            BatchDescriptor::HallKierAlpha,
+            BatchDescriptor::AromaticAtomFraction,
+            BatchDescriptor::LipinskiViolations,
+            BatchDescriptor::BalabanIndex,
+            BatchDescriptor::WienerIndex,
+            BatchDescriptor::ZagrebIndices,
+            BatchDescriptor::PetitjeanIndex,
+            BatchDescriptor::RingTypeCounts,
+            BatchDescriptor::PiSystemCounts,
+            BatchDescriptor::LargestPiSystem,
+            BatchDescriptor::CarbonTypes,
+            BatchDescriptor::FunctionalGroupCounts,
+            BatchDescriptor::AcidicGroupCount,
+            BatchDescriptor::BasicGroupCount,
+            BatchDescriptor::LongestAliphaticChain,
+            BatchDescriptor::LargestChain,
+            BatchDescriptor::APol,
+            BatchDescriptor::BPol,
+            BatchDescriptor::SlogpVsa,
+            BatchDescriptor::SmrVsa,
+            BatchDescriptor::PeoeVsa,
+        ];
+        &FAST_ML
+    }
+
     /// Implements the behavior encoded by this function.
     ///
     /// Function context: `crates/ferrum_core/src/desc/batch.rs`.
@@ -374,7 +429,11 @@ impl BatchDescriptor {
     ///
     /// Function context: `crates/ferrum_core/src/desc/batch.rs`.
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-    pub fn calculate(self, mol: &mut Molecule, ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
+    pub fn calculate(
+        self,
+        mol: &mut Molecule,
+        ctx: &mut crate::desc::context::CalculationContext,
+    ) -> DescriptorValue {
         match self {
             Self::MolecularWeight => MolecularWeight.calculate(mol, ctx),
             Self::LogP => LogP.calculate(mol, ctx),
@@ -440,9 +499,7 @@ impl BatchDescriptor {
             Self::PubChem881 => PubChem881.calculate(mol, ctx),
             Self::Ecfp4 => ECFP::ecfp4().calculate(mol, ctx),
             Self::Fcfp4 => FCFP::fcfp4().calculate(mol, ctx),
-            Self::AtomPairFingerprint => {
-                AtomPairFingerprint::default_size().calculate(mol, ctx)
-            }
+            Self::AtomPairFingerprint => AtomPairFingerprint::default_size().calculate(mol, ctx),
             Self::TopologicalTorsionFingerprint => {
                 TopologicalTorsionFingerprint::default_size().calculate(mol, ctx)
             }
@@ -488,7 +545,13 @@ impl BatchDescriptor {
     ///
     /// Function context: `crates/ferrum_core/src/desc/batch.rs`.
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-    pub fn write_into(self, mol: &mut Molecule, row: &mut [f32], offset: &mut usize, ctx: &mut crate::desc::context::CalculationContext) {
+    pub fn write_into(
+        self,
+        mol: &mut Molecule,
+        row: &mut [f32],
+        offset: &mut usize,
+        ctx: &mut crate::desc::context::CalculationContext,
+    ) {
         match self {
             Self::SlogpVsa => {
                 let end = *offset + self.feature_len();
@@ -578,7 +641,12 @@ fn infer_cols_static(descriptors: &[BatchDescriptor]) -> usize {
 ///
 /// Function context: `crates/ferrum_core/src/desc/batch.rs`.
 /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-fn fill_row_dyn(row: &mut [f32], mol: &mut Molecule, descriptors: &[Box<dyn Descriptor>], ctx: &mut crate::desc::context::CalculationContext) {
+fn fill_row_dyn(
+    row: &mut [f32],
+    mol: &mut Molecule,
+    descriptors: &[Box<dyn Descriptor>],
+    ctx: &mut crate::desc::context::CalculationContext,
+) {
     let mut offset = 0usize;
     for desc in descriptors {
         write_descriptor_value(desc.calculate(mol, ctx), row, &mut offset);
@@ -590,7 +658,12 @@ fn fill_row_dyn(row: &mut [f32], mol: &mut Molecule, descriptors: &[Box<dyn Desc
 ///
 /// Function context: `crates/ferrum_core/src/desc/batch.rs`.
 /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-fn fill_row_static(row: &mut [f32], mol: &mut Molecule, descriptors: &[BatchDescriptor], ctx: &mut crate::desc::context::CalculationContext) {
+fn fill_row_static(
+    row: &mut [f32],
+    mol: &mut Molecule,
+    descriptors: &[BatchDescriptor],
+    ctx: &mut crate::desc::context::CalculationContext,
+) {
     let mut offset = 0usize;
     for &desc in descriptors {
         desc.write_into(mol, row, &mut offset, ctx);
@@ -625,10 +698,13 @@ pub fn calculate_batch_flat(
     let mut data = vec![0.0f32; rows * cols];
     data.par_chunks_mut(cols)
         .zip(molecules.par_iter_mut())
-        .for_each_init(crate::desc::context::CalculationContext::new, |ctx, (row, mol)| {
-            ctx.reset_for_new_molecule();
-            fill_row_dyn(row, mol, descriptors, ctx);
-        });
+        .for_each_init(
+            crate::desc::context::CalculationContext::new,
+            |ctx, (row, mol)| {
+                ctx.reset_for_new_molecule();
+                fill_row_dyn(row, mol, descriptors, ctx);
+            },
+        );
 
     FlatDescriptorMatrix { rows, cols, data }
 }
@@ -659,10 +735,13 @@ pub fn calculate_batch_flat_static(
     let mut data = vec![0.0f32; rows * cols];
     data.par_chunks_mut(cols)
         .zip(molecules.par_iter_mut())
-        .for_each_init(crate::desc::context::CalculationContext::new, |ctx, (row, mol)| {
-            ctx.reset_for_new_molecule();
-            fill_row_static(row, mol, descriptors, ctx);
-        });
+        .for_each_init(
+            crate::desc::context::CalculationContext::new,
+            |ctx, (row, mol)| {
+                ctx.reset_for_new_molecule();
+                fill_row_static(row, mol, descriptors, ctx);
+            },
+        );
 
     FlatDescriptorMatrix { rows, cols, data }
 }
@@ -701,17 +780,20 @@ where
     let mut data = vec![0.0f32; rows * cols];
     data.par_chunks_mut(cols)
         .zip(molecules.par_iter_mut())
-        .try_for_each_init(crate::desc::context::CalculationContext::new, |ctx, (row, mol)| {
-            if should_cancel() {
-                return Err(());
-            }
-            ctx.reset_for_new_molecule();
-            fill_row_static(row, mol, descriptors, ctx);
-            if should_cancel() {
-                return Err(());
-            }
-            Ok(())
-        })?;
+        .try_for_each_init(
+            crate::desc::context::CalculationContext::new,
+            |ctx, (row, mol)| {
+                if should_cancel() {
+                    return Err(());
+                }
+                ctx.reset_for_new_molecule();
+                fill_row_static(row, mol, descriptors, ctx);
+                if should_cancel() {
+                    return Err(());
+                }
+                Ok(())
+            },
+        )?;
 
     if should_cancel() {
         return Err(());
@@ -904,13 +986,53 @@ mod tests {
         let descriptors = [BatchDescriptor::MolecularWeight];
         let canceled = std::sync::atomic::AtomicBool::new(true);
 
-        let result = calculate_batch_flat_static_cancellable(
-            &mut molecules,
-            &descriptors,
-            &|| canceled.load(std::sync::atomic::Ordering::Relaxed),
-        );
+        let result = calculate_batch_flat_static_cancellable(&mut molecules, &descriptors, &|| {
+            canceled.load(std::sync::atomic::Ordering::Relaxed)
+        });
 
-        assert!(result.is_err(), "Expected cancellation to stop batch calculation");
+        assert!(
+            result.is_err(),
+            "Expected cancellation to stop batch calculation"
+        );
+    }
+
+    #[test]
+    /// Runs regression test for fast ml preset descriptor list consistency.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/batch.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
+    fn test_fast_ml_preset_is_valid_subset_and_excludes_heavy_fingerprints() {
+        let preset = BatchDescriptor::fast_ml_preset();
+        assert!(!preset.is_empty(), "Fast ML preset must not be empty");
+
+        let all = BatchDescriptor::all();
+        for (idx, descriptor) in preset.iter().enumerate() {
+            assert!(
+                all.contains(descriptor),
+                "Fast ML preset contains descriptor that is not in BatchDescriptor::all(): {:?}",
+                descriptor
+            );
+            assert!(
+                !preset[idx + 1..].contains(descriptor),
+                "Fast ML preset must not contain duplicates: {:?}",
+                descriptor
+            );
+        }
+
+        assert!(
+            !preset.iter().any(|descriptor| {
+                matches!(
+                    descriptor,
+                    BatchDescriptor::MaccsKeys
+                        | BatchDescriptor::PubChem881
+                        | BatchDescriptor::Ecfp4
+                        | BatchDescriptor::Fcfp4
+                        | BatchDescriptor::AtomPairFingerprint
+                        | BatchDescriptor::TopologicalTorsionFingerprint
+                )
+            }),
+            "Fast ML preset should avoid high-dimensional fingerprint families"
+        );
     }
 
     #[test]
@@ -955,7 +1077,10 @@ mod tests {
             .iter()
             .map(|s| parse_smiles(s).expect("valid torture SMILES"))
             .collect::<Vec<_>>();
-        assert!(!molecules.is_empty(), "torture_set.csv produced no molecules");
+        assert!(
+            !molecules.is_empty(),
+            "torture_set.csv produced no molecules"
+        );
 
         let descriptors = BatchDescriptor::all().to_vec();
         let static_cols = descriptors.iter().map(|d| d.feature_len()).sum::<usize>();

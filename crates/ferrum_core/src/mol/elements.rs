@@ -1,4 +1,3 @@
-
 //! ## File guide: Elements
 //!
 //! This file belongs to FerrumChem's **molecular graph model layer**.

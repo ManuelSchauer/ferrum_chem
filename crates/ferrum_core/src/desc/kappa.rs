@@ -8,7 +8,6 @@
 //! Reference: Kier, L.B. (1985) "A Shape Index from Molecular Graphs"
 //!            Quant. Struct.-Act. Relat. 4, 109-116.
 
-
 //! ## File guide: Kappa
 //!
 //! This file belongs to FerrumChem's **descriptor/fingerprint feature layer**.
@@ -75,7 +74,11 @@ impl Descriptor for KappaIndices {
     ///
     /// Function context: `crates/ferrum_core/src/desc/kappa.rs`.
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-    fn calculate(&self, mol: &mut Molecule, ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
+    fn calculate(
+        &self,
+        mol: &mut Molecule,
+        ctx: &mut crate::desc::context::CalculationContext,
+    ) -> DescriptorValue {
         let n = mol.num_atoms();
 
         if n == 0 {
@@ -156,7 +159,10 @@ mod tests {
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn calc_kappa(smiles: &str) -> Vec<f32> {
         let mut mol = parse_smiles(smiles).expect("valid SMILES");
-        match KappaIndices.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()) {
+        match KappaIndices.calculate(
+            &mut mol,
+            &mut crate::desc::context::CalculationContext::new(),
+        ) {
             DescriptorValue::FloatVec(v) => v,
             other => panic!("expected FloatVec, got {:?}", other),
         }

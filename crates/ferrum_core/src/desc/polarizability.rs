@@ -8,7 +8,6 @@
 //! - Implementing stateless descriptor structs in Rust.
 //! - Mapping chemistry concepts to reproducible numeric features.
 
-
 //! ## File guide: Polarizability
 //!
 //! This file belongs to FerrumChem's **descriptor/fingerprint feature layer**.
@@ -118,12 +117,16 @@ impl Descriptor for APol {
     ///
     /// Function context: `crates/ferrum_core/src/desc/polarizability.rs`.
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-    fn calculate(&self, mol: &mut Molecule, ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
+    fn calculate(
+        &self,
+        mol: &mut Molecule,
+        ctx: &mut crate::desc::context::CalculationContext,
+    ) -> DescriptorValue {
         let h_pol = POLARIZABILITY[1];
         let mut sum = 0.0f32;
         for atom in &mol.atoms {
             sum += atom_pol(atom.atomic_number);
-            sum += atom.total_h() as f32 * h_pol;
+            sum = (atom.total_h() as f32).mul_add(h_pol, sum);
         }
         DescriptorValue::Float(sum)
     }
@@ -145,7 +148,11 @@ impl Descriptor for BPol {
     ///
     /// Function context: `crates/ferrum_core/src/desc/polarizability.rs`.
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-    fn calculate(&self, mol: &mut Molecule, ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
+    fn calculate(
+        &self,
+        mol: &mut Molecule,
+        ctx: &mut crate::desc::context::CalculationContext,
+    ) -> DescriptorValue {
         let mut sum = 0.0f32;
         for bond in &mol.bonds {
             let p_src = atom_pol(mol.atoms[bond.source as usize].atomic_number);
@@ -175,7 +182,10 @@ mod tests {
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn calc(desc: &dyn Descriptor, smiles: &str) -> f32 {
         let mut mol = parse(smiles);
-        match desc.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()) {
+        match desc.calculate(
+            &mut mol,
+            &mut crate::desc::context::CalculationContext::new(),
+        ) {
             DescriptorValue::Float(v) => v,
             other => panic!("expected Float, got {:?}", other),
         }
@@ -266,7 +276,11 @@ mod tests {
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_empty_molecule() {
         let mut mol = Molecule::default();
-        assert!(matches!(APol.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()), DescriptorValue::Float(v) if v == 0.0));
-        assert!(matches!(BPol.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()), DescriptorValue::Float(v) if v == 0.0));
+        assert!(
+            matches!(APol.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()), DescriptorValue::Float(v) if v == 0.0)
+        );
+        assert!(
+            matches!(BPol.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()), DescriptorValue::Float(v) if v == 0.0)
+        );
     }
 }

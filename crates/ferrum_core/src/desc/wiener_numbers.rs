@@ -8,7 +8,6 @@
 //! - Implementing stateless descriptor structs in Rust.
 //! - Mapping chemistry concepts to reproducible numeric features.
 
-
 //! ## File guide: Wiener Numbers
 //!
 //! This file belongs to FerrumChem's **descriptor/fingerprint feature layer**.
@@ -80,7 +79,7 @@ pub struct WienerIndex;
 impl WienerIndex {
     /// Compute all-pairs shortest path distances using BFS.
     #[allow(dead_code)]
-fn _compute_distance_matrix_unused(mol: &Molecule) -> Vec<u32> {
+    fn _compute_distance_matrix_unused(mol: &Molecule) -> Vec<u32> {
         let n = mol.num_atoms();
         let mut distances = vec![u32::MAX; n * n];
 
@@ -143,7 +142,11 @@ impl Descriptor for WienerIndex {
     ///
     /// Function context: `crates/ferrum_core/src/desc/wiener_numbers.rs`.
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-    fn calculate(&self, mol: &mut Molecule, ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
+    fn calculate(
+        &self,
+        mol: &mut Molecule,
+        ctx: &mut crate::desc::context::CalculationContext,
+    ) -> DescriptorValue {
         let n = mol.num_atoms();
 
         if n <= 1 {
@@ -178,7 +181,12 @@ mod tests {
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn calculate_wiener(smiles: &str) -> f32 {
         let mut mol = parse_smiles(smiles).expect("Invalid SMILES");
-        WienerIndex.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()).as_float()
+        WienerIndex
+            .calculate(
+                &mut mol,
+                &mut crate::desc::context::CalculationContext::new(),
+            )
+            .as_float()
     }
 
     #[test]

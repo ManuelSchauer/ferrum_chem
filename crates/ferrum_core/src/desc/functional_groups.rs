@@ -2,7 +2,6 @@
 //!
 //! Provides counts for common functional groups, acidic groups, and basic groups.
 
-
 //! ## File guide: Functional Groups
 //!
 //! This file belongs to FerrumChem's **descriptor/fingerprint feature layer**.
@@ -38,7 +37,7 @@
 
 use super::typed::{Descriptor, DescriptorValue};
 use crate::algo::iso::count_matches as smarts_count_matches;
-use crate::io::smarts::{parse_smarts, QueryGraph};
+use crate::io::smarts::{QueryGraph, parse_smarts};
 use crate::mol::molecule::Molecule;
 use once_cell::sync::Lazy;
 
@@ -125,7 +124,11 @@ impl Descriptor for FunctionalGroupCounts {
     ///
     /// Function context: `crates/ferrum_core/src/desc/functional_groups.rs`.
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-    fn calculate(&self, mol: &mut Molecule, ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
+    fn calculate(
+        &self,
+        mol: &mut Molecule,
+        ctx: &mut crate::desc::context::CalculationContext,
+    ) -> DescriptorValue {
         let counts: Vec<u16> = FUNC_GROUP_PATTERNS
             .iter()
             .map(|p| smarts_count_matches(mol, &p.query) as u16)
@@ -152,7 +155,11 @@ impl Descriptor for AcidicGroupCount {
     ///
     /// Function context: `crates/ferrum_core/src/desc/functional_groups.rs`.
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-    fn calculate(&self, mol: &mut Molecule, ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
+    fn calculate(
+        &self,
+        mol: &mut Molecule,
+        ctx: &mut crate::desc::context::CalculationContext,
+    ) -> DescriptorValue {
         let total: usize = ACIDIC_PATTERNS
             .iter()
             .map(|p| smarts_count_matches(mol, &p.query))
@@ -179,7 +186,11 @@ impl Descriptor for BasicGroupCount {
     ///
     /// Function context: `crates/ferrum_core/src/desc/functional_groups.rs`.
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-    fn calculate(&self, mol: &mut Molecule, ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
+    fn calculate(
+        &self,
+        mol: &mut Molecule,
+        ctx: &mut crate::desc::context::CalculationContext,
+    ) -> DescriptorValue {
         let total: usize = BASIC_PATTERNS
             .iter()
             .map(|p| smarts_count_matches(mol, &p.query))
@@ -210,7 +221,10 @@ mod tests {
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn calc_fg(smiles: &str) -> Vec<u16> {
         let mut mol = parse_smiles(smiles).expect("valid SMILES");
-        match FunctionalGroupCounts.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()) {
+        match FunctionalGroupCounts.calculate(
+            &mut mol,
+            &mut crate::desc::context::CalculationContext::new(),
+        ) {
             DescriptorValue::IntU16Vec(v) => v,
             other => panic!("expected IntU16Vec, got {:?}", other),
         }
@@ -222,7 +236,10 @@ mod tests {
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn calc_acidic(smiles: &str) -> u32 {
         let mut mol = parse_smiles(smiles).expect("valid SMILES");
-        match AcidicGroupCount.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()) {
+        match AcidicGroupCount.calculate(
+            &mut mol,
+            &mut crate::desc::context::CalculationContext::new(),
+        ) {
             DescriptorValue::Int(v) => v,
             other => panic!("expected Int, got {:?}", other),
         }
@@ -234,7 +251,10 @@ mod tests {
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn calc_basic(smiles: &str) -> u32 {
         let mut mol = parse_smiles(smiles).expect("valid SMILES");
-        match BasicGroupCount.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()) {
+        match BasicGroupCount.calculate(
+            &mut mol,
+            &mut crate::desc::context::CalculationContext::new(),
+        ) {
             DescriptorValue::Int(v) => v,
             other => panic!("expected Int, got {:?}", other),
         }
