@@ -12,6 +12,7 @@
 //! Key symbols in this file:
 //! - `struct KFoldSplits`
 //! - `fn k_fold`
+//! - `fn k_fold_iter`
 //! - `fn leave_one_out`
 //! - `fn y_randomization`
 //! - `mod tests`
@@ -43,8 +44,47 @@ pub struct KFoldSplits {
     pub folds: Vec<(Vec<usize>, Vec<usize>)>, // (train_indices, test_indices)
 }
 
+/// Iterator over K-Fold splits generated lazily.
+pub struct KFoldIter {
+    indices: Vec<usize>,
+    k: usize,
+    fold_size: usize,
+    remainder: usize,
+    current_fold: usize,
+    start: usize,
+}
+
+/// Iterator over Leave-One-Out folds without precomputing all splits.
+pub struct LeaveOneOutIter {
+    n_samples: usize,
+    current: usize,
+}
+
+impl Iterator for LeaveOneOutIter {
+    type Item = (Vec<usize>, Vec<usize>);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.current >= self.n_samples {
+            return None;
+        }
+        let test_idx = self.current;
+        self.current += 1;
+
+        let mut train = Vec::with_capacity(self.n_samples.saturating_sub(1));
+        train.extend(0..test_idx);
+        train.extend((test_idx + 1)..self.n_samples);
+        Some((train, vec![test_idx]))
+    }
+}
+
 /// Generate K-Fold cross-validation splits.
 pub fn k_fold(n_samples: usize, k: usize, seed: u64) -> KFoldSplits {
+    let folds: Vec<(Vec<usize>, Vec<usize>)> = k_fold_iter(n_samples, k, seed).collect();
+    KFoldSplits { folds }
+}
+
+/// Generate K-Fold cross-validation split iterator.
+pub fn k_fold_iter(n_samples: usize, k: usize, seed: u64) -> KFoldIter {
     assert!(k >= 2, "k must be >= 2");
     assert!(n_samples >= k, "n_samples must be >= k");
 
@@ -54,34 +94,46 @@ pub fn k_fold(n_samples: usize, k: usize, seed: u64) -> KFoldSplits {
 
     let fold_size = n_samples / k;
     let remainder = n_samples % k;
-
-    let mut folds = Vec::with_capacity(k);
-    let mut start = 0;
-
-    for i in 0..k {
-        let end = start + fold_size + if i < remainder { 1 } else { 0 };
-        let test_indices: Vec<usize> = indices[start..end].to_vec();
-        let train_indices: Vec<usize> = indices[..start]
-            .iter()
-            .chain(indices[end..].iter())
-            .copied()
-            .collect();
-        folds.push((train_indices, test_indices));
-        start = end;
+    KFoldIter {
+        indices,
+        k,
+        fold_size,
+        remainder,
+        current_fold: 0,
+        start: 0,
     }
+}
 
-    KFoldSplits { folds }
+/// Leave-One-Out cross-validation split iterator.
+pub fn leave_one_out_iter(n_samples: usize) -> LeaveOneOutIter {
+    LeaveOneOutIter {
+        n_samples,
+        current: 0,
+    }
 }
 
 /// Leave-One-Out cross-validation splits.
 pub fn leave_one_out(n_samples: usize) -> KFoldSplits {
-    let folds: Vec<(Vec<usize>, Vec<usize>)> = (0..n_samples)
-        .map(|i| {
-            let train: Vec<usize> = (0..n_samples).filter(|&j| j != i).collect();
-            (train, vec![i])
-        })
-        .collect();
+    let folds: Vec<(Vec<usize>, Vec<usize>)> = leave_one_out_iter(n_samples).collect();
     KFoldSplits { folds }
+}
+
+impl Iterator for KFoldIter {
+    type Item = (Vec<usize>, Vec<usize>);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.current_fold >= self.k {
+            return None;
+        }
+        let end = self.start + self.fold_size + usize::from(self.current_fold < self.remainder);
+        let test_indices = self.indices[self.start..end].to_vec();
+        let mut train_indices = Vec::with_capacity(self.indices.len() - test_indices.len());
+        train_indices.extend_from_slice(&self.indices[..self.start]);
+        train_indices.extend_from_slice(&self.indices[end..]);
+        self.start = end;
+        self.current_fold += 1;
+        Some((train_indices, test_indices))
+    }
 }
 
 /// Y-randomization validation.
@@ -167,6 +219,27 @@ mod tests {
             assert_eq!(train.len(), 4);
             assert_eq!(test.len(), 1);
         }
+    }
+
+    #[test]
+    fn test_k_fold_iter_matches_materialized_k_fold() {
+        let materialized = k_fold(32, 5, 123);
+        let iterated: Vec<(Vec<usize>, Vec<usize>)> = k_fold_iter(32, 5, 123).collect();
+        assert_eq!(materialized.folds, iterated);
+    }
+
+    #[test]
+    /// Runs regression test for leave one out iterator.
+    ///
+    /// Function context: `crates/ferrum_core/src/ml/cv.rs`.
+    /// ML-layer note: numerical stability and reproducibility are important for comparable model evaluation.
+    fn test_leave_one_out_iter() {
+        let folds: Vec<(Vec<usize>, Vec<usize>)> = leave_one_out_iter(4).collect();
+        assert_eq!(folds.len(), 4);
+        assert_eq!(folds[0].1, vec![0]);
+        assert_eq!(folds[1].1, vec![1]);
+        assert_eq!(folds[2].1, vec![2]);
+        assert_eq!(folds[3].1, vec![3]);
     }
 
     #[test]

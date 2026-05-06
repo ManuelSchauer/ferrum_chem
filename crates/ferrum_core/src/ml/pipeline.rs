@@ -217,12 +217,20 @@ fn resolve_auto_qsar_runtime_config(
     total_candidates: usize,
     n_cv_folds: usize,
 ) -> AutoQsarRuntimeConfig {
-    let parallel_mode = parallel_mode_raw
+    let mut parallel_mode = parallel_mode_raw
         .map(parse_parallel_mode)
         .unwrap_or(AutoQsarParallelMode::Candidate);
-    let max_threads = max_threads_raw
+    let mut max_threads = max_threads_raw
         .and_then(|raw| raw.parse::<usize>().ok())
         .filter(|value| *value > 0);
+    // Fold-parallel CV with fewer worker threads than folds typically underutilizes CPU and can
+    // regress versus candidate-level parallelism. Fall back to candidate mode in that case.
+    if parallel_mode == AutoQsarParallelMode::Fold
+        && max_threads.is_some_and(|threads| threads < n_cv_folds)
+    {
+        parallel_mode = AutoQsarParallelMode::Candidate;
+        max_threads = None;
+    }
     let prune_keep = prune_keep_raw
         .and_then(|raw| raw.parse::<usize>().ok())
         .map(|keep| keep.min(total_candidates))
@@ -273,6 +281,21 @@ fn parse_runtime_config_from_env(
         total_candidates,
         n_cv_folds,
     )
+}
+
+fn effective_prune_keep(
+    total_candidates: usize,
+    n_cv_folds: usize,
+    prune_folds: usize,
+    prune_keep: Option<usize>,
+) -> Option<usize> {
+    prune_keep.filter(|&keep| {
+        let prune_work = total_candidates
+            .saturating_mul(prune_folds)
+            .saturating_add(keep.saturating_mul(n_cv_folds));
+        let full_work = total_candidates.saturating_mul(n_cv_folds);
+        prune_work < full_work
+    })
 }
 
 fn build_optional_thread_pool(max_threads: Option<usize>) -> Option<rayon::ThreadPool> {
@@ -426,7 +449,6 @@ struct CandidateEvaluation {
 
 #[derive(Debug, Clone, Copy)]
 enum CandidateProgressEvent {
-    Started { candidate: RegressionCandidate },
     Done(CandidateEvaluation),
 }
 
@@ -561,7 +583,13 @@ impl AutoQsar {
         n_cv_folds: usize,
     ) -> (String, Option<usize>, Option<usize>, usize) {
         let total_candidates = build_regression_candidates(n_features).len();
-        let cfg = parse_runtime_config_from_env(total_candidates, n_cv_folds);
+        let mut cfg = parse_runtime_config_from_env(total_candidates, n_cv_folds);
+        cfg.prune_keep = effective_prune_keep(
+            total_candidates,
+            n_cv_folds,
+            cfg.prune_folds,
+            cfg.prune_keep,
+        );
         (
             cfg.parallel_mode.as_str().to_string(),
             cfg.max_threads,
@@ -582,7 +610,13 @@ impl AutoQsar {
         let candidates = build_regression_candidates(data.n_features());
         let total_candidates = candidates.len();
         let thread_pool = build_optional_thread_pool(runtime_cfg.max_threads);
-        let progress_total_candidates = runtime_cfg.prune_keep.unwrap_or(total_candidates);
+        let effective_prune_keep = effective_prune_keep(
+            total_candidates,
+            n_cv_folds,
+            runtime_cfg.prune_folds,
+            runtime_cfg.prune_keep,
+        );
+        let progress_total_candidates = effective_prune_keep.unwrap_or(total_candidates);
         let mut completed_candidates = 0usize;
         on_progress(AutoQsarProgress {
             stage: AutoQsarProgressStage::Scaling,
@@ -592,9 +626,21 @@ impl AutoQsar {
 
         let mut evaluate_candidates = |active: &[(usize, RegressionCandidate)],
                                        folds: usize,
-                                       emit_progress: bool|
+                                       emit_progress: bool,
+                                       mode: AutoQsarParallelMode|
          -> Vec<CandidateEvaluation> {
-            if runtime_cfg.parallel_mode == AutoQsarParallelMode::Candidate {
+            if mode == AutoQsarParallelMode::Candidate {
+                if emit_progress {
+                    for (_, candidate) in active.iter().copied() {
+                        on_progress(AutoQsarProgress {
+                            stage: AutoQsarProgressStage::CandidateStart {
+                                label: candidate.label(),
+                            },
+                            completed_candidates,
+                            total_candidates: progress_total_candidates,
+                        });
+                    }
+                }
                 let (tx, rx) = mpsc::channel::<CandidateProgressEvent>();
                 install_in_pool(thread_pool.as_ref(), || {
                     rayon::scope(|scope| {
@@ -603,7 +649,6 @@ impl AutoQsar {
                             let scaled_ref = &scaled;
                             let targets_ref = &data.targets;
                             scope.spawn(move |_| {
-                                let _ = tx.send(CandidateProgressEvent::Started { candidate });
                                 let q2_raw = candidate.evaluate_q2(
                                     scaled_ref,
                                     targets_ref,
@@ -630,34 +675,21 @@ impl AutoQsar {
                 let mut out = Vec::with_capacity(active.len());
                 let mut running_best = f64::NEG_INFINITY;
                 for event in rx {
-                    match event {
-                        CandidateProgressEvent::Started { candidate } if emit_progress => {
-                            on_progress(AutoQsarProgress {
-                                stage: AutoQsarProgressStage::CandidateStart {
-                                    label: candidate.label(),
-                                },
-                                completed_candidates,
-                                total_candidates: progress_total_candidates,
-                            });
-                        }
-                        CandidateProgressEvent::Started { .. } => {}
-                        CandidateProgressEvent::Done(eval) => {
-                            if emit_progress {
-                                completed_candidates += 1;
-                                running_best = running_best.max(eval.q2);
-                                on_progress(AutoQsarProgress {
-                                    stage: AutoQsarProgressStage::CandidateDone {
-                                        label: eval.candidate.label(),
-                                        q2: eval.q2,
-                                        best_q2: running_best,
-                                    },
-                                    completed_candidates,
-                                    total_candidates: progress_total_candidates,
-                                });
-                            }
-                            out.push(eval);
-                        }
+                    let CandidateProgressEvent::Done(eval) = event;
+                    if emit_progress {
+                        completed_candidates += 1;
+                        running_best = running_best.max(eval.q2);
+                        on_progress(AutoQsarProgress {
+                            stage: AutoQsarProgressStage::CandidateDone {
+                                label: eval.candidate.label(),
+                                q2: eval.q2,
+                                best_q2: running_best,
+                            },
+                            completed_candidates,
+                            total_candidates: progress_total_candidates,
+                        });
                     }
+                    out.push(eval);
                 }
                 out
             } else {
@@ -710,8 +742,13 @@ impl AutoQsar {
             .enumerate()
             .collect::<Vec<(usize, RegressionCandidate)>>();
 
-        let candidates_for_full = if let Some(keep) = runtime_cfg.prune_keep {
-            let quick_pass = evaluate_candidates(&all_candidates, runtime_cfg.prune_folds, false);
+        let candidates_for_full = if let Some(keep) = effective_prune_keep {
+            let quick_pass = evaluate_candidates(
+                &all_candidates,
+                runtime_cfg.prune_folds,
+                false,
+                AutoQsarParallelMode::Candidate,
+            );
             let mut survivors = top_k_candidates(quick_pass, keep);
             survivors.sort_by_key(|eval| eval.order);
             survivors
@@ -722,7 +759,12 @@ impl AutoQsar {
             all_candidates.clone()
         };
 
-        let full_pass = evaluate_candidates(&candidates_for_full, n_cv_folds, true);
+        let full_pass = evaluate_candidates(
+            &candidates_for_full,
+            n_cv_folds,
+            true,
+            runtime_cfg.parallel_mode,
+        );
 
         let mut best_eval: Option<CandidateEvaluation> = None;
         for eval in full_pass {
@@ -794,32 +836,74 @@ where
     F: Fn(&Array2<f64>, &Array1<f64>) -> ModelType + Sync + Send,
 {
     let n = features.nrows();
-    let splits = cv::k_fold(n, n_folds, seed);
-    let eval_fold = |(train_idx, test_idx): &(Vec<usize>, Vec<usize>)| {
-        let train_x = select_rows(features, train_idx);
-        let train_y = select_elements(targets, train_idx);
-        let test_x = select_rows(features, test_idx);
-
-        let model = build_model(&train_x, &train_y);
-        let preds = match &model {
-            ModelType::KnnRegressor(m) => m.predict(&test_x),
-            ModelType::RandomForestRegressor(m) => m.predict(&test_x),
-            ModelType::PlsRegression(m) => m.predict(&test_x),
-            ModelType::ElasticNet(m) => m.predict(&test_x),
-            _ => Array1::zeros(test_idx.len()),
-        };
-        (test_idx.clone(), preds.to_vec())
-    };
-    let fold_preds = if parallel_folds {
-        splits.folds.par_iter().map(eval_fold).collect::<Vec<_>>()
-    } else {
-        splits.folds.iter().map(eval_fold).collect::<Vec<_>>()
-    };
-
     let mut all_preds = vec![0.0f64; n];
-    for (test_idx, preds) in fold_preds {
-        for (i, idx) in test_idx.into_iter().enumerate() {
-            all_preds[idx] = preds[i];
+    if parallel_folds {
+        let splits = cv::k_fold(n, n_folds, seed);
+        let eval_fold = |(train_idx, test_idx): &(Vec<usize>, Vec<usize>)| {
+            let train_x = select_rows(features, train_idx);
+            let train_y = select_elements(targets, train_idx);
+            let test_x = select_rows(features, test_idx);
+            let model = build_model(&train_x, &train_y);
+            let preds = match &model {
+                ModelType::KnnRegressor(m) => m.predict(&test_x),
+                ModelType::RandomForestRegressor(m) => m.predict(&test_x),
+                ModelType::PlsRegression(m) => m.predict(&test_x),
+                ModelType::ElasticNet(m) => m.predict(&test_x),
+                _ => Array1::zeros(test_idx.len()),
+            };
+            (test_idx.clone(), preds.to_vec())
+        };
+        let fold_preds = splits.folds.par_iter().map(eval_fold).collect::<Vec<_>>();
+        for (test_idx, preds) in fold_preds {
+            for (i, idx) in test_idx.into_iter().enumerate() {
+                all_preds[idx] = preds[i];
+            }
+        }
+    } else if n <= 4096 {
+        for (train_idx, test_idx) in cv::k_fold_iter(n, n_folds, seed) {
+            let train_x = select_rows(features, &train_idx);
+            let train_y = select_elements(targets, &train_idx);
+            let test_x = select_rows(features, &test_idx);
+            let model = build_model(&train_x, &train_y);
+            let preds = match &model {
+                ModelType::KnnRegressor(m) => m.predict(&test_x),
+                ModelType::RandomForestRegressor(m) => m.predict(&test_x),
+                ModelType::PlsRegression(m) => m.predict(&test_x),
+                ModelType::ElasticNet(m) => m.predict(&test_x),
+                _ => Array1::zeros(test_idx.len()),
+            };
+            for (i, idx) in test_idx.into_iter().enumerate() {
+                all_preds[idx] = preds[i];
+            }
+        }
+    } else {
+        // Large-N path: avoid allocating per-fold train/test matrices by scoring row-wise.
+        for (train_idx, test_idx) in cv::k_fold_iter(n, n_folds, seed) {
+            let train_x = select_rows(features, &train_idx);
+            let train_y = select_elements(targets, &train_idx);
+            let model = build_model(&train_x, &train_y);
+            for idx in test_idx {
+                let row = features.row(idx);
+                let pred = if let Some(slice) = row.as_slice() {
+                    match &model {
+                        ModelType::KnnRegressor(m) => m.predict_one(slice),
+                        ModelType::RandomForestRegressor(m) => m.predict_one(slice),
+                        ModelType::PlsRegression(m) => m.predict_one(slice),
+                        ModelType::ElasticNet(m) => m.predict_one(slice),
+                        _ => 0.0,
+                    }
+                } else {
+                    let owned = row.to_vec();
+                    match &model {
+                        ModelType::KnnRegressor(m) => m.predict_one(&owned),
+                        ModelType::RandomForestRegressor(m) => m.predict_one(&owned),
+                        ModelType::PlsRegression(m) => m.predict_one(&owned),
+                        ModelType::ElasticNet(m) => m.predict_one(&owned),
+                        _ => 0.0,
+                    }
+                };
+                all_preds[idx] = pred;
+            }
         }
     }
 
@@ -1058,17 +1142,28 @@ mod tests {
     /// ML-layer note: numerical stability and reproducibility are important for comparable model evaluation.
     fn test_auto_qsar_runtime_config_parsing() {
         let cfg =
-            resolve_auto_qsar_runtime_config(Some("fold"), Some("4"), Some("3"), Some("2"), 11, 5);
+            resolve_auto_qsar_runtime_config(Some("fold"), Some("8"), Some("3"), Some("2"), 11, 5);
         assert_eq!(cfg.parallel_mode, AutoQsarParallelMode::Fold);
-        assert_eq!(cfg.max_threads, Some(4));
+        assert_eq!(cfg.max_threads, Some(8));
         assert_eq!(cfg.prune_keep, Some(3));
         assert_eq!(cfg.prune_folds, 2);
+
+        let underprovisioned =
+            resolve_auto_qsar_runtime_config(Some("fold"), Some("2"), Some("3"), Some("2"), 11, 5);
+        assert_eq!(
+            underprovisioned.parallel_mode,
+            AutoQsarParallelMode::Candidate
+        );
+        assert!(underprovisioned.max_threads.is_none());
 
         let default_cfg = resolve_auto_qsar_runtime_config(None, None, None, None, 11, 5);
         assert_eq!(default_cfg.parallel_mode, AutoQsarParallelMode::Candidate);
         assert!(default_cfg.max_threads.is_none());
         assert!(default_cfg.prune_keep.is_none());
         assert_eq!(default_cfg.prune_folds, 2);
+
+        assert_eq!(effective_prune_keep(11, 3, 2, Some(4)), None);
+        assert_eq!(effective_prune_keep(11, 3, 2, Some(2)), Some(2));
     }
 
     #[test]

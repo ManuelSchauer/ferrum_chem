@@ -53,13 +53,14 @@ pub fn rank_atoms(mol: &Molecule) -> Vec<usize> {
     }
     // Initial invariants: atomic number
     let mut rank: Vec<u64> = mol.atoms.iter().map(|a| a.atomic_number as u64).collect();
+    let mut new_rank = vec![0u64; n];
+    let mut nbr_ranks: Vec<u64> = Vec::new();
 
     // Iterate until stable
     for _ in 0..n {
-        let mut new_rank = vec![0u64; n];
         for i in 0..n {
             // Collect sorted neighbor ranks for an order-independent but collision-resistant hash
-            let mut nbr_ranks: Vec<u64> = Vec::new();
+            nbr_ranks.clear();
             for &bi in &mol.adjacency[i] {
                 let b = &mol.bonds[bi as usize];
                 let nbr = if b.source as usize == i {

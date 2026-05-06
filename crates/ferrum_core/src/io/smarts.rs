@@ -39,6 +39,7 @@
 //! - RDKit SMARTS parser behavior and query semantics used as parity target in this repository.
 //! - Weininger, D. (1988). SMILES notation specification for shared atom/bond grammar roots.
 
+use crate::algo::rings::find_sssr_cycles;
 use crate::error::{FerrumError, Result};
 use crate::mol::molecule::Molecule;
 use crate::types::BondType;
@@ -229,11 +230,9 @@ impl SmartsRingContext {
         let mut atom_ring_membership = vec![0u8; mol.num_atoms()];
         let mut atom_ring_sizes = vec![SmallVec::new(); mol.num_atoms()];
 
-        // Build ring context from SSSR on a temporary molecule to keep the
-        // source graph immutable while preserving existing ring-size semantics.
-        let mut mol_copy =
-            Molecule::from_parts(mol.atoms.clone(), mol.bonds.clone(), mol.adjacency.clone());
-        let rings = crate::algo::rings::find_sssr(&mut mol_copy);
+        // Build ring context from read-only SSSR cycle enumeration to preserve
+        // ring-size semantics without cloning the full molecule graph.
+        let rings = find_sssr_cycles(mol);
 
         for ring in rings {
             let ring_size = ring.len().min(u8::MAX as usize) as u8;
@@ -1636,6 +1635,39 @@ mod tests {
         // Non-ring molecule
         let mol2 = parse_smiles("CCCC").unwrap();
         assert!(!ring_query.matches(&mol2, 0));
+    }
+
+    #[test]
+    /// Runs regression test for query atom ring size and membership.
+    ///
+    /// Function context: `crates/ferrum_core/src/io/smarts.rs`.
+    /// I/O-layer note: parsing/ingestion should surface explicit errors instead of silently repairing malformed input.
+    fn test_query_atom_ring_size_and_membership() {
+        // Cyclohexane should satisfy r6 and R1 for each ring atom under the
+        // current SSSR semantics used by SMARTS ring context.
+        let mut mol = parse_smiles("C1CCCCC1").unwrap();
+        find_sssr(&mut mol);
+
+        let ring6_query = QueryAtom {
+            primitives: vec![AtomPrimitive::RingSize(6)],
+        };
+        let ring_membership_1_query = QueryAtom {
+            primitives: vec![AtomPrimitive::RingMembership(1)],
+        };
+        let not_in_ring_query = QueryAtom {
+            primitives: vec![AtomPrimitive::NotInRing],
+        };
+
+        assert!(ring6_query.matches(&mol, 0));
+        assert!(ring6_query.matches(&mol, 3));
+        assert!(ring_membership_1_query.matches(&mol, 0));
+        assert!(ring_membership_1_query.matches(&mol, 4));
+        assert!(!not_in_ring_query.matches(&mol, 1));
+
+        let linear = parse_smiles("CCCC").unwrap();
+        assert!(!ring6_query.matches(&linear, 0));
+        assert!(!ring_membership_1_query.matches(&linear, 1));
+        assert!(not_in_ring_query.matches(&linear, 2));
     }
 
     #[test]

@@ -36,6 +36,9 @@
 use ndarray::{Array1, Array2, Axis};
 use serde::{Deserialize, Serialize};
 
+#[cfg(feature = "native-linalg")]
+use ndarray_linalg::{Inverse, SVD};
+
 /// Default AD sampling step (exact mode).
 fn default_knn_ad_sample_step() -> usize {
     1
@@ -98,8 +101,8 @@ fn squared_euclidean_distance(a: &[f64], b: &[f64]) -> f64 {
 /// Compute squared Euclidean distance with early exit if partial sum exceeds cutoff.
 fn squared_euclidean_distance_with_cutoff(a: &[f64], b: &[f64], cutoff: f64) -> f64 {
     let mut acc = 0.0;
-    for i in 0..a.len() {
-        let d = a[i] - b[i];
+    for (&x, &y) in a.iter().zip(b.iter()) {
+        let d = x - y;
         acc = d.mul_add(d, acc);
         if acc > cutoff {
             break;
@@ -457,14 +460,7 @@ impl LeverageAD {
         let x_centered = features - &x_mean;
 
         // Compute X'X
-        let mut xtx = Array2::<f64>::zeros((p, p));
-        for i in 0..p {
-            for j in i..p {
-                let dot: f64 = x_centered.column(i).dot(&x_centered.column(j));
-                xtx[[i, j]] = dot;
-                xtx[[j, i]] = dot;
-            }
-        }
+        let mut xtx = x_centered.t().dot(&x_centered);
 
         // Ridge regularization improves numerical stability on collinear descriptors.
         let ridge = 1e-8;
@@ -493,15 +489,9 @@ impl LeverageAD {
         }
 
         // h = x' (X'X)^{-1} x
-        let mut h = 0.0;
-        for i in 0..p {
-            let mut inner = 0.0;
-            for j in 0..p {
-                inner += self.hat_matrix_inv[[i, j]] * centered[j];
-            }
-            h += centered[i] * inner;
-        }
-        h
+        let centered_arr = Array1::from_vec(centered);
+        let tmp = self.hat_matrix_inv.dot(&centered_arr);
+        centered_arr.dot(&tmp)
     }
 }
 
@@ -603,6 +593,80 @@ fn invert_matrix(a: &Array2<f64>) -> Array2<f64> {
     inv
 }
 
+/// Cholesky factorization for symmetric positive-definite matrices.
+///
+/// Returns lower-triangular `L` such that `a = L * L^T`.
+fn cholesky_decompose_spd(a: &Array2<f64>) -> Option<Array2<f64>> {
+    let n = a.nrows();
+    if a.ncols() != n {
+        return None;
+    }
+    let mut l = Array2::<f64>::zeros((n, n));
+    for i in 0..n {
+        for j in 0..=i {
+            let mut sum = a[[i, j]];
+            for k in 0..j {
+                sum -= l[[i, k]] * l[[j, k]];
+            }
+            if i == j {
+                if !sum.is_finite() || sum <= 1e-15 {
+                    return None;
+                }
+                l[[i, j]] = sum.sqrt();
+            } else {
+                let denom = l[[j, j]];
+                if denom <= 1e-15 {
+                    return None;
+                }
+                l[[i, j]] = sum / denom;
+            }
+        }
+    }
+    Some(l)
+}
+
+/// Solve `A * X = B` for SPD `A` using Cholesky factorization.
+///
+/// Falls back to Gauss-Jordan inverse multiplication only when Cholesky fails.
+fn solve_spd_system(a: &Array2<f64>, b: &Array2<f64>) -> Array2<f64> {
+    let n = a.nrows();
+    debug_assert_eq!(a.ncols(), n);
+    debug_assert_eq!(b.nrows(), n);
+    if n == 0 {
+        return Array2::<f64>::zeros((0, b.ncols()));
+    }
+
+    if let Some(l) = cholesky_decompose_spd(a) {
+        let rhs_cols = b.ncols();
+        let mut y = Array2::<f64>::zeros((n, rhs_cols));
+        for col in 0..rhs_cols {
+            for i in 0..n {
+                let mut sum = b[[i, col]];
+                for k in 0..i {
+                    sum -= l[[i, k]] * y[[k, col]];
+                }
+                y[[i, col]] = sum / l[[i, i]];
+            }
+        }
+
+        let mut x = Array2::<f64>::zeros((n, rhs_cols));
+        for col in 0..rhs_cols {
+            for i_rev in 0..n {
+                let i = n - 1 - i_rev;
+                let mut sum = y[[i, col]];
+                for k in (i + 1)..n {
+                    sum -= l[[k, i]] * x[[k, col]];
+                }
+                x[[i, col]] = sum / l[[i, i]];
+            }
+        }
+        return x;
+    }
+
+    // Rare fallback path for numerically pathological input.
+    invert_matrix(a).dot(b)
+}
+
 /// Compute the Moore-Penrose pseudoinverse using a damped normal-equation solve.
 /// This implementation is intentionally regularized to remain stable with collinear QSAR features.
 pub fn pseudoinverse(a: &Array2<f64>) -> Array2<f64> {
@@ -611,37 +675,63 @@ pub fn pseudoinverse(a: &Array2<f64>) -> Array2<f64> {
         return Array2::<f64>::zeros((n, m));
     }
 
-    if m >= n {
-        let mut ata = Array2::<f64>::zeros((n, n));
-        for i in 0..n {
-            for j in i..n {
-                let dot = a.column(i).dot(&a.column(j));
-                ata[[i, j]] = dot;
-                ata[[j, i]] = dot;
-            }
+    #[cfg(feature = "native-linalg")]
+    {
+        if let Some(pin) = pseudoinverse_native_linalg(a) {
+            return pin;
         }
+    }
+
+    if m >= n {
+        let mut ata = a.t().dot(a);
         let ridge = 1e-8;
         for d in 0..n {
             ata[[d, d]] += ridge;
         }
-        let ata_inv = invert_matrix(&ata);
-        ata_inv.dot(&a.t())
+        let rhs = a.t().to_owned();
+        solve_spd_system(&ata, &rhs)
     } else {
-        let mut aat = Array2::<f64>::zeros((m, m));
-        for i in 0..m {
-            for j in i..m {
-                let dot = a.row(i).dot(&a.row(j));
-                aat[[i, j]] = dot;
-                aat[[j, i]] = dot;
-            }
-        }
+        let mut aat = a.dot(&a.t());
         let ridge = 1e-8;
         for d in 0..m {
             aat[[d, d]] += ridge;
         }
-        let aat_inv = invert_matrix(&aat);
-        a.t().dot(&aat_inv)
+        let solved = solve_spd_system(&aat, a);
+        solved.t().to_owned()
     }
+}
+
+/// Native-linalg pseudoinverse path (SVD preferred, inverse fallback).
+#[cfg(feature = "native-linalg")]
+fn pseudoinverse_native_linalg(a: &Array2<f64>) -> Option<Array2<f64>> {
+    let (m, n) = a.dim();
+    let (u_opt, s, vt_opt) = a.clone().svd(true, true).ok()?;
+    let u = u_opt?;
+    let vt = vt_opt?;
+
+    let mut s_plus = Array2::<f64>::zeros((n, m));
+    for (i, &sigma) in s.iter().enumerate() {
+        if sigma > 1e-12 {
+            s_plus[[i, i]] = 1.0 / sigma;
+        }
+    }
+
+    // A^+ = V * S^+ * U^T
+    let v = vt.t().to_owned();
+    let ut = u.t().to_owned();
+    let pin = v.dot(&s_plus).dot(&ut);
+    if pin.iter().all(|v| v.is_finite()) {
+        return Some(pin);
+    }
+
+    // Fallback: regularized inverse for square full-rank matrices.
+    if m == n
+        && let Ok(inv) = a.clone().inv()
+        && inv.iter().all(|v| v.is_finite())
+    {
+        return Some(inv);
+    }
+    None
 }
 
 #[cfg(test)]
@@ -754,6 +844,32 @@ mod tests {
             for j in 0..3 {
                 let expected = if i == j { 1.0 } else { 0.0 };
                 assert!((inv[[i, j]] - expected).abs() < 1e-10);
+            }
+        }
+    }
+
+    #[test]
+    fn test_solve_spd_system_identity_rhs() {
+        let a = Array2::<f64>::eye(3);
+        let b = Array2::from_shape_vec((3, 2), vec![1.0, 4.0, 2.0, 5.0, 3.0, 6.0]).unwrap();
+        let x = solve_spd_system(&a, &b);
+        for i in 0..3 {
+            for j in 0..2 {
+                assert!((x[[i, j]] - b[[i, j]]).abs() < 1e-12);
+            }
+        }
+    }
+
+    #[test]
+    fn test_solve_spd_system_reconstructs_rhs() {
+        let a = Array2::from_shape_vec((3, 3), vec![4.0, 1.0, 0.5, 1.0, 3.0, 0.25, 0.5, 0.25, 2.0])
+            .unwrap();
+        let b = Array2::from_shape_vec((3, 2), vec![2.0, -1.0, 0.5, 3.0, -2.0, 4.0]).unwrap();
+        let x = solve_spd_system(&a, &b);
+        let recon = a.dot(&x);
+        for i in 0..3 {
+            for j in 0..2 {
+                assert!((recon[[i, j]] - b[[i, j]]).abs() < 1e-8);
             }
         }
     }

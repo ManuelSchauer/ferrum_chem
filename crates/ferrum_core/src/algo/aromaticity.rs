@@ -44,12 +44,44 @@
 use crate::algo::rings::find_sssr;
 use crate::mol::molecule::Molecule;
 use crate::types::{AtomIdx, BondType};
-use std::collections::{HashMap, HashSet, VecDeque};
+use rustc_hash::FxHashSet;
+use std::collections::VecDeque;
 
 #[derive(Clone, PartialEq, Eq, Hash)]
 enum RingDedupKey {
     Small(u128),
     Large(Vec<AtomIdx>),
+}
+
+struct ShortestPathWorkspace {
+    dist: Vec<usize>,
+    prev: Vec<usize>,
+    queue: VecDeque<usize>,
+}
+
+impl ShortestPathWorkspace {
+    fn new(n_atoms: usize) -> Self {
+        Self {
+            dist: vec![usize::MAX; n_atoms],
+            prev: vec![usize::MAX; n_atoms],
+            queue: VecDeque::new(),
+        }
+    }
+
+    fn prepare(&mut self, n_atoms: usize, start: usize) {
+        if self.dist.len() != n_atoms {
+            self.dist.clear();
+            self.dist.resize(n_atoms, usize::MAX);
+            self.prev.clear();
+            self.prev.resize(n_atoms, usize::MAX);
+        } else {
+            self.dist.fill(usize::MAX);
+            self.prev.fill(usize::MAX);
+        }
+        self.queue.clear();
+        self.dist[start] = 0;
+        self.queue.push_back(start);
+    }
 }
 
 /// Perceive aromaticity using the Hückel 4n+2 rule.
@@ -88,13 +120,23 @@ pub fn perceive_aromaticity(mol: &mut Molecule) {
     // ring has already been aromaticized (e.g. flavylium/quinonoid systems).
     // Iterate to a fixed point so those newly aromatic bonds can unlock the
     // next ring in the same conjugated system.
+    let n = mol.num_atoms();
+    let n_bonds = mol.num_bonds();
+    let mut prev_atoms = vec![false; n];
+    let mut next_atoms = vec![false; n];
+    let mut prev_bonds = vec![(BondType::Single, false); n_bonds];
+    let mut next_bonds = vec![(BondType::Single, false); n_bonds];
+    let mut in_aromatic_ring = vec![false; n];
+    let mut bond_in_aromatic_ring = vec![false; n_bonds];
+    let mut seen_perimeters: FxHashSet<RingDedupKey> = FxHashSet::default();
+
     for _ in 0..6 {
-        let prev_atoms: Vec<bool> = mol.atoms.iter().map(|atom| atom.is_aromatic()).collect();
-        let prev_bonds: Vec<(BondType, bool)> = mol
-            .bonds
-            .iter()
-            .map(|bond| (bond.bond_type, bond.is_aromatic()))
-            .collect();
+        for (i, atom) in mol.atoms.iter().enumerate() {
+            prev_atoms[i] = atom.is_aromatic();
+        }
+        for (i, bond) in mol.bonds.iter().enumerate() {
+            prev_bonds[i] = (bond.bond_type, bond.is_aromatic());
+        }
 
         let mut aromatic_rings = Vec::new();
         for ring in &rings {
@@ -107,7 +149,7 @@ pub fn perceive_aromaticity(mol: &mut Molecule) {
             }
         }
         let mut aromatic_perimeters = Vec::new();
-        let mut seen_perimeters: HashSet<RingDedupKey> = HashSet::new();
+        seen_perimeters.clear();
         for ring in &rings {
             if let Some(perimeter) = fused_quinonoid_perimeter(mol, ring) {
                 let key = ring_dedup_key(&perimeter.ring);
@@ -118,9 +160,8 @@ pub fn perceive_aromaticity(mol: &mut Molecule) {
         }
 
         // Collect all atoms that are in at least one aromatic ring
-        let n = mol.num_atoms();
-        let mut in_aromatic_ring = vec![false; n];
-        let mut bond_in_aromatic_ring = vec![false; mol.num_bonds()];
+        in_aromatic_ring.fill(false);
+        bond_in_aromatic_ring.fill(false);
         for ring in &aromatic_rings {
             for &idx in ring {
                 in_aromatic_ring[idx as usize] = true;
@@ -196,12 +237,12 @@ pub fn perceive_aromaticity(mol: &mut Molecule) {
             mark_kekulized_perimeter_aromatic(mol, perimeter);
         }
 
-        let next_atoms: Vec<bool> = mol.atoms.iter().map(|atom| atom.is_aromatic()).collect();
-        let next_bonds: Vec<(BondType, bool)> = mol
-            .bonds
-            .iter()
-            .map(|bond| (bond.bond_type, bond.is_aromatic()))
-            .collect();
+        for (i, atom) in mol.atoms.iter().enumerate() {
+            next_atoms[i] = atom.is_aromatic();
+        }
+        for (i, bond) in mol.bonds.iter().enumerate() {
+            next_bonds[i] = (bond.bond_type, bond.is_aromatic());
+        }
         if prev_atoms == next_atoms && prev_bonds == next_bonds {
             break;
         }
@@ -255,15 +296,10 @@ fn collect_aromaticity_ring_candidates(mol: &mut Molecule) -> Vec<Vec<AtomIdx>> 
     // Include larger conjugated perimeters (e.g. porphyrin-like macrocycles)
     // that are often omitted from an SSSR basis but still drive aromaticity.
     let local_cycles = find_local_cycles(mol, 5, 24);
-    let dfs_cycles = find_dfs_cycles(mol, 5, 8, 2000);
 
     let mut rings = Vec::new();
-    let mut seen: HashSet<RingDedupKey> = HashSet::new();
-    for ring in sssr_rings
-        .iter()
-        .chain(local_cycles.iter())
-        .chain(dfs_cycles.iter())
-    {
+    let mut seen: FxHashSet<RingDedupKey> = FxHashSet::default();
+    for ring in sssr_rings.iter().chain(local_cycles.iter()) {
         let key = ring_dedup_key(ring);
         if seen.insert(key) {
             rings.push(ring.clone());
@@ -276,14 +312,20 @@ fn collect_aromaticity_ring_candidates(mol: &mut Molecule) -> Vec<Vec<AtomIdx>> 
 /// each bond's endpoints after removing that bond.
 fn find_local_cycles(mol: &Molecule, min_len: usize, max_len: usize) -> Vec<Vec<AtomIdx>> {
     let mut out = Vec::new();
-    let mut seen: HashSet<RingDedupKey> = HashSet::new();
+    let mut seen: FxHashSet<RingDedupKey> = FxHashSet::default();
+    let mut workspace = ShortestPathWorkspace::new(mol.num_atoms());
 
     for (bond_idx, bond) in mol.bonds.iter().enumerate() {
         let u = bond.source as usize;
         let v = bond.target as usize;
-        let Some(path) =
-            shortest_path_excluding_bond(mol, u, v, bond_idx, max_len.saturating_sub(1))
-        else {
+        let Some(path) = shortest_path_excluding_bond(
+            mol,
+            u,
+            v,
+            bond_idx,
+            max_len.saturating_sub(1),
+            &mut workspace,
+        ) else {
             continue;
         };
 
@@ -313,21 +355,17 @@ fn shortest_path_excluding_bond(
     end: usize,
     excluded_bond: usize,
     max_edges: usize,
+    workspace: &mut ShortestPathWorkspace,
 ) -> Option<Vec<usize>> {
     if start == end {
         return None;
     }
 
     let n = mol.num_atoms();
-    let mut dist = vec![usize::MAX; n];
-    let mut prev = vec![usize::MAX; n];
-    let mut q = VecDeque::new();
+    workspace.prepare(n, start);
 
-    dist[start] = 0;
-    q.push_back(start);
-
-    while let Some(u) = q.pop_front() {
-        if dist[u] >= max_edges {
+    while let Some(u) = workspace.queue.pop_front() {
+        if workspace.dist[u] >= max_edges {
             continue;
         }
 
@@ -344,16 +382,16 @@ fn shortest_path_excluding_bond(
                 b.source as usize
             };
 
-            let nd = dist[u] + 1;
-            if nd < dist[v] {
-                dist[v] = nd;
-                prev[v] = u;
-                q.push_back(v);
+            let nd = workspace.dist[u] + 1;
+            if nd < workspace.dist[v] {
+                workspace.dist[v] = nd;
+                workspace.prev[v] = u;
+                workspace.queue.push_back(v);
             }
         }
     }
 
-    if dist[end] == usize::MAX || dist[end] > max_edges {
+    if workspace.dist[end] == usize::MAX || workspace.dist[end] > max_edges {
         return None;
     }
 
@@ -361,7 +399,7 @@ fn shortest_path_excluding_bond(
     let mut cur = end;
     path.push(cur);
     while cur != start {
-        let p = prev[cur];
+        let p = workspace.prev[cur];
         if p == usize::MAX {
             return None;
         }
@@ -386,7 +424,7 @@ fn find_dfs_cycles(
     }
 
     let mut out = Vec::new();
-    let mut seen: HashSet<RingDedupKey> = HashSet::new();
+    let mut seen: FxHashSet<RingDedupKey> = FxHashSet::default();
     let mut path: Vec<AtomIdx> = Vec::with_capacity(max_len);
     let mut in_path = vec![false; n];
 
@@ -433,7 +471,7 @@ fn dfs_cycle_from(
     max_cycles: usize,
     path: &mut Vec<AtomIdx>,
     in_path: &mut [bool],
-    seen: &mut HashSet<RingDedupKey>,
+    seen: &mut FxHashSet<RingDedupKey>,
     out: &mut Vec<Vec<AtomIdx>>,
 ) {
     if out.len() >= max_cycles {
@@ -657,14 +695,15 @@ fn is_ring_aromatic(mol: &Molecule, ring: &[AtomIdx]) -> bool {
 /// Function context: `crates/ferrum_core/src/algo/aromaticity.rs`.
 /// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
 fn has_cycle_chord(mol: &Molecule, ring: &[AtomIdx]) -> bool {
-    let mut consecutive = HashSet::with_capacity(ring.len() * 2);
+    let mut consecutive = FxHashSet::default();
+    consecutive.reserve(ring.len() * 2);
     for i in 0..ring.len() {
         let a = ring[i];
         let b = ring[(i + 1) % ring.len()];
         consecutive.insert((a.min(b), a.max(b)));
     }
 
-    let ring_atoms: HashSet<AtomIdx> = ring.iter().copied().collect();
+    let ring_atoms: FxHashSet<AtomIdx> = ring.iter().copied().collect();
     for &atom_idx in ring {
         for &bond_idx in &mol.adjacency[atom_idx as usize] {
             let bond = &mol.bonds[bond_idx as usize];
@@ -2183,7 +2222,7 @@ fn fused_diaza_dicarbonyl_bridge_bond(mol: &Molecule, ring: &[AtomIdx]) -> Optio
         return None;
     }
 
-    let ring_set: HashSet<AtomIdx> = ring.iter().copied().collect();
+    let ring_set: FxHashSet<AtomIdx> = ring.iter().copied().collect();
     if ring_set.len() != ring.len() {
         return None;
     }
@@ -3158,7 +3197,7 @@ mod tests {
         let local = find_local_cycles(&mol, 5, 24);
         let dfs = find_dfs_cycles(&mol, 5, 8, 2000);
         let mut rings = Vec::new();
-        let mut seen: HashSet<Vec<AtomIdx>> = HashSet::new();
+        let mut seen: FxHashSet<Vec<AtomIdx>> = FxHashSet::default();
         for ring in sssr.iter().chain(local.iter()).chain(dfs.iter()) {
             let key = ring_set_key(ring);
             if seen.insert(key) {
@@ -3191,7 +3230,7 @@ mod tests {
         let local = find_local_cycles(&mol, 5, 24);
         let dfs = find_dfs_cycles(&mol, 5, 8, 2000);
         let mut rings = Vec::new();
-        let mut seen: HashSet<Vec<AtomIdx>> = HashSet::new();
+        let mut seen: FxHashSet<Vec<AtomIdx>> = FxHashSet::default();
         for ring in sssr.iter().chain(local.iter()).chain(dfs.iter()) {
             let key = ring_set_key(ring);
             if seen.insert(key) {
@@ -3251,7 +3290,7 @@ mod tests {
         let local = find_local_cycles(&mol, 5, 24);
         let dfs = find_dfs_cycles(&mol, 5, 8, 2000);
         let mut rings = Vec::new();
-        let mut seen: HashSet<Vec<AtomIdx>> = HashSet::new();
+        let mut seen: FxHashSet<Vec<AtomIdx>> = FxHashSet::default();
         for ring in sssr.iter().chain(local.iter()).chain(dfs.iter()) {
             let key = ring_set_key(ring);
             if seen.insert(key) {
@@ -3461,5 +3500,73 @@ mod tests {
                 "atom {atom_idx} should stay kekulized"
             );
         }
+    }
+
+    #[test]
+    /// Runs regression test for azulene kekulized matches rdkit aromatic targets.
+    ///
+    /// Function context: `crates/ferrum_core/src/algo/aromaticity.rs`.
+    /// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
+    fn test_azulene_kekulized_matches_rdkit_aromatic_targets() {
+        // RDKit reference (C1=CC=C2C=CC=CC2=C1):
+        // aromatic atoms = 10, aromatic rings = 2.
+        let mol = parse_smiles("C1=CC=C2C=CC=CC2=C1").unwrap();
+        let aromatic_count = mol.atoms.iter().filter(|atom| atom.is_aromatic()).count();
+        assert_eq!(aromatic_count, 10);
+        assert_eq!(
+            crate::desc::aromatic_ring_count::compute_aromatic_ring_count(&mol),
+            2
+        );
+    }
+
+    #[test]
+    /// Runs regression test for tropylium matches rdkit aromatic targets.
+    ///
+    /// Function context: `crates/ferrum_core/src/algo/aromaticity.rs`.
+    /// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
+    fn test_tropylium_matches_rdkit_aromatic_targets() {
+        // RDKit reference ([CH+]1C=CC=CC=C1):
+        // aromatic atoms = 7, aromatic rings = 1.
+        let mol = parse_smiles("[CH+]1C=CC=CC=C1").unwrap();
+        let aromatic_count = mol.atoms.iter().filter(|atom| atom.is_aromatic()).count();
+        assert_eq!(aromatic_count, 7);
+        assert_eq!(
+            crate::desc::aromatic_ring_count::compute_aromatic_ring_count(&mol),
+            1
+        );
+    }
+
+    #[test]
+    /// Runs regression test for two pyridone and hydroxypyridine tautomers match rdkit aromatic targets.
+    ///
+    /// Function context: `crates/ferrum_core/src/algo/aromaticity.rs`.
+    /// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
+    fn test_two_pyridone_and_hydroxypyridine_tautomers_match_rdkit_aromatic_targets() {
+        // RDKit reference:
+        // O=C1NC=CC=C1 -> aromatic atoms = 6, aromatic rings = 1
+        // Oc1ccccn1     -> aromatic atoms = 6, aromatic rings = 1
+        let pyridone = parse_smiles("O=C1NC=CC=C1").unwrap();
+        let pyridone_aromatic = pyridone
+            .atoms
+            .iter()
+            .filter(|atom| atom.is_aromatic())
+            .count();
+        assert_eq!(pyridone_aromatic, 6);
+        assert_eq!(
+            crate::desc::aromatic_ring_count::compute_aromatic_ring_count(&pyridone),
+            1
+        );
+
+        let hydroxypyridine = parse_smiles("Oc1ccccn1").unwrap();
+        let hydroxypyridine_aromatic = hydroxypyridine
+            .atoms
+            .iter()
+            .filter(|atom| atom.is_aromatic())
+            .count();
+        assert_eq!(hydroxypyridine_aromatic, 6);
+        assert_eq!(
+            crate::desc::aromatic_ring_count::compute_aromatic_ring_count(&hydroxypyridine),
+            1
+        );
     }
 }

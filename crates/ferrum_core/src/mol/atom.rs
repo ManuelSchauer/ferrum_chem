@@ -47,9 +47,10 @@ use crate::types::Hybridization;
 ///
 /// # Thread Safety
 /// `Atom` is `Copy + Send + Sync`, making it trivially thread-safe.
-/// The struct is designed to be compact (12 bytes) and cache-friendly
+/// The struct is designed to be compact (8 bytes) and cache-friendly
 /// for high-performance parallel processing.
 #[derive(Debug, Clone, Copy)]
+#[repr(C)]
 pub struct Atom {
     pub atomic_number: u8,
     pub formal_charge: i8,
@@ -58,6 +59,30 @@ pub struct Atom {
     pub isotope: u16,
     pub hybridization: Hybridization,
     pub flags: u8, // Bit 0: Aromatic, Bit 1: Ring
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Atom;
+    use std::mem::{align_of, size_of};
+
+    #[test]
+    /// Runs regression test for atom layout size.
+    ///
+    /// Function context: `crates/ferrum_core/src/mol/atom.rs`.
+    /// Molecule-model note: preserve atom/bond index invariants and cached-property invalidation rules.
+    fn test_atom_layout_size() {
+        assert_eq!(size_of::<Atom>(), 8);
+    }
+
+    #[test]
+    /// Runs regression test for atom layout alignment.
+    ///
+    /// Function context: `crates/ferrum_core/src/mol/atom.rs`.
+    /// Molecule-model note: preserve atom/bond index invariants and cached-property invalidation rules.
+    fn test_atom_layout_alignment() {
+        assert_eq!(align_of::<Atom>(), 2);
+    }
 }
 
 // Static assertion: Atom must be Send + Sync

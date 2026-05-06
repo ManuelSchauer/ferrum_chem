@@ -876,9 +876,8 @@ fn compute_gasteiger_charges_uncached(mol: &Molecule) -> Vec<f64> {
         }
     }
 
-    for k in 0..NUM_ITERATIONS {
-        let damping = 1.0_f64 / (2.0_f64.powi((k as i32) + 1));
-
+    let mut damping = 0.5_f64;
+    for _ in 0..NUM_ITERATIONS {
         // Compute electronegativity for each atom.
         for i in 0..n {
             if nan_atoms[i] {
@@ -936,6 +935,7 @@ fn compute_gasteiger_charges_uncached(mol: &Molecule) -> Vec<f64> {
 
             q[i] += damping * dq;
         }
+        damping *= 0.5;
     }
 
     // Set NaN for atoms in flagged fragments

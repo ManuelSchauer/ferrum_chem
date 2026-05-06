@@ -77,12 +77,13 @@ impl KnnRegressor {
 
     /// Predict for a single sample.
     pub fn predict_one(&self, sample: &[f64]) -> f64 {
+        let sample32: Vec<f32> = sample.iter().map(|&v| v as f32).collect();
         let mut best_dists = vec![f64::INFINITY; self.k];
         let mut best_indices = vec![0usize; self.k];
         knn_mean_target(
             &self.train_features,
             &self.train_targets,
-            sample,
+            &sample32,
             self.metric,
             &mut best_dists,
             &mut best_indices,
@@ -94,11 +95,15 @@ impl KnnRegressor {
         let mut best_dists = vec![f64::INFINITY; self.k];
         let mut best_indices = vec![0usize; self.k];
         let mut preds = Vec::with_capacity(features.nrows());
+        let mut sample32 = vec![0.0f32; features.ncols()];
         scan_rows_f64(features, |_, sample| {
+            for (dst, &src) in sample32.iter_mut().zip(sample.iter()) {
+                *dst = src as f32;
+            }
             preds.push(knn_mean_target(
                 &self.train_features,
                 &self.train_targets,
-                sample,
+                &sample32,
                 self.metric,
                 &mut best_dists,
                 &mut best_indices,
@@ -109,11 +114,12 @@ impl KnnRegressor {
 
     /// Find k nearest neighbors. Returns Vec<(distance, target)>.
     pub fn find_k_nearest(&self, sample: &[f64]) -> Vec<(f64, f64)> {
+        let sample32: Vec<f32> = sample.iter().map(|&v| v as f32).collect();
         let mut best_dists = vec![f64::INFINITY; self.k];
         let mut best_indices = vec![0usize; self.k];
         let filled = knn_select_k(
             &self.train_features,
-            sample,
+            &sample32,
             self.metric,
             &mut best_dists,
             &mut best_indices,
@@ -133,11 +139,12 @@ impl KnnRegressor {
 
     /// Mean distance to k nearest neighbors (useful for applicability domain).
     pub fn mean_knn_distance(&self, sample: &[f64]) -> f64 {
+        let sample32: Vec<f32> = sample.iter().map(|&v| v as f32).collect();
         let mut best_dists = vec![f64::INFINITY; self.k];
         let mut best_indices = vec![0usize; self.k];
         let filled = knn_select_k(
             &self.train_features,
-            sample,
+            &sample32,
             self.metric,
             &mut best_dists,
             &mut best_indices,
@@ -197,12 +204,13 @@ impl KnnClassifier {
 
     /// Predict probability of positive class.
     pub fn predict_proba_one(&self, sample: &[f64]) -> f64 {
+        let sample32: Vec<f32> = sample.iter().map(|&v| v as f32).collect();
         let mut best_dists = vec![f64::INFINITY; self.k];
         let mut best_indices = vec![0usize; self.k];
         knn_positive_fraction(
             &self.train_features,
             &self.train_targets,
-            sample,
+            &sample32,
             self.metric,
             &mut best_dists,
             &mut best_indices,
@@ -214,11 +222,15 @@ impl KnnClassifier {
         let mut best_dists = vec![f64::INFINITY; self.k];
         let mut best_indices = vec![0usize; self.k];
         let mut preds = Vec::with_capacity(features.nrows());
+        let mut sample32 = vec![0.0f32; features.ncols()];
         scan_rows_f64(features, |_, sample| {
+            for (dst, &src) in sample32.iter_mut().zip(sample.iter()) {
+                *dst = src as f32;
+            }
             let prob = knn_positive_fraction(
                 &self.train_features,
                 &self.train_targets,
-                sample,
+                &sample32,
                 self.metric,
                 &mut best_dists,
                 &mut best_indices,
@@ -232,7 +244,7 @@ impl KnnClassifier {
 /// Select k nearest training rows for a sample.
 fn knn_select_k(
     train_features: &Array2<f32>,
-    sample: &[f64],
+    sample: &[f32],
     metric: DistanceMetric,
     best_dists: &mut [f64],
     best_indices: &mut [usize],
@@ -246,15 +258,8 @@ fn knn_select_k(
 
     scan_rows_f32(train_features, |i, row| {
         let candidate = match metric {
-            DistanceMetric::Euclidean => {
-                let cutoff = if filled < k {
-                    f64::INFINITY
-                } else {
-                    worst_dist
-                };
-                squared_euclidean_distance_with_cutoff_mixed(sample, row, cutoff)
-            }
-            DistanceMetric::Tanimoto => tanimoto_distance_mixed(sample, row),
+            DistanceMetric::Euclidean => squared_euclidean_distance_f32(sample, row),
+            DistanceMetric::Tanimoto => tanimoto_distance_f32(sample, row),
         };
 
         if filled < k {
@@ -289,7 +294,7 @@ fn knn_select_k(
 fn knn_mean_target(
     train_features: &Array2<f32>,
     train_targets: &Array1<f32>,
-    sample: &[f64],
+    sample: &[f32],
     metric: DistanceMetric,
     best_dists: &mut [f64],
     best_indices: &mut [usize],
@@ -309,7 +314,7 @@ fn knn_mean_target(
 fn knn_positive_fraction(
     train_features: &Array2<f32>,
     train_targets: &Array1<f32>,
-    sample: &[f64],
+    sample: &[f32],
     metric: DistanceMetric,
     best_dists: &mut [f64],
     best_indices: &mut [usize],
@@ -342,33 +347,22 @@ fn largest_entry(values: &[f64], count: usize) -> (usize, f64) {
 
 /// Compute squared Euclidean distance.
 fn squared_euclidean_distance(a: &[f64], b: &[f64]) -> f64 {
-    squared_euclidean_distance_with_cutoff(a, b, f64::INFINITY)
-}
-
-/// Compute squared Euclidean distance with early exit if partial sum exceeds cutoff.
-fn squared_euclidean_distance_with_cutoff(a: &[f64], b: &[f64], cutoff: f64) -> f64 {
     let mut acc = 0.0;
-    for i in 0..a.len() {
-        let d = a[i] - b[i];
+    for (&x, &y) in a.iter().zip(b.iter()) {
+        let d = x - y;
         acc = d.mul_add(d, acc);
-        if acc > cutoff {
-            break;
-        }
     }
     acc
 }
 
-/// Compute squared Euclidean distance with mixed precision and early exit.
-fn squared_euclidean_distance_with_cutoff_mixed(a: &[f64], b: &[f32], cutoff: f64) -> f64 {
-    let mut acc = 0.0;
-    for i in 0..a.len() {
-        let d = a[i] - f64::from(b[i]);
+/// Compute squared Euclidean distance on f32 vectors.
+fn squared_euclidean_distance_f32(a: &[f32], b: &[f32]) -> f64 {
+    let mut acc = 0.0f32;
+    for (&x, &y) in a.iter().zip(b.iter()) {
+        let d = x - y;
         acc = d.mul_add(d, acc);
-        if acc > cutoff {
-            break;
-        }
     }
-    acc
+    f64::from(acc)
 }
 
 /// Compute Tanimoto distance = 1 - Tanimoto similarity.
@@ -376,9 +370,7 @@ fn tanimoto_distance(a: &[f64], b: &[f64]) -> f64 {
     let mut ab = 0.0;
     let mut aa = 0.0;
     let mut bb = 0.0;
-    for i in 0..a.len() {
-        let x = a[i];
-        let y = b[i];
+    for (&x, &y) in a.iter().zip(b.iter()) {
         ab = x.mul_add(y, ab);
         aa = x.mul_add(x, aa);
         bb = y.mul_add(y, bb);
@@ -387,20 +379,22 @@ fn tanimoto_distance(a: &[f64], b: &[f64]) -> f64 {
     if denom < 1e-15 { 0.0 } else { 1.0 - ab / denom }
 }
 
-/// Compute Tanimoto distance with mixed precision.
-fn tanimoto_distance_mixed(a: &[f64], b: &[f32]) -> f64 {
-    let mut ab = 0.0;
-    let mut aa = 0.0;
-    let mut bb = 0.0;
-    for i in 0..a.len() {
-        let x = a[i];
-        let y = f64::from(b[i]);
+/// Compute Tanimoto distance on f32 vectors.
+fn tanimoto_distance_f32(a: &[f32], b: &[f32]) -> f64 {
+    let mut ab = 0.0f32;
+    let mut aa = 0.0f32;
+    let mut bb = 0.0f32;
+    for (&x, &y) in a.iter().zip(b.iter()) {
         ab = x.mul_add(y, ab);
         aa = x.mul_add(x, aa);
         bb = y.mul_add(y, bb);
     }
     let denom = aa + bb - ab;
-    if denom < 1e-15 { 0.0 } else { 1.0 - ab / denom }
+    if denom < 1e-15f32 {
+        0.0
+    } else {
+        1.0 - f64::from(ab / denom)
+    }
 }
 
 /// Iterate rows of a feature matrix with a contiguous fast path.

@@ -41,7 +41,8 @@
 
 use crate::mol::molecule::Molecule;
 use crate::types::AtomIdx;
-use std::collections::{HashSet, VecDeque};
+use rustc_hash::FxHashSet;
+use std::collections::VecDeque;
 
 /// Detects rings using SSSR (Smallest Set of Smallest Rings) algorithm.
 ///
@@ -88,10 +89,27 @@ pub fn find_sssr(mol: &mut Molecule) -> Vec<Vec<AtomIdx>> {
         bond.flags &= !0b10; // Clear bit 1 (ring flag)
     }
 
+    let all_rings = find_sssr_cycles(mol);
+    for cycle in &all_rings {
+        mark_cycle_as_ring(mol, cycle);
+    }
+
+    all_rings
+}
+
+/// Detects SSSR-like atom cycles without mutating ring flags.
+///
+/// This mirrors `find_sssr` cycle enumeration semantics but leaves atom/bond
+/// ring flags untouched. It is used by read-only query contexts (SMARTS ring
+/// primitives) to avoid cloning whole molecules just to run mutable ring
+/// perception.
+pub(crate) fn find_sssr_cycles(mol: &Molecule) -> Vec<Vec<AtomIdx>> {
+    if mol.num_atoms() == 0 {
+        return Vec::new();
+    }
+
     let n_atoms = mol.num_atoms();
     let mut all_rings = Vec::new();
-
-    // Find all connected components and detect rings in each
     let mut visited = vec![false; n_atoms];
 
     for start_idx in 0..n_atoms {
@@ -99,7 +117,6 @@ pub fn find_sssr(mol: &mut Molecule) -> Vec<Vec<AtomIdx>> {
             continue;
         }
 
-        // Detect rings in this connected component
         let component_rings = detect_rings_in_component(mol, start_idx as AtomIdx, &mut visited);
         all_rings.extend(component_rings);
     }
@@ -751,7 +768,7 @@ fn minimum_orthogonal_cycle(
 /// # Thread Safety
 /// Read-only access to molecule structure, writes only to the molecule being processed.
 fn detect_rings_in_component(
-    mol: &mut Molecule,
+    mol: &Molecule,
     start: AtomIdx,
     visited: &mut [bool],
 ) -> Vec<Vec<AtomIdx>> {
@@ -787,7 +804,7 @@ fn detect_rings_in_component(
 
     // Collect all cycles first (to avoid borrowing issues)
     let mut all_cycles = Vec::new();
-    let mut seen_cycle_keys: HashSet<Vec<AtomIdx>> = HashSet::new();
+    let mut seen_cycle_keys: FxHashSet<Vec<AtomIdx>> = FxHashSet::default();
     let mut path_start = Vec::new();
     let mut path_end = Vec::new();
     let mut membership = vec![false; n_atoms];
@@ -835,11 +852,6 @@ fn detect_rings_in_component(
         }
     }
 
-    // Now mark all cycles
-    for cycle in &all_cycles {
-        mark_cycle_as_ring(mol, cycle);
-    }
-
     all_cycles
 }
 
@@ -849,8 +861,8 @@ fn rings_are_same(ring1: &[AtomIdx], ring2: &[AtomIdx]) -> bool {
     if ring1.len() != ring2.len() {
         return false;
     }
-    let s1: HashSet<_> = ring1.iter().copied().collect();
-    let s2: HashSet<_> = ring2.iter().copied().collect();
+    let s1: FxHashSet<_> = ring1.iter().copied().collect();
+    let s2: FxHashSet<_> = ring2.iter().copied().collect();
     s1 == s2
 }
 

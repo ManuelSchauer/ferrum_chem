@@ -27,9 +27,9 @@ FerrumChem is a high-performance molecular descriptor calculation engine designe
 - **⚡ Latest 100k matched CSV benchmark**: Ferrum `2340.81 mol/s` vs RDKit `603.29 mol/s` (**3.88x faster**)
 - **💾 Latest 100k matched CSV memory**: Ferrum `21.80 MB` peak RSS vs RDKit `202.56 MB` (**9.29x lower**)
 - **📊 Latest pinned CSV benchmark (57 outputs, single-thread, 10k, median of 3 runs)**:
-  - Ferrum buffered: `2187.70 mol/s`, `9.12 MiB` peak RSS
-  - RDKit: `531.30 mol/s`, `97.81 MiB` peak RSS
-  - Relative: Ferrum is **4.12x faster** with **10.72x lower** peak RSS
+  - Ferrum buffered: `2488.07 mol/s`, `10.11 MiB` peak RSS
+  - RDKit: `612.56 mol/s`, `128.38 MiB` peak RSS
+  - Relative: Ferrum is **4.06x faster** with **12.70x lower** peak RSS
 - **🔧 Parallel processing**: Built-in Rayon support for batch calculations
 - **📊 ML-ready**: Single `Descriptor` trait + direct ndarray integration
 - **🔒 Thread-safe**: All data structures are `Send + Sync`
@@ -160,6 +160,11 @@ OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 VECLIB_MAXIMUM_THREAD
 OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 VECLIB_MAXIMUM_THREADS=1 RAYON_NUM_THREADS=1 \
   FERRUM_BENCH_CSV_LIMIT=1000 FERRUM_BENCH_REPEATS=11 FERRUM_BENCH_WARMUP=100 \
   cargo run -p ferrum_cli --release --bin parity_bundle_csv_benchmark
+# 10k pinned run (used for latest README numbers)
+OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 VECLIB_MAXIMUM_THREADS=1 RAYON_NUM_THREADS=1 \
+  FERRUM_BENCH_CSV=coconut_csv_lite-10000-tui.csv FERRUM_BENCH_CSV_COLUMN=canonical_smiles \
+  FERRUM_BENCH_CSV_LIMIT=10000 FERRUM_BENCH_REPEATS=3 FERRUM_BENCH_WARMUP=100 \
+  cargo run -p ferrum_cli --release --bin parity_bundle_csv_benchmark --quiet > /tmp/ferrum_parity57_10k.tsv
 # Optional streaming ingestion mode (avoids preloading all SMILES in benchmark process)
 OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 VECLIB_MAXIMUM_THREADS=1 RAYON_NUM_THREADS=1 \
   FERRUM_BENCH_CSV_MODE=stream FERRUM_BENCH_CSV_CHUNK_SIZE=1 \
@@ -196,6 +201,7 @@ PERF_ML_AD_FIT_MAX_MS=12000 PERF_ML_AD_PREDICT_MAX_MS=12000 PERF_ML_AUTOQSAR_MAX
 # FERRUM_AUTOQSAR_MAX_THREADS: optional thread cap for AutoQsar internal work
 # FERRUM_AUTOQSAR_PRUNE_KEEP: optional top-K candidates to keep after quick pass
 # FERRUM_AUTOQSAR_PRUNE_FOLDS: quick-pass folds when pruning is enabled (default 2)
+# FERRUM_RF_PRESORT_MAX_BYTES: Random Forest root pre-sort memory budget (default 268435456)
 FERRUM_AUTOQSAR_PARALLEL_MODE=candidate \
 FERRUM_AUTOQSAR_MAX_THREADS=8 \
 FERRUM_AUTOQSAR_PRUNE_KEEP=6 \
@@ -213,6 +219,12 @@ FERRUM_ML_REAL_LIMIT=100000 FERRUM_ML_REAL_FOLDS=3 FERRUM_ML_REAL_REPEATS=1 \
 # Optional large-N AD approximation mode (default remains exact)
 FERRUM_AD_MODE=approx FERRUM_AD_APPROX_MIN_ROWS=50000 FERRUM_AD_APPROX_STEP=4 \
   cargo run -p ferrum_cli --release --bin autoqsar_benchmark --quiet
+
+# Native BLAS/LAPACK backend is enabled by default for PCA/AD linear algebra
+# (requires system OpenBLAS/LAPACK availability).
+cargo test -p ferrum_core --release --lib --quiet
+# To force pure-Rust fallback path explicitly:
+cargo test -p ferrum_core --release --no-default-features --lib --quiet
 ```
 
 ### CI guardrails
@@ -439,14 +451,26 @@ Latest normalized snapshot (10,000 iterations, median of repeated runs):
 
 CSV bundle slice (`coconut_csv_lite-10000-tui.csv`, 57 outputs) currently reports both throughput and peak RSS in matched output columns:
 
-- FerrumChem (10k rows, buffered, median of 3 runs): `2187.70 mol/s`, peak RSS `9.12 MiB`
-- RDKit (10k rows, median of 3 runs): `531.30 mol/s`, peak RSS `97.81 MiB`
+- FerrumChem (10k rows, buffered, median of 3 runs): `2488.07 mol/s`, peak RSS `10.11 MiB`
+- RDKit (10k rows, median of 3 runs): `612.56 mol/s`, peak RSS `128.38 MiB`
 
 This is currently:
-- **4.12x throughput advantage** for Ferrum vs RDKit
-- **10.72x lower peak RSS** for Ferrum vs RDKit
+- **4.06x throughput advantage** for Ferrum vs RDKit
+- **12.70x lower peak RSS** for Ferrum vs RDKit
 
 The CSV benchmark output includes `peak_rss_bytes` and `peak_rss_mb` for direct memory-footprint comparisons.
+
+#### 10k parity summary (release-mode, RDKit reference CSV)
+
+Reference generation used the first 10,000 rows from `coconut_csv_lite-10000-tui.csv` and ran the core parity suites with:
+`FERRUM_RDKIT_REFERENCE_ROWS=10000 cargo test -p ferrum_core --release --test rdkit_comparison -- --nocapture --test-threads=1 --skip rdkit_ipc_relative_error_diagnostics --skip rdkit_avgipc_diagnostics`
+
+| Suite | Total checks | Passed | Failed | Pass rate |
+|---|---:|---:|---:|---:|
+| Scalar | 220,000 | 218,601 | 1,399 | 99.4% |
+| Ring | 40,000 | 39,773 | 227 | 99.4% |
+| VSA | 360,000 | 358,604 | 1,396 | 99.6% |
+| Chi/Kappa | 100,000 | 99,862 | 138 | 99.9% |
 
 ### 100k campaign (release-mode, single-thread pinned)
 

@@ -34,6 +34,22 @@
 use ndarray::{Array1, Array2, Axis};
 use serde::{Deserialize, Serialize};
 
+#[cfg(feature = "native-linalg")]
+use ndarray_linalg::{Eigh, UPLO};
+
+/// Attempt symmetric eigendecomposition using native LAPACK when enabled.
+#[cfg(feature = "native-linalg")]
+fn symmetric_eigendecompose(a: &Array2<f64>) -> Option<(Vec<f64>, Array2<f64>)> {
+    let (vals, vecs) = a.clone().eigh(UPLO::Lower).ok()?;
+    Some((vals.to_vec(), vecs))
+}
+
+/// Fallback stub when native linear algebra is not enabled.
+#[cfg(not(feature = "native-linalg"))]
+fn symmetric_eigendecompose(_a: &Array2<f64>) -> Option<(Vec<f64>, Array2<f64>)> {
+    None
+}
+
 /// Principal Component Analysis via covariance matrix eigendecomposition.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Pca {
@@ -74,33 +90,11 @@ impl Pca {
         // back to feature space. This avoids the enormous p×p covariance + Jacobi cost.
         let use_dual = n_features > n_samples;
         let (mut eigenvalues, eigenvectors) = if use_dual {
-            let mut gram = Array2::<f64>::zeros((n_samples, n_samples));
-            for i in 0..n_samples {
-                for j in i..n_samples {
-                    let mut s = 0.0;
-                    for k in 0..n_features {
-                        s = centered[[i, k]].mul_add(centered[[j, k]], s);
-                    }
-                    s /= n;
-                    gram[[i, j]] = s;
-                    gram[[j, i]] = s;
-                }
-            }
-            jacobi_eigen(&gram)
+            let gram = centered.dot(&centered.t()) / n;
+            symmetric_eigendecompose(&gram).unwrap_or_else(|| jacobi_eigen(&gram))
         } else {
-            let mut cov = Array2::<f64>::zeros((n_features, n_features));
-            for i in 0..n_features {
-                for j in i..n_features {
-                    let mut s = 0.0;
-                    for k in 0..n_samples {
-                        s = centered[[k, i]].mul_add(centered[[k, j]], s);
-                    }
-                    s /= n;
-                    cov[[i, j]] = s;
-                    cov[[j, i]] = s;
-                }
-            }
-            jacobi_eigen(&cov)
+            let cov = centered.t().dot(&centered) / n;
+            symmetric_eigendecompose(&cov).unwrap_or_else(|| jacobi_eigen(&cov))
         };
 
         for value in &mut eigenvalues {
@@ -168,22 +162,8 @@ impl Pca {
 
     /// Transform data into PCA space.
     pub fn transform(&self, data: &Array2<f64>) -> Array2<f64> {
-        let n = data.nrows();
-        let nc = self.components.nrows();
-        let mut result = Array2::<f64>::zeros((n, nc));
-
-        for i in 0..n {
-            let centered = &data.row(i).to_owned() - &self.mean;
-            for j in 0..nc {
-                let dot: f64 = centered
-                    .iter()
-                    .zip(self.components.row(j).iter())
-                    .map(|(&a, &b)| a * b)
-                    .sum();
-                result[[i, j]] = dot;
-            }
-        }
-        result
+        let centered = data - &self.mean;
+        centered.dot(&self.components.t())
     }
 
     /// Transform a single sample into PCA space.
@@ -218,19 +198,9 @@ impl Pca {
 
     /// Inverse transform: project back to original space.
     pub fn inverse_transform(&self, data: &Array2<f64>) -> Array2<f64> {
-        let n = data.nrows();
-        let p = self.mean.len();
-        let nc = self.components.nrows();
-        let mut result = Array2::<f64>::zeros((n, p));
-
-        for i in 0..n {
-            for j in 0..p {
-                let mut v = self.mean[j];
-                for k in 0..nc {
-                    v = data[[i, k]].mul_add(self.components[[k, j]], v);
-                }
-                result[[i, j]] = v;
-            }
+        let mut result = data.dot(&self.components);
+        for mut row in result.axis_iter_mut(Axis(0)) {
+            row += &self.mean;
         }
         result
     }

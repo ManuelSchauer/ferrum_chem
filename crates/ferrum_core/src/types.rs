@@ -40,6 +40,7 @@ pub type BondIdx = u16;
 /// Floating point type for descriptors (switchable f32/f64).
 pub type Real = f32;
 
+#[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BondType {
     Single,
@@ -50,6 +51,7 @@ pub enum BondType {
     Unknown,
 }
 
+#[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Hybridization {
     SP,

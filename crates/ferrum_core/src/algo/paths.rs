@@ -43,6 +43,7 @@
 
 use crate::mol::molecule::Molecule;
 use crate::types::AtomIdx;
+use rustc_hash::FxHashSet;
 
 /// Finds all paths of length.
 ///
@@ -66,7 +67,7 @@ where
     // compact 128-bit mask, eliminating Vec contains/clone/sort work in the DFS
     // inner loop while preserving current canonical path de-dup semantics.
     if mol.num_bonds() <= 128 {
-        let mut paths_seen = std::collections::HashSet::new();
+        let mut paths_seen = FxHashSet::default();
         let mut atom_path = Vec::with_capacity(bond_length + 1);
         for start in 0..mol.num_atoms() {
             atom_path.clear();
@@ -86,7 +87,7 @@ where
 
     // Fallback for very large bond counts retains the previous generic keying
     // strategy based on sorted used-bond vectors.
-    let mut paths_seen = std::collections::HashSet::new();
+    let mut paths_seen = FxHashSet::default();
     let mut atom_path = Vec::with_capacity(bond_length + 1);
     let mut used_bonds = Vec::with_capacity(bond_length);
 
@@ -115,7 +116,7 @@ fn dfs_paths_of_length_mask<F>(
     used_mask_lo: u128,
     depth: usize,
     bond_length: usize,
-    seen: &mut std::collections::HashSet<u128>,
+    seen: &mut FxHashSet<u128>,
     callback: &mut F,
 ) where
     F: FnMut(&[AtomIdx]),
@@ -165,7 +166,7 @@ fn dfs_paths_of_length_vec<F>(
     atom_path: &mut Vec<AtomIdx>,
     used_bonds: &mut Vec<usize>,
     bond_length: usize,
-    seen: &mut std::collections::HashSet<Vec<usize>>,
+    seen: &mut FxHashSet<Vec<usize>>,
     callback: &mut F,
 ) where
     F: FnMut(&[AtomIdx]),

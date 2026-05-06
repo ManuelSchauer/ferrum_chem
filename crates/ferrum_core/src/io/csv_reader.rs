@@ -47,6 +47,7 @@ use crate::mol::molecule::Molecule;
 use rayon::prelude::*;
 use std::fs::File;
 use std::path::Path;
+use std::sync::Arc;
 
 /// CSV reader for batch processing of molecular datasets.
 ///
@@ -91,8 +92,11 @@ pub struct MoleculeRecord {
     pub smiles: String,
     /// Error message (if parsing failed)
     pub error: Option<String>,
-    /// Additional properties from other columns
-    pub properties: Vec<(String, String)>,
+    /// Additional properties from other columns.
+    ///
+    /// Column names are interned as `Arc<str>` per CSV parse so repeated rows
+    /// share one header allocation each.
+    pub properties: Vec<(Arc<str>, String)>,
 }
 
 impl CsvReader {
@@ -184,7 +188,7 @@ impl CsvReader {
     /// Function context: `crates/ferrum_core/src/io/csv_reader.rs`.
     /// I/O-layer note: parsing/ingestion should surface explicit errors instead of silently repairing malformed input.
     fn parse_chunk_records(
-        headers: &csv::StringRecord,
+        headers: &[Arc<str>],
         smiles_idx: usize,
         include_properties: bool,
         records: Vec<(usize, csv::StringRecord)>,
@@ -195,11 +199,12 @@ impl CsvReader {
                 let smiles = record.get(smiles_idx).unwrap_or("").trim().to_string();
 
                 let properties = if include_properties {
-                    let mut properties: Vec<(String, String)> =
+                    let mut properties: Vec<(Arc<str>, String)> =
                         Vec::with_capacity(headers.len().saturating_sub(1));
-                    for (idx, (header, value)) in headers.iter().zip(record.iter()).enumerate() {
+                    for (idx, header) in headers.iter().enumerate() {
                         if idx != smiles_idx {
-                            properties.push((header.to_string(), value.to_string()));
+                            let value = record.get(idx).unwrap_or("");
+                            properties.push((Arc::clone(header), value.to_string()));
                         }
                     }
                     properties
@@ -248,6 +253,7 @@ impl CsvReader {
         } else {
             Self::detect_smiles_column(&headers)?
         };
+        let interned_headers: Vec<Arc<str>> = headers.iter().map(Arc::<str>::from).collect();
 
         let chunk_size = self.parse_chunk_size.max(1);
         let mut chunk_records: Vec<(usize, csv::StringRecord)> = Vec::with_capacity(chunk_size);
@@ -263,7 +269,7 @@ impl CsvReader {
                 let current_chunk =
                     std::mem::replace(&mut chunk_records, Vec::with_capacity(chunk_size));
                 let chunk_results = Self::parse_chunk_records(
-                    &headers,
+                    &interned_headers,
                     smiles_idx,
                     self.include_properties,
                     current_chunk,
@@ -282,7 +288,7 @@ impl CsvReader {
 
         if !chunk_records.is_empty() {
             let chunk_results = Self::parse_chunk_records(
-                &headers,
+                &interned_headers,
                 smiles_idx,
                 self.include_properties,
                 chunk_records,
@@ -493,7 +499,7 @@ c1ccccc1,Benzene
         assert_eq!(records[0].smiles, "CCO");
         assert_eq!(records[1].smiles, "c1ccccc1");
         // Properties should include Name column
-        assert_eq!(records[0].properties[0].0, "Name");
+        assert_eq!(records[0].properties[0].0.as_ref(), "Name");
         assert_eq!(records[0].properties[0].1, "Ethanol");
     }
 

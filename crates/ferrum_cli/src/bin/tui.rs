@@ -105,6 +105,7 @@ const PREVIEW_COLS: usize = 5;
 const DEFAULT_EXPORT_PATH: &str = "/tmp/ferrum_tui_predictions.csv";
 const DEFAULT_FEATURE_EXPORT_PATH: &str = "/tmp/ferrum_tui_features.csv";
 const DEFAULT_MODEL_EXPORT_PATH: &str = "/tmp/ferrum_tui_model_bundle.fcbundle";
+const DEFAULT_CLUSTER_EXPORT_PATH: &str = "/tmp/ferrum_tui_clusters.csv";
 const DEFAULT_VARIANCE_THRESHOLD: f64 = 1e-12;
 const DEFAULT_CORRELATION_THRESHOLD: f64 = 0.95;
 const DEFAULT_TEST_FRACTION: f64 = 0.20;
@@ -141,6 +142,7 @@ enum WorkerJobKind {
     Art2aClustering,
     Prediction,
     PredictionExport,
+    ClusterExport,
     ModelBundleExport,
     ModelBundleImport,
     VarianceFilter,
@@ -158,6 +160,7 @@ impl WorkerJobKind {
             Self::Art2aClustering => "ART2-A clustering",
             Self::Prediction => "prediction",
             Self::PredictionExport => "prediction export",
+            Self::ClusterExport => "cluster export",
             Self::ModelBundleExport => "model bundle export",
             Self::ModelBundleImport => "model bundle import",
             Self::VarianceFilter => "variance filtering",
@@ -559,6 +562,14 @@ struct ModelFeatureLayout {
     expected_feature_names: Vec<String>,
 }
 
+#[derive(Debug, Clone)]
+struct ActiveModelSelection {
+    layout: ModelFeatureLayout,
+    pipeline_bundle_bytes: Option<Vec<u8>>,
+    art2a_model_bytes: Option<Vec<u8>>,
+    warning: Option<String>,
+}
+
 impl ModelFeatureLayout {
     /// Builds a feature-layout snapshot from an in-memory feature matrix.
     fn from_matrix(matrix: &FeatureMatrix) -> Self {
@@ -689,6 +700,14 @@ struct PredictionOutputRow {
 }
 
 #[derive(Debug, Clone)]
+struct ClusterExportRow {
+    smiles: String,
+    cluster_id: usize,
+    similarity: Option<f64>,
+    in_domain: Option<bool>,
+}
+
+#[derive(Debug, Clone)]
 struct Art2aClusterSummary {
     cluster_id: usize,
     size: usize,
@@ -730,6 +749,10 @@ enum WorkerRequest {
         target_names: Vec<String>,
         rows: Vec<PredictionOutputRow>,
     },
+    ExportClusters {
+        path: PathBuf,
+        rows: Vec<ClusterExportRow>,
+    },
     ApplyVarianceFilter {
         matrix: FeatureMatrixPayload,
         threshold: f64,
@@ -760,7 +783,7 @@ enum WorkerResponse {
         path: PathBuf,
         molecules: Vec<Molecule>,
         smiles: Vec<String>,
-        properties: Vec<Vec<(String, String)>>,
+        properties: Vec<Vec<(Arc<str>, String)>>,
         failed_rows: usize,
     },
     DescriptorsCalculated {
@@ -810,8 +833,13 @@ enum WorkerResponse {
         target_names: Vec<String>,
         rows: Vec<PredictionOutputRow>,
         skipped_rows: usize,
+        projection: Option<ProjectionData>,
     },
     PredictionsExported {
+        path: PathBuf,
+        count: usize,
+    },
+    ClustersExported {
         path: PathBuf,
         count: usize,
     },
@@ -877,7 +905,7 @@ struct App {
 
     // Additional state needed for complete workflows
     loaded_smiles: Vec<String>,
-    loaded_properties: Vec<Vec<(String, String)>>,
+    loaded_properties: Vec<Vec<(Arc<str>, String)>>,
     last_dataset_failed_rows: usize,
     loaded_from_path: Option<PathBuf>,
     target_columns: Vec<TargetColumn>,
@@ -892,6 +920,7 @@ struct App {
     training_predictions: Vec<f64>,
     ad_in_domain_flags: Vec<bool>,
     top_feature_importances: Vec<(String, f64)>,
+    show_feature_importance: bool,
 
     prediction_rows: Vec<PredictionOutputRow>,
     prediction_target_names: Vec<String>,
@@ -899,6 +928,7 @@ struct App {
     prediction_export_path: PathBuf,
     feature_export_path: PathBuf,
     model_bundle_path: PathBuf,
+    cluster_export_path: PathBuf,
 
     pipeline_bundle_bytes: Option<Vec<u8>>,
     pipeline_feature_layout: Option<ModelFeatureLayout>,
@@ -992,6 +1022,7 @@ impl App {
             training_predictions: Vec::new(),
             ad_in_domain_flags: Vec::new(),
             top_feature_importances: Vec::new(),
+            show_feature_importance: true,
 
             prediction_rows: Vec::new(),
             prediction_target_names: Vec::new(),
@@ -999,6 +1030,7 @@ impl App {
             prediction_export_path: PathBuf::from(DEFAULT_EXPORT_PATH),
             feature_export_path: PathBuf::from(DEFAULT_FEATURE_EXPORT_PATH),
             model_bundle_path: PathBuf::from(DEFAULT_MODEL_EXPORT_PATH),
+            cluster_export_path: PathBuf::from(DEFAULT_CLUSTER_EXPORT_PATH),
 
             pipeline_bundle_bytes: None,
             pipeline_feature_layout: None,
@@ -1057,40 +1089,69 @@ impl App {
             .sum()
     }
 
-    /// Resolves the active model feature-layout contract for prediction/export.
-    fn resolve_active_model_feature_layout(&self) -> Result<ModelFeatureLayout, String> {
-        let mut resolved: Option<ModelFeatureLayout> = None;
+    /// Resolves the active model/layout for prediction/export, allowing single-model fallback.
+    fn resolve_active_model_selection(&self) -> Result<ActiveModelSelection, String> {
+        let pipeline_layout = self
+            .pipeline_bundle_bytes
+            .as_ref()
+            .and(self.pipeline_feature_layout.as_ref());
+        let art2a_layout = self
+            .art2a_model_bytes
+            .as_ref()
+            .and(self.art2a_feature_layout.as_ref());
 
-        if self.pipeline_bundle_bytes.is_some() {
-            if let Some(layout) = &self.pipeline_feature_layout {
-                resolved = Some(layout.clone());
-            }
-        }
-        if self.art2a_model_bytes.is_some() {
-            if let Some(layout) = &self.art2a_feature_layout {
-                match &resolved {
-                    Some(existing)
-                        if existing.expected_feature_names != layout.expected_feature_names
-                            || existing.descriptors != layout.descriptors =>
-                    {
-                        return Err(
-                            "Supervised model and ART2-A model use different feature layouts. Recompute or load a matching pair before prediction."
-                                .to_string(),
-                        );
-                    }
-                    None => resolved = Some(layout.clone()),
-                    _ => {}
+        match (pipeline_layout, art2a_layout) {
+            (Some(pipeline_layout), Some(art2a_layout)) => {
+                if pipeline_layout.expected_feature_names == art2a_layout.expected_feature_names
+                    && pipeline_layout.selected_feature_indices
+                        == art2a_layout.selected_feature_indices
+                    && pipeline_layout.descriptors == art2a_layout.descriptors
+                {
+                    return Ok(ActiveModelSelection {
+                        layout: pipeline_layout.clone(),
+                        pipeline_bundle_bytes: self.pipeline_bundle_bytes.clone(),
+                        art2a_model_bytes: self.art2a_model_bytes.clone(),
+                        warning: None,
+                    });
                 }
-            }
-        }
 
-        if let Some(layout) = resolved {
-            return Ok(layout);
+                return Ok(ActiveModelSelection {
+                    layout: pipeline_layout.clone(),
+                    pipeline_bundle_bytes: self.pipeline_bundle_bytes.clone(),
+                    art2a_model_bytes: None,
+                    warning: Some(
+                        "Supervised and ART2-A layouts differ; prediction/export will use supervised model only."
+                            .to_string(),
+                    ),
+                });
+            }
+            (Some(pipeline_layout), None) => {
+                return Ok(ActiveModelSelection {
+                    layout: pipeline_layout.clone(),
+                    pipeline_bundle_bytes: self.pipeline_bundle_bytes.clone(),
+                    art2a_model_bytes: None,
+                    warning: None,
+                });
+            }
+            (None, Some(art2a_layout)) => {
+                return Ok(ActiveModelSelection {
+                    layout: art2a_layout.clone(),
+                    pipeline_bundle_bytes: None,
+                    art2a_model_bytes: self.art2a_model_bytes.clone(),
+                    warning: None,
+                });
+            }
+            (None, None) => {}
         }
 
         if let Some(matrix) = &self.feature_matrix {
             if !matrix.descriptors.is_empty() && !matrix.feature_names.is_empty() {
-                return Ok(ModelFeatureLayout::from_matrix(matrix));
+                return Ok(ActiveModelSelection {
+                    layout: ModelFeatureLayout::from_matrix(matrix),
+                    pipeline_bundle_bytes: self.pipeline_bundle_bytes.clone(),
+                    art2a_model_bytes: self.art2a_model_bytes.clone(),
+                    warning: None,
+                });
             }
         }
 
@@ -1112,8 +1173,8 @@ impl App {
         for row in &self.loaded_properties {
             for (name, raw) in row {
                 if let Ok(parsed) = raw.trim().parse::<f64>() {
-                    per_column.entry(name.clone()).or_default().push(parsed);
-                    *valid_counts.entry(name.clone()).or_insert(0) += 1;
+                    per_column.entry(name.to_string()).or_default().push(parsed);
+                    *valid_counts.entry(name.to_string()).or_insert(0) += 1;
                 }
             }
         }
@@ -1322,7 +1383,7 @@ impl App {
         let mut stats: BTreeMap<String, (usize, usize)> = BTreeMap::new();
         for row in &self.loaded_properties {
             for (name, value) in row {
-                let entry = stats.entry(name.clone()).or_insert((0usize, 0usize));
+                let entry = stats.entry(name.to_string()).or_insert((0usize, 0usize));
                 entry.0 += 1;
                 if value.trim().parse::<f64>().is_ok() {
                     entry.1 += 1;
@@ -1430,10 +1491,17 @@ impl App {
         if let Some((column_idx, values)) = self.extract_descriptor_target_values(target_column) {
             return Ok((values, Some(column_idx)));
         }
-        Ok((
-            extract_targets(&self.loaded_properties, &target_column.name)?,
-            None,
-        ))
+        let values = extract_targets(&self.loaded_properties, &target_column.name)?;
+        let drop_idx = self
+            .feature_matrix
+            .as_ref()
+            .and_then(|matrix| {
+                matrix
+                    .feature_names
+                    .iter()
+                    .position(|name| name == &target_column.name)
+            });
+        Ok((values, drop_idx))
     }
 
     /// Implements target selection popup.
@@ -2408,18 +2476,17 @@ impl App {
             );
             return;
         }
-        let (descriptors, selected_feature_indices, expected_feature_names) =
-            match self.resolve_active_model_feature_layout() {
-                Ok(layout) => (
-                    layout.descriptors,
-                    layout.selected_feature_indices,
-                    layout.expected_feature_names,
-                ),
-                Err(error) => {
-                    self.set_error(error);
-                    return;
-                }
-            };
+        let selection = match self.resolve_active_model_selection() {
+            Ok(selection) => selection,
+            Err(error) => {
+                self.set_error(error);
+                return;
+            }
+        };
+        if let Some(warning) = &selection.warning {
+            self.status_message = warning.clone();
+        }
+        let layout = selection.layout;
 
         self.begin_computing(
             format!("Running prediction for '{}'...", path.display()),
@@ -2427,11 +2494,11 @@ impl App {
         );
         self.send_worker(WorkerRequest::PredictFile {
             path,
-            pipeline_bundle_bytes: self.pipeline_bundle_bytes.clone(),
-            art2a_model_bytes: self.art2a_model_bytes.clone(),
-            descriptors,
-            selected_feature_indices,
-            expected_feature_names,
+            pipeline_bundle_bytes: selection.pipeline_bundle_bytes,
+            art2a_model_bytes: selection.art2a_model_bytes,
+            descriptors: layout.descriptors,
+            selected_feature_indices: layout.selected_feature_indices,
+            expected_feature_names: layout.expected_feature_names,
         });
     }
 
@@ -2466,6 +2533,50 @@ impl App {
         });
     }
 
+    /// Exports ART2-A cluster assignments with source SMILES.
+    fn request_export_clusters(&mut self) {
+        let rows = match build_cluster_export_rows(
+            &self.prediction_rows,
+            &self.prediction_target_names,
+            &self.cluster_labels,
+            &self.loaded_smiles,
+        ) {
+            Ok(rows) => rows,
+            Err(error) => {
+                self.set_error(error);
+                return;
+            }
+        };
+
+        let export_path = if let Some(source) = &self.prediction_source {
+            let stem = source
+                .file_stem()
+                .map(|s| s.to_string_lossy().to_string())
+                .unwrap_or_else(|| "clusters".to_string());
+            source.with_file_name(format!("{}_clusters.csv", stem))
+        } else if let Some(source) = &self.loaded_from_path {
+            let stem = source
+                .file_stem()
+                .map(|s| s.to_string_lossy().to_string())
+                .unwrap_or_else(|| "clusters".to_string());
+            source.with_file_name(format!("{}_clusters.csv", stem))
+        } else {
+            self.cluster_export_path.clone()
+        };
+
+        self.begin_computing(
+            format!(
+                "Exporting ART2-A clusters to '{}'...",
+                export_path.display()
+            ),
+            WorkerJobKind::ClusterExport,
+        );
+        self.send_worker(WorkerRequest::ExportClusters {
+            path: export_path,
+            rows,
+        });
+    }
+
     /// Exports the currently trained model bundle to disk.
     ///
     /// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
@@ -2478,13 +2589,17 @@ impl App {
             );
             return;
         }
-        let layout = match self.resolve_active_model_feature_layout() {
-            Ok(layout) => layout,
+        let selection = match self.resolve_active_model_selection() {
+            Ok(selection) => selection,
             Err(error) => {
                 self.set_error(error);
                 return;
             }
         };
+        if let Some(warning) = &selection.warning {
+            self.status_message = warning.clone();
+        }
+        let layout = selection.layout;
 
         let export_path = if let Some(source) = &self.loaded_from_path {
             let stem = source
@@ -2498,8 +2613,8 @@ impl App {
 
         let bundle = PersistedModelBundle {
             schema_version: MODEL_BUNDLE_SCHEMA_VERSION,
-            pipeline_bundle_bytes: self.pipeline_bundle_bytes.clone(),
-            art2a_model_bytes: self.art2a_model_bytes.clone(),
+            pipeline_bundle_bytes: selection.pipeline_bundle_bytes,
+            art2a_model_bytes: selection.art2a_model_bytes,
             descriptors: layout
                 .descriptors
                 .iter()
@@ -2792,6 +2907,9 @@ impl App {
             KeyCode::Char('s') => {
                 self.request_export_predictions();
             }
+            KeyCode::Char('K') => {
+                self.request_export_clusters();
+            }
             KeyCode::Char('b') => {
                 self.request_export_model_bundle();
             }
@@ -2839,6 +2957,9 @@ impl App {
             KeyCode::Char('s') => {
                 self.request_export_predictions();
             }
+            KeyCode::Char('K') => {
+                self.request_export_clusters();
+            }
             KeyCode::Char('b') => {
                 self.request_export_model_bundle();
             }
@@ -2855,6 +2976,23 @@ impl App {
             }
             KeyCode::Char(']') => {
                 self.cycle_importance_target(1);
+            }
+            KeyCode::Char(',') => {
+                self.cycle_importance_target(-1);
+            }
+            KeyCode::Char('.') => {
+                self.cycle_importance_target(1);
+            }
+            KeyCode::Char('i') => {
+                self.show_feature_importance = !self.show_feature_importance;
+                self.status_message = format!(
+                    "Feature-importance panel {}.",
+                    if self.show_feature_importance {
+                        "shown"
+                    } else {
+                        "hidden"
+                    }
+                );
             }
             KeyCode::Up | KeyCode::Char('k') => {
                 if self.profile_scroll > 0 {
@@ -3187,6 +3325,7 @@ impl App {
                 target_names,
                 rows,
                 skipped_rows,
+                projection,
             } => {
                 self.progress_percent = 0.0;
                 self.cancel_requested = false;
@@ -3194,6 +3333,49 @@ impl App {
                 self.prediction_target_names = target_names;
                 self.prediction_rows = rows;
                 self.prediction_source = Some(path.clone());
+                self.projection = projection;
+                if let Some(cluster_idx) = self
+                    .prediction_target_names
+                    .iter()
+                    .position(|name| name == "ART2A_ClusterId")
+                {
+                    let mut labels = Vec::with_capacity(self.prediction_rows.len());
+                    let mut valid_labels = true;
+                    for row in &self.prediction_rows {
+                        match row.predictions.get(cluster_idx).copied() {
+                            Some(value) if value.is_finite() && value >= 0.0 => {
+                                labels.push(value.round() as usize);
+                            }
+                            _ => {
+                                valid_labels = false;
+                                break;
+                            }
+                        }
+                    }
+
+                    if valid_labels {
+                        let similarity_idx = self
+                            .prediction_target_names
+                            .iter()
+                            .position(|name| name == "ART2A_Similarity");
+                        self.cluster_labels = labels;
+                        self.cluster_sizes = cluster_size_histogram(&self.cluster_labels);
+                        self.cluster_summaries = cluster_summaries_from_predictions(
+                            &self.prediction_rows,
+                            cluster_idx,
+                            similarity_idx,
+                        );
+                        self.color_mode = VisualizationColorMode::ClusterIds;
+                    } else {
+                        self.cluster_labels.clear();
+                        self.cluster_sizes.clear();
+                        self.cluster_summaries.clear();
+                    }
+                } else {
+                    self.cluster_labels.clear();
+                    self.cluster_sizes.clear();
+                    self.cluster_summaries.clear();
+                }
                 self.status_message = format!(
                     "Prediction complete: {} rows × {} output(s) from '{}'. Skipped rows: {}. Press 's' to export.",
                     self.prediction_rows.len(),
@@ -3209,6 +3391,18 @@ impl App {
                 self.active_job = None;
                 self.status_message =
                     format!("Exported {} predictions to '{}'.", count, path.display());
+                self.state = AppState::Idle;
+            }
+            WorkerResponse::ClustersExported { path, count } => {
+                self.progress_percent = 0.0;
+                self.cancel_requested = false;
+                self.active_job = None;
+                self.cluster_export_path = path.clone();
+                self.status_message = format!(
+                    "Exported {} ART2-A cluster rows to '{}'.",
+                    count,
+                    path.display()
+                );
                 self.state = AppState::Idle;
             }
             WorkerResponse::FeatureFilterApplied {
@@ -3505,7 +3699,7 @@ fn render(frame: &mut Frame, app: &App) {
     let [header, body, footer] = Layout::vertical([
         Constraint::Length(4),
         Constraint::Min(10),
-        Constraint::Length(4),
+        Constraint::Length(8),
     ])
     .areas(frame.area());
 
@@ -3586,7 +3780,7 @@ fn render_footer(frame: &mut Frame, area: Rect, app: &App) {
         }
         3 => "Parameters: ,/. page, 1-6 edit, Enter save, Esc cancel",
         4 => {
-            "Analyze: Enter train (Auto/Manual), g ART2-A cluster, y toggle CSV extras, [/] importance target, p predict file, s export predictions, b export model, u import model, o color, Esc cancel active compute"
+            "Analyze: Enter train (Auto/Manual), g ART2-A cluster, y toggle CSV extras, i toggle importance panel, [/] or ,/. importance target, p predict file, s export predictions, K export clusters, b export model, u import model, o color, Esc cancel active compute"
         }
         _ => "",
     };
@@ -3978,17 +4172,29 @@ fn render_predict_visual_tab(frame: &mut Frame, area: Rect, app: &App) {
         Layout::horizontal([Constraint::Percentage(52), Constraint::Percentage(48)]).areas(bottom);
     render_regression_diagnostics_panel(frame, regression_area, app);
 
-    let [importance_area, profile_area, prediction_area, cluster_area] = Layout::vertical([
-        Constraint::Percentage(24),
-        Constraint::Percentage(36),
-        Constraint::Percentage(20),
-        Constraint::Percentage(20),
-    ])
-    .areas(right_area);
-    render_feature_importance_panel(frame, importance_area, app);
-    render_descriptor_profile_table(frame, profile_area, app);
-    render_prediction_summary_panel(frame, prediction_area, app);
-    render_art2a_cluster_summary(frame, cluster_area, app);
+    if app.show_feature_importance {
+        let [importance_area, profile_area, prediction_area, cluster_area] = Layout::vertical([
+            Constraint::Percentage(24),
+            Constraint::Percentage(36),
+            Constraint::Percentage(20),
+            Constraint::Percentage(20),
+        ])
+        .areas(right_area);
+        render_feature_importance_panel(frame, importance_area, app);
+        render_descriptor_profile_table(frame, profile_area, app);
+        render_prediction_summary_panel(frame, prediction_area, app);
+        render_art2a_cluster_summary(frame, cluster_area, app);
+    } else {
+        let [profile_area, prediction_area, cluster_area] = Layout::vertical([
+            Constraint::Percentage(52),
+            Constraint::Percentage(24),
+            Constraint::Percentage(24),
+        ])
+        .areas(right_area);
+        render_descriptor_profile_table(frame, profile_area, app);
+        render_prediction_summary_panel(frame, prediction_area, app);
+        render_art2a_cluster_summary(frame, cluster_area, app);
+    }
 }
 
 /// Implements pca panel.
@@ -4402,7 +4608,7 @@ fn render_feature_importance_panel(frame: &mut Frame, area: Rect, app: &App) {
     if app.top_feature_importances.is_empty() {
         let placeholder_text = if let Some(summary) = importance_summary {
             format!(
-                "No feature-importance data for {} ({}).\n\nThis model may not expose importances (e.g. k-NN).\nUse '[' and ']' to switch trained targets.",
+                "No feature-importance data for {} ({}).\n\nThis model may not expose importances (e.g. k-NN).\nUse '[', ']', ',' or '.' to switch trained targets.",
                 summary.target_display_label, summary.pipeline_name
             )
         } else {
@@ -4940,6 +5146,77 @@ fn display_label_from_output_target_name(output_target_name: &str) -> String {
     }
 }
 
+/// Builds cluster export rows from latest ART2-A predictions or in-memory clustering state.
+fn build_cluster_export_rows(
+    prediction_rows: &[PredictionOutputRow],
+    prediction_target_names: &[String],
+    cluster_labels: &[usize],
+    loaded_smiles: &[String],
+) -> Result<Vec<ClusterExportRow>, String> {
+    if !prediction_rows.is_empty() {
+        let cluster_idx = prediction_target_names
+            .iter()
+            .position(|name| name == "ART2A_ClusterId");
+        let similarity_idx = prediction_target_names
+            .iter()
+            .position(|name| name == "ART2A_Similarity");
+        let in_domain_idx = prediction_target_names
+            .iter()
+            .position(|name| name == "ART2A_InDomain");
+
+        if let Some(cluster_idx) = cluster_idx {
+            let mut rows = Vec::with_capacity(prediction_rows.len());
+            for row in prediction_rows {
+                let cluster_raw = row.predictions.get(cluster_idx).copied().ok_or_else(|| {
+                    "ART2A_ClusterId column missing in prediction row.".to_string()
+                })?;
+                if !cluster_raw.is_finite() || cluster_raw < 0.0 {
+                    return Err(
+                        "ART2A_ClusterId contains non-finite or negative value.".to_string()
+                    );
+                }
+                let similarity = similarity_idx.and_then(|idx| row.predictions.get(idx).copied());
+                let in_domain = in_domain_idx
+                    .and_then(|idx| row.predictions.get(idx).copied())
+                    .map(|value| value >= 0.5);
+                rows.push(ClusterExportRow {
+                    smiles: row.smiles.clone(),
+                    cluster_id: cluster_raw.round() as usize,
+                    similarity,
+                    in_domain,
+                });
+            }
+            return Ok(rows);
+        }
+    }
+
+    if !cluster_labels.is_empty() {
+        if loaded_smiles.len() < cluster_labels.len() {
+            return Err(format!(
+                "Cannot export ART2-A clusters: {} SMILES entries for {} cluster labels.",
+                loaded_smiles.len(),
+                cluster_labels.len()
+            ));
+        }
+        let rows = cluster_labels
+            .iter()
+            .enumerate()
+            .map(|(idx, &cluster_id)| ClusterExportRow {
+                smiles: loaded_smiles[idx].clone(),
+                cluster_id,
+                similarity: None,
+                in_domain: None,
+            })
+            .collect::<Vec<_>>();
+        return Ok(rows);
+    }
+
+    Err(
+        "No ART2-A cluster outputs available. Run prediction with ART2-A output or cluster with 'g' first."
+            .to_string(),
+    )
+}
+
 /// Resolves a UI target-display label from output target key (e.g. `alogp__csv`).
 fn resolve_target_display_label(
     output_target_name: &str,
@@ -4992,6 +5269,7 @@ fn worker_loop(
             WorkerRequest::RunArt2aClustering { .. } => "RunArt2aClustering",
             WorkerRequest::PredictFile { .. } => "PredictFile",
             WorkerRequest::ExportPredictions { .. } => "ExportPredictions",
+            WorkerRequest::ExportClusters { .. } => "ExportClusters",
             WorkerRequest::ApplyVarianceFilter { .. } => "ApplyVarianceFilter",
             WorkerRequest::ApplyCorrelationFilter { .. } => "ApplyCorrelationFilter",
             WorkerRequest::ExportFeatureMatrix { .. } => "ExportFeatureMatrix",
@@ -5033,7 +5311,7 @@ fn worker_loop(
                 matrix,
                 config,
                 scaler,
-            } => handle_art2a_clustering(matrix, config, scaler, &cancel_flag),
+            } => handle_art2a_clustering(matrix, config, scaler, Some(&response_tx), &cancel_flag),
             WorkerRequest::PredictFile {
                 path,
                 pipeline_bundle_bytes,
@@ -5055,6 +5333,7 @@ fn worker_loop(
                 target_names,
                 rows,
             } => handle_export_predictions(path, target_names, rows),
+            WorkerRequest::ExportClusters { path, rows } => handle_export_clusters(path, rows),
             WorkerRequest::ApplyVarianceFilter { matrix, threshold } => {
                 handle_apply_variance_filter(matrix, threshold)
             }
@@ -5457,6 +5736,7 @@ fn handle_art2a_clustering(
     matrix: FeatureMatrixPayload,
     config: Art2aConfig,
     scaler: MlScalerChoice,
+    progress_tx: Option<&Sender<WorkerResponse>>,
     cancel_flag: &Arc<AtomicBool>,
 ) -> Result<WorkerResponse, String> {
     if cancel_flag.load(AtomicOrdering::Relaxed) {
@@ -5485,6 +5765,9 @@ fn handle_art2a_clustering(
 
     let data = Array2::from_shape_vec((matrix.rows, matrix.cols), sanitized_matrix_data)
         .map_err(|error| format!("Failed to shape matrix for ART2-A: {}", error))?;
+    if let Some(tx) = progress_tx {
+        let _ = tx.send(WorkerResponse::Progress(0.08));
+    }
     let (fitted_scaler, scaled) = match scaler {
         MlScalerChoice::Standard => {
             let scaler = StandardScaler::fit(&data);
@@ -5507,8 +5790,22 @@ fn handle_art2a_clustering(
                 .collect::<Vec<_>>()
         })
         .collect();
+    if let Some(tx) = progress_tx {
+        let _ = tx.send(WorkerResponse::Progress(0.12));
+    }
     let mut model = Art2a::new(config.vigilance, config.learning_rate, config.max_iter);
-    model.fit(&vectors);
+    let completed = model.fit_with_progress(&vectors, |progress| {
+        if let Some(tx) = progress_tx {
+            let global = (0.12 + 0.76 * progress.clamp(0.0, 1.0)).min(0.90);
+            let _ = tx.send(WorkerResponse::Progress(global));
+        }
+        cancel_flag.load(AtomicOrdering::Relaxed)
+    });
+    if !completed {
+        return Ok(WorkerResponse::JobCanceled {
+            job: WorkerJobKind::Art2aClustering,
+        });
+    }
     if cancel_flag.load(AtomicOrdering::Relaxed) {
         return Ok(WorkerResponse::JobCanceled {
             job: WorkerJobKind::Art2aClustering,
@@ -5538,6 +5835,9 @@ fn handle_art2a_clustering(
             bucket.push(similarity);
         }
     }
+    if let Some(tx) = progress_tx {
+        let _ = tx.send(WorkerResponse::Progress(0.95));
+    }
     let total = labels.len().max(1) as f64;
     let mut summaries = Vec::with_capacity(cluster_sizes.len());
     for (cluster_id, &size) in cluster_sizes.iter().enumerate() {
@@ -5565,6 +5865,9 @@ fn handle_art2a_clustering(
     let art2a_model_bytes = bincode::serialize(&(model, fitted_scaler, matrix.cols))
         .map_err(|error| format!("Failed to serialize ART2-A model bundle: {}", error))?;
     let projection = build_projection(&matrix);
+    if let Some(tx) = progress_tx {
+        let _ = tx.send(WorkerResponse::Progress(0.98));
+    }
     Ok(WorkerResponse::ClusteringCompleted {
         labels,
         cluster_sizes,
@@ -5610,7 +5913,7 @@ fn handle_predict_file(
         .map(|e| e.to_string_lossy().to_ascii_lowercase())
         .unwrap_or_default();
 
-    let (mut molecules, smiles, _properties, failed_rows) = match extension.as_str() {
+    let (mut molecules, smiles, properties, failed_rows) = match extension.as_str() {
         "csv" => load_dataset_from_csv(&path)?,
         "smi" | "smiles" => load_dataset_from_smi(&path)?,
         _ => {
@@ -5638,26 +5941,36 @@ fn handle_predict_file(
             });
         }
     };
-    if flat.cols != descriptor_feature_names(&descriptors).len() {
+    let source_feature_names = descriptor_feature_names(&descriptors);
+    if flat.cols != source_feature_names.len() {
         return Err(format!(
             "Prediction source feature mismatch: got {} columns from descriptor set.",
             flat.cols
         ));
     }
-    let selected_flat =
-        apply_feature_subset_to_flat(&flat, &selected_feature_indices).ok_or_else(|| {
-            format!(
-                "Prediction feature subset invalid: {} selected columns for {} source columns.",
-                selected_feature_indices.len(),
-                flat.cols
-            )
-        })?;
+    let selected_flat = build_prediction_flat_by_expected_names(
+        &flat,
+        &source_feature_names,
+        &properties,
+        &expected_feature_names,
+    )?;
+    if selected_flat.cols == 0 {
+        return Err("Prediction failed: expected feature layout is empty.".to_string());
+    }
 
     let features = Array2::from_shape_vec(
         (selected_flat.rows, selected_flat.cols),
         selected_flat.data.into_iter().map(|v| v as f64).collect(),
     )
     .map_err(|error| format!("Failed to shape prediction feature matrix: {}", error))?;
+    let projection_payload = FeatureMatrixPayload {
+        rows: features.nrows(),
+        cols: features.ncols(),
+        feature_names: expected_feature_names.clone(),
+        data: features.iter().copied().collect(),
+        descriptors: descriptors.clone(),
+        selected_feature_indices: selected_feature_indices.clone(),
+    };
 
     let maybe_pipeline_bundle = pipeline_bundle_bytes
         .map(|bytes| {
@@ -5785,6 +6098,7 @@ fn handle_predict_file(
         target_names,
         rows,
         skipped_rows: failed_rows,
+        projection: build_projection(&projection_payload),
     })
 }
 
@@ -6304,6 +6618,60 @@ fn handle_export_predictions(
     })
 }
 
+/// Exports ART2-A cluster assignments with SMILES for downstream inspection.
+fn handle_export_clusters(
+    path: PathBuf,
+    rows: Vec<ClusterExportRow>,
+) -> Result<WorkerResponse, String> {
+    if rows.is_empty() {
+        return Err("No ART2-A cluster rows available for export.".to_string());
+    }
+
+    let include_similarity = rows.iter().any(|row| row.similarity.is_some());
+    let include_in_domain = rows.iter().any(|row| row.in_domain.is_some());
+
+    let mut output = String::from("SMILES,ART2A_ClusterId");
+    if include_similarity {
+        output.push_str(",ART2A_Similarity");
+    }
+    if include_in_domain {
+        output.push_str(",ART2A_InDomain");
+    }
+    output.push('\n');
+
+    for row in &rows {
+        output.push_str(&row.smiles);
+        output.push(',');
+        output.push_str(&row.cluster_id.to_string());
+        if include_similarity {
+            output.push(',');
+            if let Some(value) = row.similarity {
+                output.push_str(&format!("{:.8}", value));
+            }
+        }
+        if include_in_domain {
+            output.push(',');
+            if let Some(value) = row.in_domain {
+                output.push_str(if value { "1" } else { "0" });
+            }
+        }
+        output.push('\n');
+    }
+
+    fs::write(&path, output).map_err(|error| {
+        format!(
+            "Failed to write ART2-A clusters to '{}': {}",
+            path.display(),
+            error
+        )
+    })?;
+
+    Ok(WorkerResponse::ClustersExported {
+        path,
+        count: rows.len(),
+    })
+}
+
 /// Exports a persisted model bundle artifact.
 ///
 /// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
@@ -6402,38 +6770,8 @@ fn handle_import_model_bundle(path: PathBuf) -> Result<WorkerResponse, String> {
     if bundle.selected_feature_indices.is_empty() {
         return Err("Imported model bundle selected feature indices are empty.".to_string());
     }
-    if bundle
-        .selected_feature_indices
-        .iter()
-        .any(|&idx| idx >= bundle.expected_feature_names.len())
-    {
-        return Err(format!(
-            "Imported model bundle selected-feature indices exceed feature-name width (indices={}, width={}).",
-            bundle.selected_feature_indices.len(),
-            bundle.expected_feature_names.len()
-        ));
-    }
     let expected_names = descriptor_feature_names(&descriptors);
-    let max_expected = bundle
-        .selected_feature_indices
-        .iter()
-        .copied()
-        .max()
-        .unwrap_or(0);
-    if max_expected >= expected_names.len() {
-        return Err(format!(
-            "Imported model bundle descriptor layout mismatch: max selected index {} exceeds descriptor-derived width {}.",
-            max_expected,
-            expected_names.len()
-        ));
-    }
     for &selected_idx in &bundle.selected_feature_indices {
-        let expected_name = expected_names.get(selected_idx).ok_or_else(|| {
-            format!(
-                "Imported model bundle descriptor layout missing selected index {}.",
-                selected_idx
-            )
-        })?;
         let bundle_name = bundle
             .expected_feature_names
             .get(selected_idx)
@@ -6443,6 +6781,21 @@ fn handle_import_model_bundle(path: PathBuf) -> Result<WorkerResponse, String> {
                     selected_idx
                 )
             })?;
+        if let Some(csv_name) = bundle_name.strip_prefix("CSV::") {
+            if csv_name.is_empty() {
+                return Err(format!(
+                    "Imported model bundle has invalid CSV feature marker at selected index {}.",
+                    selected_idx
+                ));
+            }
+            continue;
+        }
+        let expected_name = expected_names.get(selected_idx).ok_or_else(|| {
+            format!(
+                "Imported model bundle descriptor layout missing selected index {}.",
+                selected_idx
+            )
+        })?;
         if expected_name != bundle_name {
             return Err(format!(
                 "Imported model bundle descriptor layout mismatch at selected index {} ('{}' vs '{}').",
@@ -6647,40 +7000,6 @@ fn select_feature_columns(
     })
 }
 
-/// Implements feature subset to flat.
-///
-/// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
-/// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
-fn apply_feature_subset_to_flat(
-    matrix: &FlatDescriptorMatrix,
-    selected_feature_indices: &[usize],
-) -> Option<FlatDescriptorMatrix> {
-    if matrix.cols == 0 {
-        return None;
-    }
-    if selected_feature_indices.is_empty() {
-        return None;
-    }
-    if selected_feature_indices
-        .iter()
-        .any(|&idx| idx >= matrix.cols)
-    {
-        return None;
-    }
-    let mut data = Vec::with_capacity(matrix.rows * selected_feature_indices.len());
-    for row in 0..matrix.rows {
-        let start = row * matrix.cols;
-        for &col in selected_feature_indices {
-            data.push(matrix.data[start + col]);
-        }
-    }
-    Some(FlatDescriptorMatrix {
-        rows: matrix.rows,
-        cols: selected_feature_indices.len(),
-        data,
-    })
-}
-
 /// Loads dataset from csv.
 ///
 /// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
@@ -6691,7 +7010,7 @@ fn load_dataset_from_csv(
     (
         Vec<Molecule>,
         Vec<String>,
-        Vec<Vec<(String, String)>>,
+        Vec<Vec<(Arc<str>, String)>>,
         usize,
     ),
     String,
@@ -6730,7 +7049,7 @@ fn load_dataset_from_smi(
     (
         Vec<Molecule>,
         Vec<String>,
-        Vec<Vec<(String, String)>>,
+        Vec<Vec<(Arc<str>, String)>>,
         usize,
     ),
     String,
@@ -6792,6 +7111,97 @@ fn descriptor_feature_names(descriptors: &[BatchDescriptor]) -> Vec<String> {
     names
 }
 
+fn build_prediction_flat_by_expected_names(
+    source: &FlatDescriptorMatrix,
+    source_feature_names: &[String],
+    properties: &[Vec<(Arc<str>, String)>],
+    expected_feature_names: &[String],
+) -> Result<FlatDescriptorMatrix, String> {
+    if expected_feature_names.is_empty() {
+        return Ok(FlatDescriptorMatrix {
+            rows: source.rows,
+            cols: 0,
+            data: Vec::new(),
+        });
+    }
+
+    let mut descriptor_index_by_name = HashMap::new();
+    for (idx, name) in source_feature_names.iter().enumerate() {
+        descriptor_index_by_name.insert(name.as_str(), idx);
+    }
+
+    let needs_csv_features = expected_feature_names
+        .iter()
+        .any(|name| name.starts_with("CSV::"));
+    if needs_csv_features && properties.len() != source.rows {
+        return Err(format!(
+            "Prediction failed: CSV feature alignment mismatch ({} property rows for {} molecules).",
+            properties.len(),
+            source.rows
+        ));
+    }
+
+    let mut data = Vec::with_capacity(source.rows * expected_feature_names.len());
+    for row_idx in 0..source.rows {
+        let source_offset = row_idx * source.cols;
+        let row_properties = properties.get(row_idx);
+        for feature_name in expected_feature_names {
+            if let Some(csv_name) = feature_name.strip_prefix("CSV::") {
+                let row_properties = row_properties.ok_or_else(|| {
+                    format!(
+                        "Prediction failed: missing CSV properties for row #{} while resolving '{}'.",
+                        row_idx + 1,
+                        feature_name
+                    )
+                })?;
+                let maybe_raw = row_properties
+                    .iter()
+                    .find(|(name, _)| name.as_ref() == csv_name)
+                    .or_else(|| {
+                        row_properties
+                            .iter()
+                            .find(|(name, _)| name.as_ref().eq_ignore_ascii_case(csv_name))
+                    })
+                    .map(|(_, value)| value.trim());
+                let raw = maybe_raw.ok_or_else(|| {
+                    format!(
+                        "Prediction failed: CSV feature '{}' missing at row #{}.",
+                        csv_name,
+                        row_idx + 1
+                    )
+                })?;
+                let parsed = raw.parse::<f32>().map_err(|_| {
+                    format!(
+                        "Prediction failed: CSV feature '{}' has non-numeric value '{}' at row #{}.",
+                        csv_name,
+                        raw,
+                        row_idx + 1
+                    )
+                })?;
+                data.push(parsed);
+                continue;
+            }
+
+            let col_idx = descriptor_index_by_name
+                .get(feature_name.as_str())
+                .copied()
+                .ok_or_else(|| {
+                    format!(
+                        "Prediction failed: expected descriptor feature '{}' is unavailable in the selected descriptor set.",
+                        feature_name
+                    )
+                })?;
+            data.push(source.data[source_offset + col_idx]);
+        }
+    }
+
+    Ok(FlatDescriptorMatrix {
+        rows: source.rows,
+        cols: expected_feature_names.len(),
+        data,
+    })
+}
+
 /// Resolves a descriptor by its canonical batch name.
 ///
 /// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
@@ -6808,7 +7218,7 @@ fn descriptor_from_name(name: &str) -> Option<BatchDescriptor> {
 /// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
 /// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
 fn extract_targets(
-    properties: &[Vec<(String, String)>],
+    properties: &[Vec<(Arc<str>, String)>],
     target_column: &str,
 ) -> Result<Vec<f64>, String> {
     let mut targets = Vec::with_capacity(properties.len());
@@ -6816,11 +7226,11 @@ fn extract_targets(
     for (row_idx, row_props) in properties.iter().enumerate() {
         let maybe_value = row_props
             .iter()
-            .find(|(name, _)| name == target_column)
+            .find(|(name, _)| name.as_ref() == target_column)
             .or_else(|| {
                 row_props
                     .iter()
-                    .find(|(name, _)| name.eq_ignore_ascii_case(target_column))
+                    .find(|(name, _)| name.as_ref().eq_ignore_ascii_case(target_column))
             })
             .map(|(_, value)| value.trim().to_string());
 
@@ -7156,6 +7566,75 @@ fn bucket_points_by_binary_flags(
     Some((in_domain, out_domain))
 }
 
+/// Computes cluster-size histogram from per-row cluster labels.
+fn cluster_size_histogram(labels: &[usize]) -> Vec<usize> {
+    if labels.is_empty() {
+        return Vec::new();
+    }
+    let max_label = labels.iter().copied().max().unwrap_or(0);
+    let mut sizes = vec![0usize; max_label + 1];
+    for &label in labels {
+        sizes[label] += 1;
+    }
+    sizes
+}
+
+/// Rebuilds ART2-A cluster summary rows from prediction outputs.
+fn cluster_summaries_from_predictions(
+    rows: &[PredictionOutputRow],
+    cluster_idx: usize,
+    similarity_idx: Option<usize>,
+) -> Vec<Art2aClusterSummary> {
+    if rows.is_empty() {
+        return Vec::new();
+    }
+    let mut bucket: HashMap<usize, Vec<f64>> = HashMap::new();
+    for row in rows {
+        let Some(cluster_value) = row.predictions.get(cluster_idx).copied() else {
+            continue;
+        };
+        if !cluster_value.is_finite() || cluster_value < 0.0 {
+            continue;
+        }
+        let cluster_id = cluster_value.round() as usize;
+        let similarity = similarity_idx
+            .and_then(|idx| row.predictions.get(idx).copied())
+            .filter(|v| v.is_finite())
+            .unwrap_or(0.0);
+        bucket.entry(cluster_id).or_default().push(similarity);
+    }
+    if bucket.is_empty() {
+        return Vec::new();
+    }
+
+    let total = bucket.values().map(Vec::len).sum::<usize>().max(1) as f64;
+    let mut cluster_ids = bucket.keys().copied().collect::<Vec<_>>();
+    cluster_ids.sort_unstable();
+    cluster_ids
+        .into_iter()
+        .map(|cluster_id| {
+            let sims = bucket.remove(&cluster_id).unwrap_or_default();
+            let size = sims.len();
+            let (mean_similarity, min_similarity, max_similarity) = if sims.is_empty() {
+                (0.0, 0.0, 0.0)
+            } else {
+                let mean = sims.iter().sum::<f64>() / sims.len() as f64;
+                let min = sims.iter().copied().fold(f64::INFINITY, f64::min);
+                let max = sims.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+                (mean, min, max)
+            };
+            Art2aClusterSummary {
+                cluster_id,
+                size,
+                fraction: size as f64 / total,
+                mean_similarity,
+                min_similarity,
+                max_similarity,
+            }
+        })
+        .collect()
+}
+
 /// Implements top feature importances.
 ///
 /// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
@@ -7440,6 +7919,7 @@ mod tests {
                 max_iter: DEFAULT_ART2A_MAX_ITER,
             },
             MlScalerChoice::Standard,
+            None,
             &flag,
         )
         .expect("canceled path should return Ok(JobCanceled)");
@@ -7519,8 +7999,8 @@ mod tests {
     fn test_rebuild_target_columns_includes_csv_and_descriptor_sources() {
         let mut app = make_test_app();
         app.loaded_properties = vec![
-            vec![("alogp".to_string(), "1.2".to_string())],
-            vec![("alogp".to_string(), "2.4".to_string())],
+            vec![(Arc::<str>::from("alogp"), "1.2".to_string())],
+            vec![(Arc::<str>::from("alogp"), "2.4".to_string())],
         ];
         app.feature_matrix = Some(FeatureMatrix {
             rows: 2,
@@ -7556,8 +8036,8 @@ mod tests {
     fn test_descriptor_target_overlay_uses_matrix_values() {
         let mut app = make_test_app();
         app.loaded_properties = vec![
-            vec![("alogp".to_string(), "1.0".to_string())],
-            vec![("alogp".to_string(), "2.0".to_string())],
+            vec![(Arc::<str>::from("alogp"), "1.0".to_string())],
+            vec![(Arc::<str>::from("alogp"), "2.0".to_string())],
         ];
         app.feature_matrix = Some(FeatureMatrix {
             rows: 2,
@@ -7626,6 +8106,40 @@ mod tests {
     }
 
     #[test]
+    fn test_csv_target_resolves_drop_index_when_descriptor_name_matches() {
+        let mut app = make_test_app();
+        app.loaded_properties = vec![
+            vec![(Arc::<str>::from("alogp"), "1.2".to_string())],
+            vec![(Arc::<str>::from("alogp"), "2.4".to_string())],
+        ];
+        app.feature_matrix = Some(FeatureMatrix {
+            rows: 2,
+            cols: 2,
+            feature_names: vec!["alogp".to_string(), "MW".to_string()],
+            data: vec![1.2, 100.0, 2.4, 120.0],
+            descriptors: vec![BatchDescriptor::LogP, BatchDescriptor::MolecularWeight],
+            selected_feature_indices: vec![0, 1],
+        });
+        app.rebuild_target_columns();
+        let csv_target = app
+            .target_columns
+            .iter()
+            .find(|target| target.source == TargetColumnSource::Csv && target.name == "alogp")
+            .expect("csv target alogp should exist")
+            .clone();
+
+        let (values, drop_idx) = app
+            .resolve_training_target_values(&csv_target)
+            .expect("csv target should resolve");
+        assert_eq!(values, vec![1.2, 2.4]);
+        assert_eq!(
+            drop_idx,
+            Some(0),
+            "matching descriptor feature should be removed to avoid target leakage"
+        );
+    }
+
+    #[test]
     fn test_build_projection_sanitizes_non_finite_values() {
         let matrix = FeatureMatrixPayload {
             rows: 4,
@@ -7682,6 +8196,7 @@ mod tests {
                 max_iter: 20,
             },
             MlScalerChoice::Standard,
+            None,
             &Arc::new(AtomicBool::new(false)),
         )
         .expect("clustering should succeed");
@@ -7720,12 +8235,12 @@ mod tests {
         });
         app.loaded_properties = vec![
             vec![
-                ("target_a".to_string(), "10.0".to_string()),
-                ("target_b".to_string(), "20.0".to_string()),
+                (Arc::<str>::from("target_a"), "10.0".to_string()),
+                (Arc::<str>::from("target_b"), "20.0".to_string()),
             ],
             vec![
-                ("target_a".to_string(), "11.0".to_string()),
-                ("target_b".to_string(), "21.0".to_string()),
+                (Arc::<str>::from("target_a"), "11.0".to_string()),
+                (Arc::<str>::from("target_b"), "21.0".to_string()),
             ],
         ];
         app.include_csv_numeric_in_clustering = true;
@@ -7759,6 +8274,39 @@ mod tests {
         assert_eq!(centroids.len(), 2);
         assert_eq!(centroids[0], (1.0, 1.0));
         assert_eq!(centroids[1], (11.0, 1.0));
+    }
+
+    #[test]
+    fn test_cluster_size_histogram_counts_each_cluster() {
+        let labels = vec![2usize, 0usize, 2usize, 1usize, 1usize, 1usize];
+        let sizes = cluster_size_histogram(&labels);
+        assert_eq!(sizes, vec![1usize, 3usize, 2usize]);
+    }
+
+    #[test]
+    fn test_cluster_summaries_from_predictions_reconstructs_stats() {
+        let rows = vec![
+            PredictionOutputRow {
+                smiles: "A".to_string(),
+                predictions: vec![1.0, 0.8],
+            },
+            PredictionOutputRow {
+                smiles: "B".to_string(),
+                predictions: vec![0.0, 0.5],
+            },
+            PredictionOutputRow {
+                smiles: "C".to_string(),
+                predictions: vec![1.0, 0.6],
+            },
+        ];
+        let summaries = cluster_summaries_from_predictions(&rows, 0, Some(1));
+        assert_eq!(summaries.len(), 2);
+        assert_eq!(summaries[0].cluster_id, 0);
+        assert_eq!(summaries[0].size, 1);
+        assert!((summaries[0].mean_similarity - 0.5).abs() < 1e-12);
+        assert_eq!(summaries[1].cluster_id, 1);
+        assert_eq!(summaries[1].size, 2);
+        assert!((summaries[1].mean_similarity - 0.7).abs() < 1e-12);
     }
 
     #[test]
@@ -7815,5 +8363,138 @@ mod tests {
         app.cycle_importance_target(1);
         assert_eq!(app.importance_target_index, 0);
         assert_eq!(app.top_feature_importances, vec![("feat".to_string(), 0.8)]);
+    }
+
+    #[test]
+    fn test_resolve_active_model_selection_falls_back_to_supervised_when_layouts_differ() {
+        let mut app = make_test_app();
+        app.pipeline_bundle_bytes = Some(vec![1, 2, 3]);
+        app.art2a_model_bytes = Some(vec![4, 5, 6]);
+        app.pipeline_feature_layout = Some(ModelFeatureLayout::from_parts(
+            vec![BatchDescriptor::MolecularWeight],
+            vec![0],
+            vec!["MW".to_string()],
+        ));
+        app.art2a_feature_layout = Some(ModelFeatureLayout::from_parts(
+            vec![BatchDescriptor::LogP],
+            vec![0],
+            vec!["LogP".to_string()],
+        ));
+
+        let selection = app
+            .resolve_active_model_selection()
+            .expect("selection should resolve");
+        assert!(selection.pipeline_bundle_bytes.is_some());
+        assert!(selection.art2a_model_bytes.is_none());
+        assert!(selection.warning.is_some());
+        assert_eq!(
+            selection.layout.expected_feature_names,
+            vec!["MW".to_string()]
+        );
+    }
+
+    #[test]
+    fn test_build_prediction_flat_by_expected_names_handles_csv_features() {
+        let source = FlatDescriptorMatrix {
+            rows: 2,
+            cols: 2,
+            data: vec![1.0, 2.0, 3.0, 4.0],
+        };
+        let source_feature_names = vec!["D0".to_string(), "D1".to_string()];
+        let properties = vec![
+            vec![(Arc::<str>::from("target"), "10.0".to_string())],
+            vec![(Arc::<str>::from("target"), "11.0".to_string())],
+        ];
+        let expected_feature_names = vec![
+            "D1".to_string(),
+            "CSV::target".to_string(),
+            "D0".to_string(),
+        ];
+
+        let merged = build_prediction_flat_by_expected_names(
+            &source,
+            &source_feature_names,
+            &properties,
+            &expected_feature_names,
+        )
+        .expect("merged features should be built");
+
+        assert_eq!(merged.rows, 2);
+        assert_eq!(merged.cols, 3);
+        assert_eq!(merged.data, vec![2.0, 10.0, 1.0, 4.0, 11.0, 3.0]);
+    }
+
+    #[test]
+    fn test_import_model_bundle_allows_csv_augmented_feature_layout() {
+        let bundle = PersistedModelBundle {
+            schema_version: MODEL_BUNDLE_SCHEMA_VERSION,
+            pipeline_bundle_bytes: None,
+            art2a_model_bytes: Some(vec![1, 2, 3]),
+            descriptors: vec![BatchDescriptor::MolecularWeight.name().to_string()],
+            selected_feature_indices: vec![0, 1],
+            expected_feature_names: vec!["MolecularWeight".to_string(), "CSV::target".to_string()],
+        };
+        let bytes = bincode::serialize(&bundle).expect("bundle should serialize");
+        let path = std::env::temp_dir().join(format!(
+            "ferrum_tui_bundle_{}_{}.fcbundle",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("clock should be after epoch")
+                .as_nanos()
+        ));
+        std::fs::write(&path, bytes).expect("bundle should be written");
+
+        let response =
+            handle_import_model_bundle(path.clone()).expect("CSV-augmented bundle should import");
+        assert!(matches!(
+            response,
+            WorkerResponse::ModelBundleImported { .. }
+        ));
+
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn test_build_cluster_export_rows_prefers_prediction_art2a_outputs() {
+        let prediction_rows = vec![
+            PredictionOutputRow {
+                smiles: "CCO".to_string(),
+                predictions: vec![2.0, 0.82, 1.0],
+            },
+            PredictionOutputRow {
+                smiles: "CCN".to_string(),
+                predictions: vec![1.0, 0.41, 0.0],
+            },
+        ];
+        let target_names = vec![
+            "ART2A_ClusterId".to_string(),
+            "ART2A_Similarity".to_string(),
+            "ART2A_InDomain".to_string(),
+        ];
+
+        let rows = build_cluster_export_rows(&prediction_rows, &target_names, &[], &[])
+            .expect("cluster rows should build");
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].cluster_id, 2);
+        assert_eq!(rows[0].similarity, Some(0.82));
+        assert_eq!(rows[0].in_domain, Some(true));
+        assert_eq!(rows[1].cluster_id, 1);
+        assert_eq!(rows[1].in_domain, Some(false));
+    }
+
+    #[test]
+    fn test_build_cluster_export_rows_falls_back_to_loaded_labels_and_smiles() {
+        let labels = vec![0usize, 2usize];
+        let smiles = vec!["C".to_string(), "CC".to_string()];
+        let rows = build_cluster_export_rows(&[], &[], &labels, &smiles)
+            .expect("fallback rows should build");
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].smiles, "C");
+        assert_eq!(rows[0].cluster_id, 0);
+        assert_eq!(rows[0].similarity, None);
+        assert_eq!(rows[0].in_domain, None);
+        assert_eq!(rows[1].smiles, "CC");
+        assert_eq!(rows[1].cluster_id, 2);
     }
 }

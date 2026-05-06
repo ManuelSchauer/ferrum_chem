@@ -42,6 +42,68 @@ use rand::seq::SliceRandom;
 use rand::{Rng, SeedableRng};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
+
+/// Default memory budget for optional Random Forest feature pre-sorting.
+const DEFAULT_RF_PRESORT_MAX_BYTES: usize = 256 * 1024 * 1024;
+
+/// Cached global row-ordering per feature for root-node split evaluation.
+#[derive(Debug, Clone)]
+struct FeaturePresort {
+    orders: Vec<Vec<usize>>,
+}
+
+/// Parse a positive usize from an environment variable.
+fn env_positive_usize(name: &str) -> Option<usize> {
+    std::env::var(name)
+        .ok()
+        .and_then(|raw| raw.parse::<usize>().ok())
+        .filter(|&v| v > 0)
+}
+
+/// Resolve the Random Forest pre-sort memory budget.
+///
+/// `FERRUM_RF_PRESORT_MAX_BYTES` can override the default budget.
+fn resolve_rf_presort_max_bytes() -> usize {
+    env_positive_usize("FERRUM_RF_PRESORT_MAX_BYTES").unwrap_or(DEFAULT_RF_PRESORT_MAX_BYTES)
+}
+
+/// Build feature-wise global row ordering when the memory budget allows it.
+fn build_feature_presort_with_budget(
+    features: &Array2<f64>,
+    max_bytes: usize,
+) -> Option<FeaturePresort> {
+    let n_rows = features.nrows();
+    let n_features = features.ncols();
+    if n_rows == 0 || n_features == 0 {
+        return None;
+    }
+
+    let index_count = n_rows.checked_mul(n_features)?;
+    let required_bytes = index_count.checked_mul(std::mem::size_of::<usize>())?;
+    if required_bytes > max_bytes {
+        return None;
+    }
+
+    let orders = (0..n_features)
+        .into_par_iter()
+        .map(|feat_idx| {
+            let mut rows: Vec<usize> = (0..n_rows).collect();
+            rows.sort_unstable_by(|&a, &b| {
+                features[[a, feat_idx]].total_cmp(&features[[b, feat_idx]])
+            });
+            rows
+        })
+        .collect::<Vec<_>>();
+
+    Some(FeaturePresort { orders })
+}
+
+/// Try to build a shared feature pre-sort cache for Random Forest training.
+fn maybe_build_feature_presort(features: &Array2<f64>) -> Option<Arc<FeaturePresort>> {
+    let max_bytes = resolve_rf_presort_max_bytes();
+    build_feature_presort_with_budget(features, max_bytes).map(Arc::new)
+}
 
 // ---------------------------------------------------------------------------
 // Decision Tree Node
@@ -97,6 +159,168 @@ struct DecisionTreeBuilder {
 }
 
 impl DecisionTreeBuilder {
+    /// Evaluate root-node split candidates using a global per-feature row ordering cache.
+    ///
+    /// This path preserves bootstrap multiplicities by weighting each original row with
+    /// its count in the bootstrap sample and only applies at depth 0.
+    fn best_root_split_from_presort(
+        &self,
+        features: &Array2<f64>,
+        targets: &[f64],
+        indices: &[usize],
+        selected_features: &[usize],
+        presort: &FeaturePresort,
+    ) -> Option<(f64, usize, f64)> {
+        if indices.len() <= 1 {
+            return None;
+        }
+        let n_rows = features.nrows();
+        if n_rows == 0 {
+            return None;
+        }
+
+        let mut row_counts = vec![0u32; n_rows];
+        for &row_idx in indices {
+            row_counts[row_idx] = row_counts[row_idx].saturating_add(1);
+        }
+
+        let mut best_score = f64::INFINITY;
+        let mut best_feature = 0usize;
+        let mut best_threshold = 0.0f64;
+        let mut found_split = false;
+        let mut active_rows: Vec<(f64, usize, usize)> = Vec::with_capacity(indices.len());
+
+        for &feat_idx in selected_features {
+            let Some(order) = presort.orders.get(feat_idx) else {
+                continue;
+            };
+
+            active_rows.clear();
+            for &row_idx in order {
+                let weight = row_counts[row_idx] as usize;
+                if weight > 0 {
+                    active_rows.push((features[[row_idx, feat_idx]], row_idx, weight));
+                }
+            }
+            if active_rows.len() <= 1 {
+                continue;
+            }
+
+            if self.is_classifier {
+                let mut left_count = 0usize;
+                let mut right_count = indices.len();
+                let mut left_pos = 0usize;
+                let mut right_pos = active_rows
+                    .iter()
+                    .filter_map(|(_, row_idx, weight)| {
+                        if targets[*row_idx] >= 0.5 {
+                            Some(*weight)
+                        } else {
+                            None
+                        }
+                    })
+                    .sum::<usize>();
+
+                for split_idx in 0..(active_rows.len() - 1) {
+                    let (current_val, row_idx, weight) = active_rows[split_idx];
+                    let next_val = active_rows[split_idx + 1].0;
+
+                    left_count += weight;
+                    right_count -= weight;
+                    if targets[row_idx] >= 0.5 {
+                        left_pos += weight;
+                        right_pos -= weight;
+                    }
+
+                    if !current_val.is_finite()
+                        || !next_val.is_finite()
+                        || current_val >= next_val
+                        || left_count == 0
+                        || right_count == 0
+                    {
+                        continue;
+                    }
+
+                    let left_n = left_count as f64;
+                    let right_n = right_count as f64;
+                    let n_total = (left_count + right_count) as f64;
+
+                    let p_left = left_pos as f64 / left_n;
+                    let p_right = right_pos as f64 / right_n;
+                    let gini_left = 2.0 * p_left * (1.0 - p_left);
+                    let gini_right = 2.0 * p_right * (1.0 - p_right);
+                    let score = (left_n * gini_left + right_n * gini_right) / n_total;
+
+                    if score < best_score {
+                        best_score = score;
+                        best_feature = feat_idx;
+                        best_threshold = current_val + (next_val - current_val) * 0.5;
+                        found_split = true;
+                    }
+                }
+            } else {
+                let mut left_count = 0usize;
+                let mut right_count = indices.len();
+                let mut left_sum = 0.0f64;
+                let mut left_sum_sq = 0.0f64;
+                let mut right_sum = 0.0f64;
+                let mut right_sum_sq = 0.0f64;
+                for (_, row_idx, weight) in &active_rows {
+                    let t = targets[*row_idx];
+                    let w = *weight as f64;
+                    right_sum += w * t;
+                    right_sum_sq += w * t * t;
+                }
+
+                for split_idx in 0..(active_rows.len() - 1) {
+                    let (current_val, row_idx, weight) = active_rows[split_idx];
+                    let next_val = active_rows[split_idx + 1].0;
+                    let t = targets[row_idx];
+                    let w = weight as f64;
+
+                    left_count += weight;
+                    right_count -= weight;
+                    left_sum += w * t;
+                    left_sum_sq += w * t * t;
+                    right_sum -= w * t;
+                    right_sum_sq -= w * t * t;
+
+                    if !current_val.is_finite()
+                        || !next_val.is_finite()
+                        || current_val >= next_val
+                        || left_count == 0
+                        || right_count == 0
+                    {
+                        continue;
+                    }
+
+                    let left_n = left_count as f64;
+                    let right_n = right_count as f64;
+                    let n_total = (left_count + right_count) as f64;
+
+                    let left_mean = left_sum / left_n;
+                    let right_mean = right_sum / right_n;
+                    let left_var = (left_sum_sq / left_n - left_mean * left_mean).max(0.0);
+                    let right_var = (right_sum_sq / right_n - right_mean * right_mean).max(0.0);
+                    let score = (left_n * left_var + right_n * right_var) / n_total;
+
+                    if score < best_score {
+                        best_score = score;
+                        best_feature = feat_idx;
+                        best_threshold = current_val + (next_val - current_val) * 0.5;
+                        found_split = true;
+                    }
+                }
+            }
+        }
+
+        if found_split {
+            Some((best_score, best_feature, best_threshold))
+        } else {
+            None
+        }
+    }
+
     /// Builds the behavior encoded by this function.
     ///
     /// Function context: `crates/ferrum_core/src/ml/random_forest.rs`.
@@ -105,9 +329,10 @@ impl DecisionTreeBuilder {
         &self,
         features: &Array2<f64>,
         targets: &[f64],
-        indices: &[usize],
+        indices: &mut [usize],
         depth: usize,
         rng: &mut StdRng,
+        root_presort: Option<&FeaturePresort>,
     ) -> TreeNode {
         // Stop conditions
         if depth >= self.max_depth || indices.len() < self.min_samples_split || indices.len() <= 1 {
@@ -138,13 +363,31 @@ impl DecisionTreeBuilder {
         let mut best_feature = 0usize;
         let mut best_threshold = 0.0;
         let mut found_split = false;
+        let mut sorted_rows: Vec<(f64, usize)> = Vec::with_capacity(indices.len());
+
+        if depth == 0
+            && let Some(presort) = root_presort
+            && let Some((score, feature, threshold)) = self.best_root_split_from_presort(
+                features,
+                targets,
+                indices,
+                selected_features,
+                presort,
+            )
+        {
+            best_score = score;
+            best_feature = feature;
+            best_threshold = threshold;
+            found_split = true;
+        }
 
         for &feat_idx in selected_features.iter() {
-            // Sort candidate rows once by this feature.
-            let mut sorted_rows: Vec<(f64, usize)> = Vec::with_capacity(indices.len());
-            for &idx in indices {
-                sorted_rows.push((features[[idx, feat_idx]], idx));
+            if depth == 0 && found_split {
+                break;
             }
+            // Sort candidate rows once by this feature.
+            sorted_rows.clear();
+            sorted_rows.extend(indices.iter().map(|&idx| (features[[idx, feat_idx]], idx)));
             sorted_rows.sort_unstable_by(|a, b| a.0.total_cmp(&b.0));
             if sorted_rows.len() <= 1 {
                 continue;
@@ -258,17 +501,20 @@ impl DecisionTreeBuilder {
             };
         }
 
-        let mut best_left = Vec::with_capacity(indices.len());
-        let mut best_right = Vec::with_capacity(indices.len());
-        for &idx in indices {
+        let mut left = 0usize;
+        let mut right = indices.len();
+        while left < right {
+            let idx = indices[left];
             if features[[idx, best_feature]] <= best_threshold {
-                best_left.push(idx);
+                left += 1;
             } else {
-                best_right.push(idx);
+                right -= 1;
+                indices.swap(left, right);
             }
         }
+        let (left_indices, right_indices) = indices.split_at_mut(left);
 
-        if best_left.is_empty() || best_right.is_empty() {
+        if left_indices.is_empty() || right_indices.is_empty() {
             return TreeNode::Leaf {
                 value: self.leaf_value(targets, indices) as f32,
             };
@@ -277,8 +523,22 @@ impl DecisionTreeBuilder {
         TreeNode::Split {
             feature_idx: best_feature,
             threshold: best_threshold as f32,
-            left: Box::new(self.build(features, targets, &best_left, depth + 1, rng)),
-            right: Box::new(self.build(features, targets, &best_right, depth + 1, rng)),
+            left: Box::new(self.build(
+                features,
+                targets,
+                left_indices,
+                depth + 1,
+                rng,
+                root_presort,
+            )),
+            right: Box::new(self.build(
+                features,
+                targets,
+                right_indices,
+                depth + 1,
+                rng,
+                root_presort,
+            )),
         }
     }
 
@@ -339,14 +599,22 @@ impl RandomForestRegressor {
             max_features,
             is_classifier: false,
         };
+        let feature_presort = maybe_build_feature_presort(features);
 
         let trees = (0..n_estimators)
             .into_par_iter()
             .map(|tree_idx| {
                 let mut rng = StdRng::seed_from_u64(derive_tree_seed(seed, tree_idx));
                 // Bootstrap sample
-                let indices: Vec<usize> = (0..n).map(|_| rng.gen_range(0..n)).collect();
-                builder.build(features, &target_slice, &indices, 0, &mut rng)
+                let mut indices: Vec<usize> = (0..n).map(|_| rng.gen_range(0..n)).collect();
+                builder.build(
+                    features,
+                    &target_slice,
+                    &mut indices,
+                    0,
+                    &mut rng,
+                    feature_presort.as_deref(),
+                )
             })
             .collect::<Vec<_>>();
         let mut feature_counts = vec![0u64; n_features];
@@ -433,13 +701,21 @@ impl RandomForestClassifier {
             max_features,
             is_classifier: true,
         };
+        let feature_presort = maybe_build_feature_presort(features);
 
         let trees = (0..n_estimators)
             .into_par_iter()
             .map(|tree_idx| {
                 let mut rng = StdRng::seed_from_u64(derive_tree_seed(seed, tree_idx));
-                let indices: Vec<usize> = (0..n).map(|_| rng.gen_range(0..n)).collect();
-                builder.build(features, &target_slice, &indices, 0, &mut rng)
+                let mut indices: Vec<usize> = (0..n).map(|_| rng.gen_range(0..n)).collect();
+                builder.build(
+                    features,
+                    &target_slice,
+                    &mut indices,
+                    0,
+                    &mut rng,
+                    feature_presort.as_deref(),
+                )
             })
             .collect::<Vec<_>>();
         let mut feature_counts = vec![0u64; n_features];
@@ -529,6 +805,7 @@ fn count_feature_usage(node: &TreeNode, counts: &mut [u64]) {
 mod tests {
     use super::*;
     use ndarray::{Array2, array};
+    use rand::SeedableRng;
 
     #[test]
     /// Runs regression test for rf regressor basic.
@@ -644,5 +921,59 @@ mod tests {
         let prob_high = model.predict_proba_one(&[25.0]);
         assert!(prob_low < 0.5, "prob_low = {prob_low}");
         assert!(prob_high > 0.5, "prob_high = {prob_high}");
+    }
+
+    #[test]
+    fn test_feature_presort_budget_gate() {
+        let features =
+            Array2::from_shape_vec((4, 2), vec![2.0, 1.0, 0.0, 3.0, 1.0, 2.0, 3.0, 0.0]).unwrap();
+
+        let tiny = build_feature_presort_with_budget(&features, 1);
+        assert!(tiny.is_none());
+
+        let ok = build_feature_presort_with_budget(&features, usize::MAX).unwrap();
+        assert_eq!(ok.orders.len(), 2);
+        assert_eq!(ok.orders[0], vec![1, 2, 0, 3]);
+        assert_eq!(ok.orders[1], vec![3, 0, 2, 1]);
+    }
+
+    #[test]
+    fn test_root_presort_split_matches_local_sort_predictions() {
+        let features = Array2::from_shape_vec(
+            (8, 2),
+            vec![
+                0.0, 0.0, 1.0, 0.5, 2.0, 1.0, 3.0, 1.5, 4.0, 2.0, 5.0, 2.5, 6.0, 3.0, 7.0, 3.5,
+            ],
+        )
+        .unwrap();
+        let targets = vec![0.0, 0.2, 0.5, 0.9, 1.2, 1.7, 2.0, 2.4];
+        let mut indices_a = vec![0, 1, 1, 2, 3, 4, 5, 6, 7];
+        let mut indices_b = indices_a.clone();
+        let builder = DecisionTreeBuilder {
+            max_depth: 4,
+            min_samples_split: 2,
+            max_features: 2,
+            is_classifier: false,
+        };
+        let presort = build_feature_presort_with_budget(&features, usize::MAX).unwrap();
+
+        let mut rng_a = StdRng::seed_from_u64(42);
+        let mut rng_b = StdRng::seed_from_u64(42);
+        let tree_a = builder.build(
+            &features,
+            &targets,
+            &mut indices_a,
+            0,
+            &mut rng_a,
+            Some(&presort),
+        );
+        let tree_b = builder.build(&features, &targets, &mut indices_b, 0, &mut rng_b, None);
+
+        for i in 0..features.nrows() {
+            let row = features.row(i).to_vec();
+            let pa = tree_a.predict(&row);
+            let pb = tree_b.predict(&row);
+            assert!((pa - pb).abs() < 1e-12, "row={i} pa={pa} pb={pb}");
+        }
     }
 }

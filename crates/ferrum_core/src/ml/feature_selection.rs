@@ -79,15 +79,21 @@ pub fn correlation_filter(data: &Array2<f64>, threshold: f64) -> Vec<usize> {
         std_devs[j] = var.sqrt().max(1e-12);
     }
 
-    // Compute correlation matrix (upper triangle)
-    let mut corr = vec![vec![0.0f64; n_feat]; n_feat];
+    // Compute packed upper-triangle correlation matrix.
+    let upper_len = n_feat * (n_feat + 1) / 2;
+    let mut corr_upper = vec![0.0f64; upper_len];
+    let mut row_start = vec![0usize; n_feat];
+    for (i, slot) in row_start.iter_mut().enumerate() {
+        *slot = i * n_feat - (i * i.saturating_sub(1)) / 2;
+    }
     for i in 0..n_feat {
-        corr[i][i] = 1.0;
+        let row_start_i = row_start[i];
+        corr_upper[row_start_i] = 1.0;
+        let col_i = centered_data.column(i);
         for j in (i + 1)..n_feat {
-            let cov = centered_data.column(i).dot(&centered_data.column(j)) / n;
+            let cov = col_i.dot(&centered_data.column(j)) / n;
             let r = cov / (std_devs[i] * std_devs[j]);
-            corr[i][j] = r;
-            corr[j][i] = r;
+            corr_upper[row_start_i + (j - i)] = r;
         }
     }
 
@@ -99,11 +105,12 @@ pub fn correlation_filter(data: &Array2<f64>, threshold: f64) -> Vec<usize> {
             if removed[i] {
                 continue;
             }
+            let row_start_i = row_start[i];
             for j in (i + 1)..n_feat {
                 if removed[j] {
                     continue;
                 }
-                let r_abs = corr[i][j].abs();
+                let r_abs = corr_upper[row_start_i + (j - i)].abs();
                 if r_abs > threshold {
                     match &worst_pair {
                         Some((_, _, best_r)) if r_abs <= *best_r => {}
@@ -117,11 +124,23 @@ pub fn correlation_filter(data: &Array2<f64>, threshold: f64) -> Vec<usize> {
                 // Remove the feature with higher mean absolute correlation to others
                 let mean_corr_i: f64 = (0..n_feat)
                     .filter(|&k| !removed[k] && k != i)
-                    .map(|k| corr[i][k].abs())
+                    .map(|k| {
+                        if i <= k {
+                            corr_upper[row_start[i] + (k - i)].abs()
+                        } else {
+                            corr_upper[row_start[k] + (i - k)].abs()
+                        }
+                    })
                     .sum::<f64>();
                 let mean_corr_j: f64 = (0..n_feat)
                     .filter(|&k| !removed[k] && k != j)
-                    .map(|k| corr[j][k].abs())
+                    .map(|k| {
+                        if j <= k {
+                            corr_upper[row_start[j] + (k - j)].abs()
+                        } else {
+                            corr_upper[row_start[k] + (j - k)].abs()
+                        }
+                    })
                     .sum::<f64>();
                 if mean_corr_i >= mean_corr_j {
                     removed[i] = true;

@@ -80,9 +80,21 @@ impl Art2a {
     ///
     /// Input vectors are L2-normalized internally.
     pub fn fit(&mut self, data: &[Vec<f64>]) {
+        let _ = self.fit_with_progress(data, |_| false);
+    }
+
+    /// Fit the model on data with cooperative progress/cancellation.
+    ///
+    /// The callback receives progress in [0, 1]. Return `true` from the callback
+    /// to stop fitting early. Returns `false` when canceled.
+    pub fn fit_with_progress<F>(&mut self, data: &[Vec<f64>], mut on_progress: F) -> bool
+    where
+        F: FnMut(f32) -> bool,
+    {
         let n = data.len();
         if n == 0 {
-            return;
+            let _ = on_progress(1.0);
+            return true;
         }
 
         // L2-normalize all inputs
@@ -92,11 +104,17 @@ impl Art2a {
         self.labels = vec![0; n];
         self.cluster_sizes.clear();
 
+        let total_steps = self.max_iter.max(1).saturating_mul(n).max(1);
+        let mut completed_steps = 0usize;
+
         for epoch in 0..self.max_iter {
             let allow_new_clusters = epoch == 0;
             let mut changed = false;
 
             for (i, input) in normalized.iter().enumerate() {
+                if on_progress((completed_steps as f32 / total_steps as f32).clamp(0.0, 1.0)) {
+                    return false;
+                }
                 let (cluster_id, _) = self.find_best_cluster(input, allow_new_clusters);
 
                 if cluster_id != self.labels[i] {
@@ -122,6 +140,11 @@ impl Art2a {
                     .sqrt()
                     .max(1e-15);
                 proto.mapv_inplace(|v| (f64::from(v) / norm) as f32);
+
+                completed_steps = completed_steps.saturating_add(1);
+                if on_progress((completed_steps as f32 / total_steps as f32).clamp(0.0, 1.0)) {
+                    return false;
+                }
             }
 
             if !changed {
@@ -135,6 +158,8 @@ impl Art2a {
         for &label in &self.labels {
             self.cluster_sizes[label] += 1;
         }
+        let _ = on_progress(1.0);
+        true
     }
 
     /// Find best matching cluster or create a new one.
@@ -225,12 +250,17 @@ impl Art2a {
 
 /// L2-normalize a vector.
 fn l2_normalize(v: &[f64]) -> Array1<f32> {
-    let finite = v
-        .iter()
-        .map(|x| if x.is_finite() { *x } else { 0.0 })
-        .collect::<Vec<_>>();
-    let norm = finite.iter().map(|x| x * x).sum::<f64>().sqrt().max(1e-15);
-    Array1::from_iter(finite.into_iter().map(|x| (x / norm) as f32))
+    let mut sum_sq = 0.0f64;
+    for &x in v {
+        if x.is_finite() {
+            sum_sq += x * x;
+        }
+    }
+    let norm = sum_sq.sqrt().max(1e-15);
+    Array1::from_iter(v.iter().map(|&x| {
+        let finite = if x.is_finite() { x } else { 0.0 };
+        (finite / norm) as f32
+    }))
 }
 
 #[cfg(test)]
@@ -383,5 +413,47 @@ mod tests {
                 .iter()
                 .all(|proto| proto.iter().all(|value| value.is_finite()))
         );
+    }
+
+    #[test]
+    /// Runs regression test for art2a progress callback completion.
+    ///
+    /// Function context: `crates/ferrum_core/src/ml/art2a.rs`.
+    /// ML-layer note: numerical stability and reproducibility are important for comparable model evaluation.
+    fn test_art2a_fit_with_progress_reaches_completion() {
+        let data = vec![vec![1.0, 0.0], vec![0.9, 0.1], vec![0.0, 1.0]];
+        let mut model = Art2a::new(0.8, 0.3, 20);
+        let mut progress_samples = Vec::new();
+        let completed = model.fit_with_progress(&data, |progress| {
+            progress_samples.push(progress);
+            false
+        });
+
+        assert!(completed);
+        assert!(!progress_samples.is_empty());
+        let final_progress = *progress_samples.last().unwrap_or(&0.0);
+        assert!((final_progress - 1.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    /// Runs regression test for art2a cooperative cancellation.
+    ///
+    /// Function context: `crates/ferrum_core/src/ml/art2a.rs`.
+    /// ML-layer note: numerical stability and reproducibility are important for comparable model evaluation.
+    fn test_art2a_fit_with_progress_can_cancel() {
+        let data = vec![
+            vec![1.0, 0.0, 0.0],
+            vec![0.9, 0.1, 0.0],
+            vec![0.8, 0.2, 0.0],
+            vec![0.0, 0.0, 1.0],
+        ];
+        let mut model = Art2a::new(0.8, 0.3, 50);
+        let mut callback_calls = 0usize;
+        let completed = model.fit_with_progress(&data, |_| {
+            callback_calls += 1;
+            callback_calls >= 2
+        });
+
+        assert!(!completed);
     }
 }

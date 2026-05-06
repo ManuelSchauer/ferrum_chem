@@ -49,11 +49,36 @@ use crate::types::{AtomIdx, BondType};
 /// `Bond` is `Copy + Send + Sync`, making it trivially thread-safe.
 /// The struct is compact (6 bytes) for efficient parallel processing.
 #[derive(Debug, Clone, Copy)]
+#[repr(C)]
 pub struct Bond {
     pub source: AtomIdx,
     pub target: AtomIdx,
     pub bond_type: BondType,
     pub flags: u8, // Bit 0: Aromatic, Bit 1: Ring
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Bond;
+    use std::mem::{align_of, size_of};
+
+    #[test]
+    /// Runs regression test for bond layout size.
+    ///
+    /// Function context: `crates/ferrum_core/src/mol/bond.rs`.
+    /// Molecule-model note: preserve atom/bond index invariants and cached-property invalidation rules.
+    fn test_bond_layout_size() {
+        assert_eq!(size_of::<Bond>(), 6);
+    }
+
+    #[test]
+    /// Runs regression test for bond layout alignment.
+    ///
+    /// Function context: `crates/ferrum_core/src/mol/bond.rs`.
+    /// Molecule-model note: preserve atom/bond index invariants and cached-property invalidation rules.
+    fn test_bond_layout_alignment() {
+        assert_eq!(align_of::<Bond>(), 2);
+    }
 }
 
 // Static assertion: Bond must be Send + Sync

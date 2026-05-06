@@ -3,6 +3,10 @@ name = "ferrum_core"
 version = "0.1.0"
 edition = "2024"
 
+[features]
+default = ["native-linalg"]
+native-linalg = ["dep:ndarray-linalg"]
+
 [dependencies]
 thiserror = "2.0.18"
 smallvec = { version = "1.11", features = ["const_generics"] }
@@ -13,8 +17,10 @@ serde_json = "1.0"
 once_cell = "1.19"
 bitvec = "1.0"
 ndarray = { version = "0.16", features = ["serde"] }
+ndarray-linalg = { version = "0.17", optional = true, default-features = false, features = ["openblas-system"] }
 bincode = "1.3"
 rand = "0.8"
+rustc-hash = "2.0"
 
 [dev-dependencies]
 tempfile = "3.10"
