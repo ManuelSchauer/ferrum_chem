@@ -36,7 +36,7 @@
 //! - OECD QSAR validation principles where `Random Forest` is used in predictive chemistry contexts.
 //! - Code-local source of truth: symbols and tests declared in `crates/ferrum_core/src/ml/random_forest.rs`.
 
-use ndarray::{Array1, Array2};
+use ndarray::{Array1, ArrayView1, ArrayView2};
 use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
 use rand::{Rng, SeedableRng};
@@ -70,7 +70,7 @@ fn resolve_rf_presort_max_bytes() -> usize {
 
 /// Build feature-wise global row ordering when the memory budget allows it.
 fn build_feature_presort_with_budget(
-    features: &Array2<f64>,
+    features: ArrayView2<f64>,
     max_bytes: usize,
 ) -> Option<FeaturePresort> {
     let n_rows = features.nrows();
@@ -100,7 +100,7 @@ fn build_feature_presort_with_budget(
 }
 
 /// Try to build a shared feature pre-sort cache for Random Forest training.
-fn maybe_build_feature_presort(features: &Array2<f64>) -> Option<Arc<FeaturePresort>> {
+fn maybe_build_feature_presort(features: ArrayView2<f64>) -> Option<Arc<FeaturePresort>> {
     let max_bytes = resolve_rf_presort_max_bytes();
     build_feature_presort_with_budget(features, max_bytes).map(Arc::new)
 }
@@ -110,6 +110,10 @@ fn maybe_build_feature_presort(features: &Array2<f64>) -> Option<Arc<FeaturePres
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Implements TreeNode.
+///
+/// Function context: `crates/ferrum_core/src/ml/random_forest.rs`.
+/// ML-layer note: optimized for batch computation and zero-allocation passes.
 enum TreeNode {
     Leaf {
         value: f32,
@@ -151,6 +155,10 @@ impl TreeNode {
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone)]
+/// Implements DecisionTreeBuilder.
+///
+/// Function context: `crates/ferrum_core/src/ml/random_forest.rs`.
+/// ML-layer note: optimized for batch computation and zero-allocation passes.
 struct DecisionTreeBuilder {
     max_depth: usize,
     min_samples_split: usize,
@@ -165,7 +173,7 @@ impl DecisionTreeBuilder {
     /// its count in the bootstrap sample and only applies at depth 0.
     fn best_root_split_from_presort(
         &self,
-        features: &Array2<f64>,
+        features: ArrayView2<f64>,
         targets: &[f64],
         indices: &[usize],
         selected_features: &[usize],
@@ -327,12 +335,13 @@ impl DecisionTreeBuilder {
     /// ML-layer note: numerical stability and reproducibility are important for comparable model evaluation.
     fn build(
         &self,
-        features: &Array2<f64>,
+        features: ArrayView2<f64>,
         targets: &[f64],
         indices: &mut [usize],
         depth: usize,
         rng: &mut StdRng,
         root_presort: Option<&FeaturePresort>,
+        scratch: &mut Vec<(f64, usize)>,
     ) -> TreeNode {
         // Stop conditions
         if depth >= self.max_depth || indices.len() < self.min_samples_split || indices.len() <= 1 {
@@ -363,7 +372,7 @@ impl DecisionTreeBuilder {
         let mut best_feature = 0usize;
         let mut best_threshold = 0.0;
         let mut found_split = false;
-        let mut sorted_rows: Vec<(f64, usize)> = Vec::with_capacity(indices.len());
+        // Using scratch buffer instead of allocating
 
         if depth == 0
             && let Some(presort) = root_presort
@@ -386,26 +395,26 @@ impl DecisionTreeBuilder {
                 break;
             }
             // Sort candidate rows once by this feature.
-            sorted_rows.clear();
-            sorted_rows.extend(indices.iter().map(|&idx| (features[[idx, feat_idx]], idx)));
-            sorted_rows.sort_unstable_by(|a, b| a.0.total_cmp(&b.0));
-            if sorted_rows.len() <= 1 {
+            scratch.clear();
+            scratch.extend(indices.iter().map(|&idx| (features[[idx, feat_idx]], idx)));
+            scratch.sort_unstable_by(|a, b| a.0.total_cmp(&b.0));
+            if scratch.len() <= 1 {
                 continue;
             }
 
             if self.is_classifier {
-                let total_count = sorted_rows.len();
+                let total_count = scratch.len();
                 let mut left_count = 0usize;
                 let mut right_count = total_count;
                 let mut left_pos = 0usize;
-                let mut right_pos = sorted_rows
+                let mut right_pos = scratch
                     .iter()
                     .filter(|(_, idx)| targets[*idx] >= 0.5)
                     .count();
 
                 for split_idx in 0..(total_count - 1) {
-                    let (current_val, idx) = sorted_rows[split_idx];
-                    let next_val = sorted_rows[split_idx + 1].0;
+                    let (current_val, idx) = scratch[split_idx];
+                    let next_val = scratch[split_idx + 1].0;
 
                     left_count += 1;
                     right_count -= 1;
@@ -441,22 +450,22 @@ impl DecisionTreeBuilder {
                     }
                 }
             } else {
-                let total_count = sorted_rows.len();
+                let total_count = scratch.len();
                 let mut left_count = 0usize;
                 let mut right_count = total_count;
                 let mut left_sum = 0.0f64;
                 let mut left_sum_sq = 0.0f64;
                 let mut right_sum = 0.0f64;
                 let mut right_sum_sq = 0.0f64;
-                for (_, idx) in &sorted_rows {
+                for (_, idx) in &*scratch {
                     let t = targets[*idx];
                     right_sum += t;
                     right_sum_sq += t * t;
                 }
 
                 for split_idx in 0..(total_count - 1) {
-                    let (current_val, idx) = sorted_rows[split_idx];
-                    let next_val = sorted_rows[split_idx + 1].0;
+                    let (current_val, idx) = scratch[split_idx];
+                    let next_val = scratch[split_idx + 1].0;
                     let t = targets[idx];
 
                     left_count += 1;
@@ -530,6 +539,7 @@ impl DecisionTreeBuilder {
                 depth + 1,
                 rng,
                 root_presort,
+                scratch,
             )),
             right: Box::new(self.build(
                 features,
@@ -538,6 +548,7 @@ impl DecisionTreeBuilder {
                 depth + 1,
                 rng,
                 root_presort,
+                scratch,
             )),
         }
     }
@@ -580,8 +591,8 @@ pub struct RandomForestRegressor {
 impl RandomForestRegressor {
     /// Train a random forest regressor.
     pub fn fit(
-        features: &Array2<f64>,
-        targets: &Array1<f64>,
+        features: ArrayView2<f64>,
+        targets: ArrayView1<f64>,
         n_estimators: usize,
         max_depth: usize,
         min_samples_split: usize,
@@ -603,19 +614,24 @@ impl RandomForestRegressor {
 
         let trees = (0..n_estimators)
             .into_par_iter()
-            .map(|tree_idx| {
-                let mut rng = StdRng::seed_from_u64(derive_tree_seed(seed, tree_idx));
-                // Bootstrap sample
-                let mut indices: Vec<usize> = (0..n).map(|_| rng.gen_range(0..n)).collect();
-                builder.build(
-                    features,
-                    &target_slice,
-                    &mut indices,
-                    0,
-                    &mut rng,
-                    feature_presort.as_deref(),
-                )
-            })
+            .map_init(
+                || (Vec::with_capacity(n), Vec::with_capacity(n)),
+                |(indices, scratch), tree_idx| {
+                    let mut rng = StdRng::seed_from_u64(derive_tree_seed(seed, tree_idx));
+                    indices.clear();
+                    indices.extend((0..n).map(|_| rng.gen_range(0..n)));
+                    scratch.clear();
+                    builder.build(
+                        features,
+                        &target_slice,
+                        indices,
+                        0,
+                        &mut rng,
+                        feature_presort.as_deref(),
+                        scratch,
+                    )
+                },
+            )
             .collect::<Vec<_>>();
         let mut feature_counts = vec![0u64; n_features];
         for tree in &trees {
@@ -647,7 +663,7 @@ impl RandomForestRegressor {
     }
 
     /// Predict for multiple samples.
-    pub fn predict(&self, features: &Array2<f64>) -> Array1<f64> {
+    pub fn predict(&self, features: ArrayView2<f64>) -> Array1<f64> {
         let values = (0..features.nrows())
             .into_par_iter()
             .map(|i| {
@@ -682,8 +698,8 @@ pub struct RandomForestClassifier {
 impl RandomForestClassifier {
     /// Train a random forest classifier.
     pub fn fit(
-        features: &Array2<f64>,
-        targets: &Array1<f64>,
+        features: ArrayView2<f64>,
+        targets: ArrayView1<f64>,
         n_estimators: usize,
         max_depth: usize,
         min_samples_split: usize,
@@ -705,18 +721,24 @@ impl RandomForestClassifier {
 
         let trees = (0..n_estimators)
             .into_par_iter()
-            .map(|tree_idx| {
-                let mut rng = StdRng::seed_from_u64(derive_tree_seed(seed, tree_idx));
-                let mut indices: Vec<usize> = (0..n).map(|_| rng.gen_range(0..n)).collect();
-                builder.build(
-                    features,
-                    &target_slice,
-                    &mut indices,
-                    0,
-                    &mut rng,
-                    feature_presort.as_deref(),
-                )
-            })
+            .map_init(
+                || (Vec::with_capacity(n), Vec::with_capacity(n)),
+                |(indices, scratch), tree_idx| {
+                    let mut rng = StdRng::seed_from_u64(derive_tree_seed(seed, tree_idx));
+                    indices.clear();
+                    indices.extend((0..n).map(|_| rng.gen_range(0..n)));
+                    scratch.clear();
+                    builder.build(
+                        features,
+                        &target_slice,
+                        indices,
+                        0,
+                        &mut rng,
+                        feature_presort.as_deref(),
+                        scratch,
+                    )
+                },
+            )
             .collect::<Vec<_>>();
         let mut feature_counts = vec![0u64; n_features];
         for tree in &trees {
@@ -756,7 +778,7 @@ impl RandomForestClassifier {
     }
 
     /// Predict for multiple samples.
-    pub fn predict(&self, features: &Array2<f64>) -> Array1<f64> {
+    pub fn predict(&self, features: ArrayView2<f64>) -> Array1<f64> {
         let values = (0..features.nrows())
             .into_par_iter()
             .map(|i| {
@@ -818,7 +840,7 @@ mod tests {
             Array2::from_shape_vec((20, 1), (0..20).map(|i| i as f64).collect()).unwrap();
         let targets = Array1::from_vec((0..20).map(|i| i as f64).collect());
 
-        let model = RandomForestRegressor::fit(&features, &targets, 50, 10, 2, 1.0, 42);
+        let model = RandomForestRegressor::fit(features.view(), targets.view(), 50, 10, 2, 1.0, 42);
 
         // Should predict reasonably for in-range values
         let pred = model.predict_one(&[5.0]);
@@ -845,7 +867,7 @@ mod tests {
         let features = Array2::from_shape_vec((20, 2), feat_data).unwrap();
         let targets = Array1::from_vec(target_data);
 
-        let model = RandomForestClassifier::fit(&features, &targets, 50, 10, 2, 1.0, 42);
+        let model = RandomForestClassifier::fit(features.view(), targets.view(), 50, 10, 2, 1.0, 42);
 
         assert!((model.predict_one(&[2.0, 0.0]) - 0.0).abs() < 1e-10);
         assert!((model.predict_one(&[15.0, 0.0]) - 1.0).abs() < 1e-10);
@@ -869,7 +891,7 @@ mod tests {
         let features = Array2::from_shape_vec((n, 2), feat).unwrap();
         let targets = Array1::from_vec(tgt);
 
-        let model = RandomForestRegressor::fit(&features, &targets, 30, 8, 2, 1.0, 42);
+        let model = RandomForestRegressor::fit(features.view(), targets.view(), 30, 8, 2, 1.0, 42);
 
         // Feature 0 should be more important than feature 1
         assert!(
@@ -889,10 +911,10 @@ mod tests {
             Array2::from_shape_vec((10, 1), (0..10).map(|i| i as f64).collect()).unwrap();
         let targets = Array1::from_vec((0..10).map(|i| i as f64 * 2.0).collect());
 
-        let model = RandomForestRegressor::fit(&features, &targets, 20, 5, 2, 1.0, 42);
+        let model = RandomForestRegressor::fit(features.view(), targets.view(), 20, 5, 2, 1.0, 42);
 
         let test = Array2::from_shape_vec((3, 1), vec![2.0, 5.0, 8.0]).unwrap();
-        let preds = model.predict(&test);
+        let preds = model.predict(test.view());
         assert_eq!(preds.len(), 3);
         // Predictions should be in reasonable range
         for (i, &p) in preds.iter().enumerate() {
@@ -915,7 +937,7 @@ mod tests {
         let features = Array2::from_shape_vec((30, 1), feat).unwrap();
         let targets = Array1::from_vec(tgt);
 
-        let model = RandomForestClassifier::fit(&features, &targets, 50, 5, 2, 1.0, 42);
+        let model = RandomForestClassifier::fit(features.view(), targets.view(), 50, 5, 2, 1.0, 42);
 
         let prob_low = model.predict_proba_one(&[3.0]);
         let prob_high = model.predict_proba_one(&[25.0]);
@@ -924,20 +946,28 @@ mod tests {
     }
 
     #[test]
+    /// Implements test feature presort budget gate.
+    ///
+    /// Function context: `crates/ferrum_core/src/ml/random_forest.rs`.
+    /// ML-layer note: optimized for batch computation and zero-allocation passes.
     fn test_feature_presort_budget_gate() {
         let features =
             Array2::from_shape_vec((4, 2), vec![2.0, 1.0, 0.0, 3.0, 1.0, 2.0, 3.0, 0.0]).unwrap();
 
-        let tiny = build_feature_presort_with_budget(&features, 1);
+        let tiny = build_feature_presort_with_budget(features.view(), 1);
         assert!(tiny.is_none());
 
-        let ok = build_feature_presort_with_budget(&features, usize::MAX).unwrap();
+        let ok = build_feature_presort_with_budget(features.view(), usize::MAX).unwrap();
         assert_eq!(ok.orders.len(), 2);
         assert_eq!(ok.orders[0], vec![1, 2, 0, 3]);
         assert_eq!(ok.orders[1], vec![3, 0, 2, 1]);
     }
 
     #[test]
+    /// Implements test root presort split matches local sort predictions.
+    ///
+    /// Function context: `crates/ferrum_core/src/ml/random_forest.rs`.
+    /// ML-layer note: optimized for batch computation and zero-allocation passes.
     fn test_root_presort_split_matches_local_sort_predictions() {
         let features = Array2::from_shape_vec(
             (8, 2),
@@ -955,19 +985,23 @@ mod tests {
             max_features: 2,
             is_classifier: false,
         };
-        let presort = build_feature_presort_with_budget(&features, usize::MAX).unwrap();
+        let presort = build_feature_presort_with_budget(features.view(), usize::MAX).unwrap();
+
+        let mut scratch_a = Vec::with_capacity(indices_a.len());
+        let mut scratch_b = Vec::with_capacity(indices_b.len());
 
         let mut rng_a = StdRng::seed_from_u64(42);
         let mut rng_b = StdRng::seed_from_u64(42);
         let tree_a = builder.build(
-            &features,
+            features.view(),
             &targets,
             &mut indices_a,
             0,
             &mut rng_a,
             Some(&presort),
+            &mut scratch_a,
         );
-        let tree_b = builder.build(&features, &targets, &mut indices_b, 0, &mut rng_b, None);
+        let tree_b = builder.build(features.view(), &targets, &mut indices_b, 0, &mut rng_b, None, &mut scratch_b);
 
         for i in 0..features.nrows() {
             let row = features.row(i).to_vec();

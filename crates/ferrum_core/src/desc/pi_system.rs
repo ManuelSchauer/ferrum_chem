@@ -124,7 +124,7 @@ impl Descriptor for PiSystemCounts {
     fn calculate(
         &self,
         mol: &mut Molecule,
-        ctx: &mut crate::desc::context::CalculationContext,
+        _ctx: &mut crate::desc::context::CalculationContext,
     ) -> DescriptorValue {
         let mut visited = HashSet::new();
         let mut largest_size = 0u16;
@@ -173,7 +173,7 @@ impl Descriptor for LargestPiSystem {
     fn calculate(
         &self,
         mol: &mut Molecule,
-        ctx: &mut crate::desc::context::CalculationContext,
+        _ctx: &mut crate::desc::context::CalculationContext,
     ) -> DescriptorValue {
         let mut visited = HashSet::new();
         let mut largest_system_size = 0;

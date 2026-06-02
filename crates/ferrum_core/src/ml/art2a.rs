@@ -36,6 +36,7 @@
 //! - Code-local source of truth: symbols and tests declared in `crates/ferrum_core/src/ml/art2a.rs`.
 
 use ndarray::Array1;
+use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
 /// ART-2A clustering model.
@@ -171,23 +172,27 @@ impl Art2a {
             return (0, 1.0);
         }
 
-        let mut best_id = 0;
-        let mut best_sim = f64::NEG_INFINITY;
+        let _best_id = 0;
+        let _best_sim = f64::NEG_INFINITY;
 
-        for (id, proto) in self.prototypes.iter().enumerate() {
-            let sim: f64 = input
-                .iter()
-                .zip(proto.iter())
-                .map(|(&a, &b)| f64::from(a) * f64::from(b))
-                .sum();
-            if !sim.is_finite() {
-                continue;
-            }
-            if sim > best_sim {
-                best_sim = sim;
-                best_id = id;
-            }
-        }
+        let (best_id_par, best_sim_par) = self.prototypes
+            .par_iter()
+            .enumerate()
+            .map(|(id, proto)| {
+                let sim: f64 = input
+                    .iter()
+                    .zip(proto.iter())
+                    .map(|(&a, &b)| f64::from(a) * f64::from(b))
+                    .sum();
+                (id, sim)
+            })
+            .filter(|&(_, sim)| sim.is_finite())
+            .reduce(
+                || (0, f64::NEG_INFINITY),
+                |a, b| if a.1 > b.1 { a } else { b }
+            );
+        let best_id = best_id_par;
+        let best_sim = best_sim_par;
 
         // Vigilance check: if best similarity < ρ, create new cluster
         if allow_new_cluster && best_sim < self.vigilance {
@@ -209,23 +214,27 @@ impl Art2a {
             return (0, 0.0);
         }
         let input = l2_normalize(sample);
-        let mut best_id = 0;
-        let mut best_sim = f64::NEG_INFINITY;
+        let _best_id = 0;
+        let _best_sim = f64::NEG_INFINITY;
 
-        for (id, proto) in self.prototypes.iter().enumerate() {
-            let sim: f64 = input
-                .iter()
-                .zip(proto.iter())
-                .map(|(&a, &b)| f64::from(a) * f64::from(b))
-                .sum();
-            if !sim.is_finite() {
-                continue;
-            }
-            if sim > best_sim {
-                best_sim = sim;
-                best_id = id;
-            }
-        }
+        let (best_id_par, best_sim_par) = self.prototypes
+            .par_iter()
+            .enumerate()
+            .map(|(id, proto)| {
+                let sim: f64 = input
+                    .iter()
+                    .zip(proto.iter())
+                    .map(|(&a, &b)| f64::from(a) * f64::from(b))
+                    .sum();
+                (id, sim)
+            })
+            .filter(|&(_, sim)| sim.is_finite())
+            .reduce(
+                || (0, f64::NEG_INFINITY),
+                |a, b| if a.1 > b.1 { a } else { b }
+            );
+        let best_id = best_id_par;
+        let best_sim = best_sim_par;
 
         if !best_sim.is_finite() {
             return (0, 0.0);

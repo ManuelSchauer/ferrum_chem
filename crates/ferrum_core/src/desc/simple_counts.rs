@@ -74,7 +74,7 @@ impl Descriptor for ValenceElectrons {
     fn calculate(
         &self,
         mol: &mut Molecule,
-        ctx: &mut crate::desc::context::CalculationContext,
+        _ctx: &mut crate::desc::context::CalculationContext,
     ) -> DescriptorValue {
         let mut count: i32 = 0;
         for atom in &mol.atoms {
@@ -112,7 +112,7 @@ impl Descriptor for RadicalElectrons {
     fn calculate(
         &self,
         mol: &mut Molecule,
-        ctx: &mut crate::desc::context::CalculationContext,
+        _ctx: &mut crate::desc::context::CalculationContext,
     ) -> DescriptorValue {
         let count: u32 = mol
             .atoms
@@ -148,7 +148,7 @@ impl Descriptor for HeteroatomCount {
     fn calculate(
         &self,
         mol: &mut Molecule,
-        ctx: &mut crate::desc::context::CalculationContext,
+        _ctx: &mut crate::desc::context::CalculationContext,
     ) -> DescriptorValue {
         let count = mol
             .atoms
@@ -185,7 +185,7 @@ impl Descriptor for HybridizationRatio {
     fn calculate(
         &self,
         mol: &mut Molecule,
-        ctx: &mut crate::desc::context::CalculationContext,
+        _ctx: &mut crate::desc::context::CalculationContext,
     ) -> DescriptorValue {
         let mut sp3_count = 0u32;
         let mut sp2_count = 0u32;
@@ -234,7 +234,7 @@ impl Descriptor for VAdjMa {
     fn calculate(
         &self,
         mol: &mut Molecule,
-        ctx: &mut crate::desc::context::CalculationContext,
+        _ctx: &mut crate::desc::context::CalculationContext,
     ) -> DescriptorValue {
         let m = mol.num_bonds() as f32;
         let val = if m == 0.0 { 0.0 } else { 1.0 + m.log2() };

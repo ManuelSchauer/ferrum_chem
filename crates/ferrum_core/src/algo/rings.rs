@@ -128,7 +128,7 @@ pub(crate) fn find_sssr_cycles(mol: &Molecule) -> Vec<Vec<AtomIdx>> {
 ///
 /// This does not mutate ring flags and is used by descriptor code that needs
 /// a more RDKit-like small-ring basis than the legacy `find_sssr()` traversal.
-pub fn find_minimum_cycle_basis_bonds(mol: &Molecule) -> Vec<smallvec::SmallVec<[usize; 8]>> {
+pub fn find_minimum_cycle_basis_bonds(mol: &Molecule) -> Vec<smallvec::SmallVec<[u16; 8]>> {
     let n_atoms = mol.num_atoms();
     if n_atoms == 0 {
         return Vec::new();
@@ -165,7 +165,7 @@ pub fn find_minimum_cycle_basis_bonds(mol: &Molecule) -> Vec<smallvec::SmallVec<
 /// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
 pub(crate) fn find_minimum_cycle_basis_bonds_cached(
     mol: &mut Molecule,
-) -> Vec<smallvec::SmallVec<[usize; 8]>> {
+) -> Vec<smallvec::SmallVec<[u16; 8]>> {
     if let Some(cached) = mol.cached_min_cycle_basis_bonds() {
         return cached.clone();
     }
@@ -235,7 +235,7 @@ fn cycle_rank_count(mol: &Molecule) -> usize {
 /// rank / minimum cycle basis count. To mirror that behavior, collect every
 /// unique shortest cycle induced by removing a bond and finding all shortest
 /// alternate paths between its endpoints.
-pub fn find_symmetrized_sssr_bonds(mol: &Molecule) -> Vec<smallvec::SmallVec<[usize; 8]>> {
+pub fn find_symmetrized_sssr_bonds(mol: &Molecule) -> Vec<smallvec::SmallVec<[u16; 8]>> {
     if mol.num_atoms() == 0 || mol.num_bonds() == 0 {
         return Vec::new();
     }
@@ -257,7 +257,8 @@ pub fn find_symmetrized_sssr_bonds(mol: &Molecule) -> Vec<smallvec::SmallVec<[us
         let end = bond.target as usize;
 
         for mut path in shortest_paths_excluding_bond(mol, start, end, bond_idx, &mut workspace) {
-            path.push(bond_idx);
+            debug_assert!(bond_idx <= u16::MAX as usize);
+            path.push(bond_idx as u16);
             path.sort_unstable();
             path.dedup();
             if path.len() >= 3 {
@@ -272,13 +273,13 @@ pub fn find_symmetrized_sssr_bonds(mol: &Molecule) -> Vec<smallvec::SmallVec<[us
     if cycles.len() == base_count + 1 {
         let max_len = cycles
             .iter()
-            .map(|cycle: &smallvec::SmallVec<[usize; 8]>| cycle.len())
+            .map(|cycle: &smallvec::SmallVec<[u16; 8]>| cycle.len())
             .max()
             .unwrap_or(0);
         let max_cycles: Vec<usize> = cycles
             .iter()
             .enumerate()
-            .filter_map(|(idx, cycle): (usize, &smallvec::SmallVec<[usize; 8]>)| {
+            .filter_map(|(idx, cycle): (usize, &smallvec::SmallVec<[u16; 8]>)| {
                 (cycle.len() == max_len).then_some(idx)
             })
             .collect();
@@ -300,7 +301,7 @@ pub fn find_symmetrized_sssr_bonds(mol: &Molecule) -> Vec<smallvec::SmallVec<[us
 /// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
 pub(crate) fn find_symmetrized_sssr_bonds_cached(
     mol: &mut Molecule,
-) -> Vec<smallvec::SmallVec<[usize; 8]>> {
+) -> Vec<smallvec::SmallVec<[u16; 8]>> {
     if let Some(cached) = mol.cached_symmetrized_sssr_bonds() {
         return cached.clone();
     }
@@ -326,11 +327,15 @@ pub(crate) fn ensure_symmetrized_sssr_bonds_cached(mol: &mut Molecule) {
 /// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
 pub(crate) fn cached_symmetrized_sssr_bonds_ref(
     mol: &Molecule,
-) -> Option<&[smallvec::SmallVec<[usize; 8]>]> {
+) -> Option<&[smallvec::SmallVec<[u16; 8]>]> {
     mol.cached_symmetrized_sssr_bonds()
         .map(|rings| rings.as_slice())
 }
 
+/// Implements ShortestPathWorkspace.
+///
+/// Function context: `crates/ferrum_core/src/algo/rings.rs`.
+/// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
 struct ShortestPathWorkspace {
     dist: Vec<usize>,
     predecessors: Vec<Vec<(usize, usize)>>,
@@ -382,7 +387,7 @@ fn shortest_paths_excluding_bond(
     target: usize,
     excluded_bond: usize,
     workspace: &mut ShortestPathWorkspace,
-) -> Vec<Vec<usize>> {
+) -> Vec<Vec<u16>> {
     let n_atoms = mol.num_atoms();
     workspace.prepare(n_atoms, start);
 
@@ -425,7 +430,7 @@ fn shortest_paths_excluding_bond(
 ///
 /// Function context: `crates/ferrum_core/src/algo/rings.rs`.
 /// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
-fn sorted_overlap_count(left: &[usize], right: &[usize]) -> usize {
+fn sorted_overlap_count(left: &[u16], right: &[u16]) -> usize {
     let mut i = 0usize;
     let mut j = 0usize;
     let mut overlap = 0usize;
@@ -451,8 +456,8 @@ fn collect_shortest_bond_paths(
     node: usize,
     start: usize,
     predecessors: &[Vec<(usize, usize)>],
-    path: &mut Vec<usize>,
-    out: &mut Vec<Vec<usize>>,
+    path: &mut Vec<u16>,
+    out: &mut Vec<Vec<u16>>,
 ) {
     if node == start {
         let mut candidate = path.clone();
@@ -462,7 +467,8 @@ fn collect_shortest_bond_paths(
     }
 
     for &(prev_atom, bond_idx) in &predecessors[node] {
-        path.push(bond_idx);
+        debug_assert!(bond_idx <= u16::MAX as usize);
+        path.push(bond_idx as u16);
         collect_shortest_bond_paths(prev_atom, start, predecessors, path, out);
         path.pop();
     }
@@ -523,7 +529,7 @@ fn minimum_cycle_basis_component(
     mol: &Molecule,
     component_atoms: &[usize],
     component_bonds: &[usize],
-) -> Vec<smallvec::SmallVec<[usize; 8]>> {
+) -> Vec<smallvec::SmallVec<[u16; 8]>> {
     if component_atoms.is_empty() {
         return Vec::new();
     }
@@ -568,7 +574,7 @@ fn minimum_cycle_basis_component(
 
         cycle_mask.fill(0);
         for &bond_idx in &cycle {
-            let local_idx = bond_pos[bond_idx];
+            let local_idx = bond_pos[bond_idx as usize];
             if local_idx != usize::MAX {
                 cycle_mask[local_idx] ^= 1;
             }
@@ -649,7 +655,7 @@ fn minimum_orthogonal_cycle(
     in_component: &[bool],
     bond_pos: &[usize],
     orth: &[u8],
-) -> Vec<usize> {
+) -> Vec<u16> {
     let mut best_path = None;
     let mut best_len = usize::MAX;
     let lifted_nodes = mol.num_atoms() * 2;
@@ -727,7 +733,8 @@ fn minimum_orthogonal_cycle(
                 path.clear();
                 break;
             }
-            path.push(bond_idx);
+            debug_assert!(bond_idx <= u16::MAX as usize);
+            path.push(bond_idx as u16);
             current = prev_node[current];
         }
 
@@ -745,7 +752,7 @@ fn minimum_orthogonal_cycle(
 
     let mut parity = vec![0u8; orth.len()];
     for &bond_idx in &edge_path {
-        let local_idx = bond_pos[bond_idx];
+        let local_idx = bond_pos[bond_idx as usize];
         if local_idx != usize::MAX {
             parity[local_idx] ^= 1;
         }
@@ -753,7 +760,7 @@ fn minimum_orthogonal_cycle(
 
     let mut cycle = Vec::new();
     for &bond_idx in &edge_path {
-        let local_idx = bond_pos[bond_idx];
+        let local_idx = bond_pos[bond_idx as usize];
         if local_idx != usize::MAX && parity[local_idx] == 1 {
             cycle.push(bond_idx);
             parity[local_idx] = 0;

@@ -54,6 +54,10 @@ const DEFAULT_ITERATIONS: usize = 10_000;
 const DEFAULT_REPEATS: usize = 3;
 const DEFAULT_WARMUP: usize = 200;
 
+/// Implements Case.
+///
+/// Function context: `crates/ferrum_cli/src/bin/parity_bundle_benchmark.rs`.
+/// System-layer note: component execution and pipeline orchestration.
 struct Case {
     name: &'static str,
     smiles: &'static str,

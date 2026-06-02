@@ -90,7 +90,7 @@ pub fn num_spiro_atoms(mol: &mut Molecule) -> u32 {
 
         // Count how many neighbors are also in rings
         let neighbors = &mol.adjacency[atom_idx];
-        let neighbors_in_rings = neighbors
+        let _neighbors_in_rings = neighbors
             .iter()
             .map(|&bond_idx| {
                 let bond = &mol.bonds[bond_idx as usize];

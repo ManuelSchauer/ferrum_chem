@@ -88,6 +88,10 @@ fn rdkit_hash_pair_i32_u32(first: i32, second: u32) -> u32 {
 }
 
 #[derive(Clone, Eq, PartialEq, Hash, Ord, PartialOrd)]
+/// Implements BondNeighborhood.
+///
+/// Function context: `crates/ferrum_core/src/desc/fingerprint.rs`.
+/// Descriptor-layer note: computes molecular properties for ML pipelines.
 struct BondNeighborhood(Vec<u64>);
 
 impl BondNeighborhood {
@@ -314,6 +318,120 @@ fn morgan_features_from_invariants(
     features
 }
 
+/// Context-aware Morgan feature generation with reusable scratch buffers and
+/// cross-molecule cache lookup by topology/signature.
+fn morgan_features_from_invariants_cached(
+    mol: &Molecule,
+    radius: u32,
+    atom_invariants: Vec<u32>,
+    feature_mode: u8, // 0 = ECFP/connectivity, 1 = FCFP/feature invariants
+    ctx: &mut crate::desc::context::CalculationContext,
+) -> Vec<u64> {
+    let cache_key = (
+        crate::desc::context::molecule_cache_key(mol),
+        radius,
+        feature_mode,
+    );
+    if let Some(cached) = ctx.morgan_features_global_cache.get(&cache_key) {
+        return cached.clone();
+    }
+
+    let n_atoms = mol.num_atoms();
+    if n_atoms == 0 {
+        ctx.morgan_features_global_cache.insert(cache_key, Vec::new());
+        return Vec::new();
+    }
+
+    let include_redundant_environments = false;
+    let mut current_invariants = atom_invariants;
+    ctx.morgan_features.clear();
+    ctx.morgan_features
+        .reserve((radius as usize + 1) * n_atoms);
+    ctx.morgan_next_layer_u32.clear();
+    ctx.morgan_next_layer_u32.resize(n_atoms, 0);
+    let bond_invariants: Vec<i32> = mol.bonds.iter().map(morgan_bond_invariant).collect();
+    ctx.morgan_dead_atoms.clear();
+    ctx.morgan_dead_atoms.resize(n_atoms, false);
+
+    // Layer-0 environments.
+    ctx.morgan_features
+        .extend(current_invariants.iter().map(|&v| v as u64));
+
+    let neighborhood_word_count = (mol.num_bonds() + 63) / 64;
+    let mut atom_neighborhoods = vec![BondNeighborhood::new(neighborhood_word_count); n_atoms];
+    let mut round_atom_neighborhoods = atom_neighborhoods.clone();
+    let mut seen_neighborhoods = HashSet::with_capacity((radius as usize + 1) * n_atoms);
+
+    for layer in 0..radius {
+        let mut all_neighborhoods_this_round: Vec<(BondNeighborhood, u32, usize)> =
+            Vec::with_capacity(n_atoms);
+
+        for atom_idx in 0..n_atoms {
+            if ctx.morgan_dead_atoms[atom_idx] {
+                continue;
+            }
+            if mol.get_degree(atom_idx as u16) == 0 {
+                ctx.morgan_dead_atoms[atom_idx] = true;
+                continue;
+            }
+
+            ctx.morgan_neighbor_invariants.clear();
+            ctx.morgan_neighbor_invariants
+                .reserve(mol.adjacency[atom_idx].len());
+
+            for &bond_idx_u16 in &mol.adjacency[atom_idx] {
+                let bond_idx = bond_idx_u16 as usize;
+                let bond = &mol.bonds[bond_idx];
+                let neighbor_idx = if bond.source as usize == atom_idx {
+                    bond.target as usize
+                } else {
+                    bond.source as usize
+                };
+
+                round_atom_neighborhoods[atom_idx].set_bit(bond_idx);
+                round_atom_neighborhoods[atom_idx].union_with(&atom_neighborhoods[neighbor_idx]);
+                ctx.morgan_neighbor_invariants
+                    .push((bond_invariants[bond_idx], current_invariants[neighbor_idx]));
+            }
+
+            ctx.morgan_neighbor_invariants.sort_unstable();
+
+            let mut invariant = layer;
+            rdkit_hash_combine(&mut invariant, current_invariants[atom_idx]);
+            for &(bond_inv, neighbor_inv) in &ctx.morgan_neighbor_invariants {
+                let pair_hash = rdkit_hash_pair_i32_u32(bond_inv, neighbor_inv);
+                rdkit_hash_combine(&mut invariant, pair_hash);
+            }
+
+            ctx.morgan_next_layer_u32[atom_idx] = invariant;
+            all_neighborhoods_this_round.push((
+                round_atom_neighborhoods[atom_idx].clone(),
+                invariant,
+                atom_idx,
+            ));
+        }
+
+        all_neighborhoods_this_round.sort_unstable();
+        for (neighborhood, invariant, atom_idx) in all_neighborhoods_this_round {
+            if include_redundant_environments || !seen_neighborhoods.contains(&neighborhood) {
+                ctx.morgan_features.push(invariant as u64);
+                seen_neighborhoods.insert(neighborhood);
+            } else {
+                ctx.morgan_dead_atoms[atom_idx] = true;
+            }
+        }
+
+        current_invariants.copy_from_slice(&ctx.morgan_next_layer_u32);
+        ctx.morgan_next_layer_u32.fill(0);
+        atom_neighborhoods = round_atom_neighborhoods.clone();
+    }
+
+    let computed = ctx.morgan_features.clone();
+    ctx.morgan_features_global_cache
+        .insert(cache_key, computed.clone());
+    computed
+}
+
 /// ECFP features: Morgan with atomic invariants.
 fn morgan_features(mol: &Molecule, radius: u32) -> Vec<u64> {
     let atom_invariants = morgan_connectivity_invariants(mol, true);
@@ -459,7 +577,14 @@ impl Descriptor for ECFP {
         mol: &mut Molecule,
         ctx: &mut crate::desc::context::CalculationContext,
     ) -> DescriptorValue {
-        let features = morgan_features(mol, self.radius as u32);
+        let atom_invariants = morgan_connectivity_invariants(mol, true);
+        let features = morgan_features_from_invariants_cached(
+            mol,
+            self.radius as u32,
+            atom_invariants,
+            0,
+            ctx,
+        );
         let bits = fold_fingerprint(&features, self.num_bits);
         DescriptorValue::Binary(bits)
     }
@@ -551,7 +676,14 @@ impl Descriptor for FCFP {
         mol: &mut Molecule,
         ctx: &mut crate::desc::context::CalculationContext,
     ) -> DescriptorValue {
-        let features = fcfp_features(mol, self.radius as u32);
+        let atom_invariants = morgan_feature_invariants(mol);
+        let features = morgan_features_from_invariants_cached(
+            mol,
+            self.radius as u32,
+            atom_invariants,
+            1,
+            ctx,
+        );
         let bits = fold_fingerprint(&features, self.num_bits);
         DescriptorValue::Binary(bits)
     }
@@ -951,5 +1083,28 @@ mod tests {
     fn test_fcfp_name() {
         let f = FCFP::fcfp4();
         assert_eq!(Descriptor::name(&f), "FCFP4");
+    }
+
+    #[test]
+    /// Runs regression test for cached fcfp smarts patterns remain semantically stable.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/fingerprint.rs`.
+    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
+    fn test_fcfp_smarts_cache_validation() {
+        assert_eq!(FCFP_FEATURE_PATTERNS.len(), FCFP_FEATURE_SMARTS.len());
+        assert!(FCFP_FEATURE_PATTERNS.iter().all(|pattern| !pattern.atoms.is_empty()));
+
+        let ethanol = parse_smiles("CCO").expect("valid ethanol");
+        let ethanol_masks = morgan_feature_invariants(&ethanol);
+        let donor_bit = 1u32 << 0;
+        let acceptor_bit = 1u32 << 1;
+        let aromatic_bit = 1u32 << 2;
+        assert!(ethanol_masks.iter().any(|mask| mask & donor_bit != 0));
+        assert!(ethanol_masks.iter().any(|mask| mask & acceptor_bit != 0));
+        assert!(ethanol_masks.iter().all(|mask| mask & aromatic_bit == 0));
+
+        let benzene = parse_smiles("c1ccccc1").expect("valid benzene");
+        let benzene_masks = morgan_feature_invariants(&benzene);
+        assert!(benzene_masks.iter().any(|mask| mask & aromatic_bit != 0));
     }
 }

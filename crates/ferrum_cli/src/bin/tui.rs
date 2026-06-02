@@ -116,12 +116,13 @@ const DESCRIPTOR_COMPUTING_MESSAGE: &str = "Calculating descriptors...";
 const DESCRIPTOR_ERROR_LOG_PATH: &str = "/tmp/ferrum_tui_descriptor_errors.log";
 const SPINNER_FRAMES: [char; 4] = ['|', '/', '-', '\\'];
 
-const TAB_TITLES: [&str; 5] = [
+const TAB_TITLES: [&str; 6] = [
     "1: Import",
     "2: Descriptor",
     "3: Model Select",
     "4: Parameters",
-    "5: Analyze",
+    "5: Visuals",
+    "6: Diagnostics",
 ];
 
 /// Top-level UI state.
@@ -135,6 +136,10 @@ enum AppState {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Implements WorkerJobKind.
+///
+/// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+/// System-layer note: component execution and pipeline orchestration.
 enum WorkerJobKind {
     DatasetLoad,
     DescriptorCalculation,
@@ -182,6 +187,10 @@ impl WorkerJobKind {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Implements BrowserPurpose.
+///
+/// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+/// System-layer note: component execution and pipeline orchestration.
 enum BrowserPurpose {
     Dataset,
     Prediction,
@@ -191,6 +200,10 @@ enum BrowserPurpose {
 const MODEL_BUNDLE_SCHEMA_VERSION: u32 = 1;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Implements PersistedModelBundle.
+///
+/// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+/// System-layer note: component execution and pipeline orchestration.
 struct PersistedModelBundle {
     schema_version: u32,
     pipeline_bundle_bytes: Option<Vec<u8>>,
@@ -201,6 +214,10 @@ struct PersistedModelBundle {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Implements MlAlgorithm.
+///
+/// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+/// System-layer note: component execution and pipeline orchestration.
 enum MlAlgorithm {
     AutoQsar,
     RandomForest,
@@ -284,6 +301,10 @@ impl MlAlgorithm {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Implements MlMode.
+///
+/// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+/// System-layer note: component execution and pipeline orchestration.
 enum MlMode {
     AutoQsar,
     Art2a,
@@ -317,6 +338,10 @@ impl MlMode {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Implements MlScalerChoice.
+///
+/// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+/// System-layer note: component execution and pipeline orchestration.
 enum MlScalerChoice {
     Standard,
     MinMax,
@@ -347,6 +372,10 @@ impl MlScalerChoice {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Implements SplitStrategy.
+///
+/// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+/// System-layer note: component execution and pipeline orchestration.
 enum SplitStrategy {
     Random,
     Stratified,
@@ -380,6 +409,10 @@ impl SplitStrategy {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Implements VisualizationColorMode.
+///
+/// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+/// System-layer note: component execution and pipeline orchestration.
 enum VisualizationColorMode {
     Uniform,
     TargetOverlay,
@@ -416,6 +449,10 @@ impl VisualizationColorMode {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+/// Implements TargetColumnSource.
+///
+/// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+/// System-layer note: component execution and pipeline orchestration.
 enum TargetColumnSource {
     Csv,
     Descriptor,
@@ -440,6 +477,10 @@ impl TargetColumnSource {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// Implements TargetColumn.
+///
+/// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+/// System-layer note: component execution and pipeline orchestration.
 struct TargetColumn {
     key: String,
     name: String,
@@ -469,6 +510,10 @@ impl TargetColumn {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Implements MlParamKey.
+///
+/// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+/// System-layer note: component execution and pipeline orchestration.
 enum MlParamKey {
     CvFolds,
     TestFraction,
@@ -489,6 +534,10 @@ enum MlParamKey {
 }
 
 #[derive(Debug, Clone)]
+/// Implements MlTrainingConfig.
+///
+/// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+/// System-layer note: component execution and pipeline orchestration.
 struct MlTrainingConfig {
     algorithm: MlAlgorithm,
     scaler: MlScalerChoice,
@@ -536,6 +585,10 @@ impl Default for MlTrainingConfig {
 }
 
 #[derive(Debug, Clone)]
+/// Implements MlParamEntry.
+///
+/// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+/// System-layer note: component execution and pipeline orchestration.
 struct MlParamEntry {
     hotkey: char,
     key: MlParamKey,
@@ -563,6 +616,10 @@ struct ModelFeatureLayout {
 }
 
 #[derive(Debug, Clone)]
+/// Implements ActiveModelSelection.
+///
+/// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+/// System-layer note: component execution and pipeline orchestration.
 struct ActiveModelSelection {
     layout: ModelFeatureLayout,
     pipeline_bundle_bytes: Option<Vec<u8>>,
@@ -657,6 +714,10 @@ struct ProjectionData {
 }
 
 #[derive(Debug, Clone)]
+/// Implements Art2aConfig.
+///
+/// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+/// System-layer note: component execution and pipeline orchestration.
 struct Art2aConfig {
     vigilance: f64,
     learning_rate: f64,
@@ -664,6 +725,10 @@ struct Art2aConfig {
 }
 
 #[derive(Debug, Clone)]
+/// Implements FeatureMatrixPayload.
+///
+/// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+/// System-layer note: component execution and pipeline orchestration.
 struct FeatureMatrixPayload {
     rows: usize,
     cols: usize,
@@ -674,6 +739,10 @@ struct FeatureMatrixPayload {
 }
 
 #[derive(Debug, Clone)]
+/// Implements TargetTrainingSummary.
+///
+/// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+/// System-layer note: component execution and pipeline orchestration.
 struct TargetTrainingSummary {
     target: String,
     target_display_label: String,
@@ -694,12 +763,20 @@ struct TargetTrainingSummary {
 }
 
 #[derive(Debug, Clone)]
+/// Implements PredictionOutputRow.
+///
+/// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+/// System-layer note: component execution and pipeline orchestration.
 struct PredictionOutputRow {
     smiles: String,
     predictions: Vec<f64>,
 }
 
 #[derive(Debug, Clone)]
+/// Implements ClusterExportRow.
+///
+/// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+/// System-layer note: component execution and pipeline orchestration.
 struct ClusterExportRow {
     smiles: String,
     cluster_id: usize,
@@ -708,6 +785,10 @@ struct ClusterExportRow {
 }
 
 #[derive(Debug, Clone)]
+/// Implements Art2aClusterSummary.
+///
+/// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+/// System-layer note: component execution and pipeline orchestration.
 struct Art2aClusterSummary {
     cluster_id: usize,
     size: usize,
@@ -718,6 +799,10 @@ struct Art2aClusterSummary {
 }
 
 #[derive(Debug)]
+/// Implements WorkerRequest.
+///
+/// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+/// System-layer note: component execution and pipeline orchestration.
 enum WorkerRequest {
     LoadDataset(PathBuf),
     CalculateDescriptors {
@@ -777,13 +862,17 @@ enum WorkerRequest {
 }
 
 #[derive(Debug)]
+/// Implements WorkerResponse.
+///
+/// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+/// System-layer note: component execution and pipeline orchestration.
 enum WorkerResponse {
     Progress(f32),
     DatasetLoaded {
         path: PathBuf,
         molecules: Vec<Molecule>,
         smiles: Vec<String>,
-        properties: Vec<Vec<(Arc<str>, String)>>,
+        properties: Vec<Vec<(Arc<str>, Box<str>)>>,
         failed_rows: usize,
     },
     DescriptorsCalculated {
@@ -905,7 +994,7 @@ struct App {
 
     // Additional state needed for complete workflows
     loaded_smiles: Vec<String>,
-    loaded_properties: Vec<Vec<(Arc<str>, String)>>,
+    loaded_properties: Vec<Vec<(Arc<str>, Box<str>)>>,
     last_dataset_failed_rows: usize,
     loaded_from_path: Option<PathBuf>,
     target_columns: Vec<TargetColumn>,
@@ -3082,7 +3171,15 @@ impl App {
                 Ok(response) => self.apply_worker_response(response),
                 Err(TryRecvError::Empty) => break,
                 Err(TryRecvError::Disconnected) => {
-                    self.set_error("Worker thread disconnected unexpectedly.".to_string());
+                    self.set_error("Worker thread disconnected unexpectedly. Restarting...".to_string());
+                    self.active_job = None;
+                    self.cancel_requested = false;
+                    self.state = AppState::Idle;
+                    
+                    let (tx, rx, flag, _handle) = spawn_worker();
+                    self.worker_tx = tx;
+                    self.worker_rx = rx;
+                    self.worker_cancel_flag = flag;
                     break;
                 }
             }
@@ -3710,7 +3807,8 @@ fn render(frame: &mut Frame, app: &App) {
         1 => render_descriptor_tab(frame, body, app),
         2 => render_model_selection_tab(frame, body, app),
         3 => render_hyperparameter_tab(frame, body, app),
-        4 => render_predict_visual_tab(frame, body, app),
+        4 => render_visuals_tab(frame, body, app),
+        5 => render_diagnostics_tab(frame, body, app),
         _ => {}
     }
 
@@ -3771,7 +3869,7 @@ fn render_header(frame: &mut Frame, area: Rect, app: &App) {
 /// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
 fn render_footer(frame: &mut Frame, area: Rect, app: &App) {
     let tab_help = match app.active_tab {
-        0 => "Import: f=open file browser (.csv/.smi)",
+        0 => "Import: f=open file browser (.csv/.smi/.sdf)",
         1 => {
             "Descriptor: Space toggle, a/n all/none, r fast-ML preset, Enter calculate, Esc cancel active compute, v/c filters, e export matrix"
         }
@@ -3818,7 +3916,7 @@ fn render_import_tab(frame: &mut Frame, area: Rect, app: &App) {
         .unwrap_or_else(|| "(no file loaded)".to_string());
 
     let top_widget = Paragraph::new(format!(
-        "Input source: {}\nPress 'f' to choose .csv/.smi file from browser.",
+        "Input source: {}\nPress 'f' to choose .csv/.smi/.sdf file from browser.",
         source_text
     ))
     .wrap(Wrap { trim: true })
@@ -4162,38 +4260,48 @@ fn render_hyperparameter_tab(frame: &mut Frame, area: Rect, app: &App) {
 ///
 /// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
 /// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
-fn render_predict_visual_tab(frame: &mut Frame, area: Rect, app: &App) {
-    let [top, bottom] =
-        Layout::vertical([Constraint::Percentage(58), Constraint::Percentage(42)]).areas(area);
+fn render_visuals_tab(frame: &mut Frame, area: Rect, app: &App) {
+    let [left, right] =
+        Layout::horizontal([Constraint::Percentage(55), Constraint::Percentage(45)]).areas(area);
 
-    render_pca_panel(frame, top, app);
+    render_pca_panel(frame, left, app);
 
-    let [regression_area, right_area] =
-        Layout::horizontal([Constraint::Percentage(52), Constraint::Percentage(48)]).areas(bottom);
-    render_regression_diagnostics_panel(frame, regression_area, app);
+    let [profile_area, cluster_area] = Layout::vertical([
+        Constraint::Percentage(50),
+        Constraint::Percentage(50),
+    ])
+    .areas(right);
+    render_descriptor_profile_table(frame, profile_area, app);
+    render_art2a_cluster_summary(frame, cluster_area, app);
+}
 
+/// Implements render diagnostics tab.
+///
+/// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+/// System-layer note: component execution and pipeline orchestration.
+fn render_diagnostics_tab(frame: &mut Frame, area: Rect, app: &App) {
+    let [left, right] =
+        Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)]).areas(area);
+
+    render_regression_diagnostics_panel(frame, left, app);
+
+    let [prediction_area, importance_area] = Layout::vertical([
+        Constraint::Percentage(40),
+        Constraint::Percentage(60),
+    ])
+    .areas(right);
+
+    render_prediction_summary_panel(frame, prediction_area, app);
     if app.show_feature_importance {
-        let [importance_area, profile_area, prediction_area, cluster_area] = Layout::vertical([
-            Constraint::Percentage(24),
-            Constraint::Percentage(36),
-            Constraint::Percentage(20),
-            Constraint::Percentage(20),
-        ])
-        .areas(right_area);
         render_feature_importance_panel(frame, importance_area, app);
-        render_descriptor_profile_table(frame, profile_area, app);
-        render_prediction_summary_panel(frame, prediction_area, app);
-        render_art2a_cluster_summary(frame, cluster_area, app);
     } else {
-        let [profile_area, prediction_area, cluster_area] = Layout::vertical([
-            Constraint::Percentage(52),
-            Constraint::Percentage(24),
-            Constraint::Percentage(24),
-        ])
-        .areas(right_area);
-        render_descriptor_profile_table(frame, profile_area, app);
-        render_prediction_summary_panel(frame, prediction_area, app);
-        render_art2a_cluster_summary(frame, cluster_area, app);
+        let block = Block::default()
+            .title("Feature Importance")
+            .borders(Borders::ALL);
+        let placeholder = Paragraph::new("\n\nPress 'I' to calculate and show Feature Importances (requires Random Forest model).")
+            .alignment(Alignment::Center)
+            .block(block);
+        frame.render_widget(placeholder, importance_area);
     }
 }
 
@@ -4248,7 +4356,11 @@ fn render_pca_panel(frame: &mut Frame, area: Rect, app: &App) {
             .block(
                 Block::default()
                     .borders(Borders::ALL)
-                    .title("PCA Scatter (PC1 vs PC2)"),
+                    .title(format!(
+                        "PCA Scatter (PC1: {:.1}%, PC2: {:.1}%)",
+                        projection.explained_variance[0] * 100.0,
+                        projection.explained_variance[1] * 100.0
+                    )),
             )
             .x_bounds(projection.x_bounds)
             .y_bounds(projection.y_bounds)
@@ -4354,33 +4466,36 @@ fn render_pca_panel(frame: &mut Frame, area: Rect, app: &App) {
             .map(|(in_domain, out_domain)| (in_domain.len(), out_domain.len()))
             .unwrap_or((0, 0));
 
+        let legend = match color_mode {
+            VisualizationColorMode::TargetOverlay => "\n\n🎨 Legend (Target):\n🔵 Low (Bottom 33%)\n🟡 Mid (Middle 33%)\n🔴 High (Top 33%)",
+            VisualizationColorMode::ClusterIds => "\n\n🎨 Legend (Clusters):\n🔵 Clst 1  🟡 Clst 4\n🟢 Clst 2  🟣 Clst 5\n🔴 Clst 3  🟤 Clst 6+",
+            VisualizationColorMode::ApplicabilityDomain => "\n\n🎨 Legend (AD):\n🟢 In Domain\n🔴 Out of Domain (Outliers)",
+            VisualizationColorMode::Uniform => "\n\n🎨 Legend:\n🔵 All Points",
+        };
+
         let info = Paragraph::new(format!(
-            "Projection Summary\n\nPoints: {}\nPC1 variance: {:.1}%\nPC2 variance: {:.1}%\nTotal: {:.1}%\n\nX range: [{:.2}, {:.2}]\nY range: [{:.2}, {:.2}]\n\nColor mode: {}\nClusters: {}\nCentroids: {}\nTarget overlay: {}\nAD in/out: {}/{}",
+            "📊 Projection Summary\n\nPoints: {}\nPC1 var: {:.1}%\nPC2 var: {:.1}%\nTotal Expl: {:.1}%\n\nColor mode: {} (toggle: 'o')\nClusters: {}\nTarget overlay: {}\nAD in/out: {}/{}{}",
             projection.points.len(),
             projection.explained_variance[0] * 100.0,
             projection.explained_variance[1] * 100.0,
             (projection.explained_variance[0] + projection.explained_variance[1]) * 100.0,
-            projection.x_bounds[0],
-            projection.x_bounds[1],
-            projection.y_bounds[0],
-            projection.y_bounds[1],
             color_mode.label(),
             app.cluster_sizes.len(),
-            compute_cluster_centroids(&projection.points, &app.cluster_labels).len(),
             if maybe_target_overlay.is_some() {
-                "available"
+                "Available"
             } else if app.target_overlay_error.is_some() {
-                "invalid target"
+                "Invalid target"
             } else if app.selected_target_columns.is_empty() {
-                "disabled (no target)"
+                "No targets"
             } else {
-                "unavailable"
+                "Disabled"
             },
             ad_in_count,
             ad_out_count,
+            legend
         ))
         .wrap(Wrap { trim: true })
-        .block(Block::default().borders(Borders::ALL).title("PCA Details"));
+        .block(Block::default().borders(Borders::ALL).title("PCA Info"));
         frame.render_widget(info, info_area);
     } else {
         let placeholder = Paragraph::new(
@@ -4527,22 +4642,36 @@ fn render_regression_diagnostics_panel(frame: &mut Frame, area: Rect, app: &App)
         Layout::horizontal([Constraint::Percentage(54), Constraint::Percentage(46)])
             .areas(details_area);
 
+    let train_r2 = app.trained_pipeline.as_ref().map_or(0.0, |p| p.train_r2);
+    let holdout_r2 = app.last_holdout_r2.unwrap_or(0.0);
+    
+    let interpretation = if train_r2 > 0.8 && holdout_r2 > 0.7 {
+        "EXCELLENT: Strong correlation and generalizes well. Safe for predictions."
+    } else if train_r2 > 0.8 && holdout_r2 <= 0.4 {
+        "OVERFITTING: High train R2 but poor holdout generalization."
+    } else if train_r2 < 0.5 {
+        "UNDERFITTING: Fails to capture data patterns. Try more complex models."
+    } else {
+        "MODERATE: Captures some variance, leaves room for improvement."
+    };
+
     let stats = Paragraph::new(format!(
-        "Primary target: {}\nTrain n: {}\nTrain R2: {:.4} | RMSE: {:.4} | MAE: {:.4}\nTrain Pearson r: {:.4}\nResidual bias: {:.4} | Residual σ: {:.4}\n|Residual| p95: {:.4}\nOutliers (>2σ / >3σ): {} / {}\nHoldout R2: {:.4} | RMSE: {:.4} | MAE: {:.4}",
+        "🎯 Primary target: {}\n\n📊 Metrics:\nTrain n: {} | Train R2: {:.4} | RMSE: {:.4} | MAE: {:.4}\nTrain Pearson r: {:.4}\nHoldout R2: {:.4} | RMSE: {:.4} | MAE: {:.4}\n\n📉 Residuals:\nBias: {:.4} | σ: {:.4} | |Residual| p95: {:.4}\nOutliers (>2σ / >3σ): {} / {}\n\n💡 Interpretation:\n{}",
         primary_target_label,
         app.train_actuals.len(),
-        app.trained_pipeline.as_ref().map_or(0.0, |p| p.train_r2),
+        train_r2,
         app.last_train_rmse.unwrap_or(0.0),
         app.last_train_mae.unwrap_or(0.0),
         app.last_train_pearson.unwrap_or(0.0),
+        holdout_r2,
+        app.last_holdout_rmse.unwrap_or(0.0),
+        app.last_holdout_mae.unwrap_or(0.0),
         bias,
         residual_std,
         p95_abs,
         outliers_2sigma,
         outliers_3sigma,
-        app.last_holdout_r2.unwrap_or(0.0),
-        app.last_holdout_rmse.unwrap_or(0.0),
-        app.last_holdout_mae.unwrap_or(0.0),
+        interpretation
     ))
     .wrap(Wrap { trim: true })
     .block(Block::default().borders(Borders::ALL).title("Residual Summary"));
@@ -4638,7 +4767,7 @@ fn render_feature_importance_panel(frame: &mut Frame, area: Rect, app: &App) {
             let bar = "#".repeat(bars);
             Row::new(vec![
                 format!("#{}", idx + 1),
-                truncate_label(name, 16),
+                truncate_label(name, 35),
                 format!("{:.4}", score),
                 bar,
             ])
@@ -4654,9 +4783,9 @@ fn render_feature_importance_panel(frame: &mut Frame, area: Rect, app: &App) {
         rows,
         [
             Constraint::Length(6),
-            Constraint::Percentage(40),
-            Constraint::Percentage(24),
-            Constraint::Percentage(30),
+            Constraint::Percentage(55),
+            Constraint::Percentage(20),
+            Constraint::Percentage(20),
         ],
     )
     .header(header)
@@ -4848,7 +4977,7 @@ fn render_file_browser_popup(frame: &mut Frame, app: &App, current_path: &Path) 
         mode,
         match app.browser_purpose {
             BrowserPurpose::ModelImport => "(.fcbundle/.bin)",
-            _ => "(.csv/.smi)",
+            _ => "(.csv/.smi/.sdf)",
         },
         current_path.display()
     ))
@@ -5244,7 +5373,10 @@ fn spawn_worker() -> (
     let cancel_flag = Arc::new(AtomicBool::new(false));
     let app_cancel_flag = Arc::clone(&cancel_flag);
 
-    let handle = thread::spawn(move || worker_loop(request_rx, response_tx, cancel_flag));
+    let handle = thread::Builder::new()
+        .stack_size(8 * 1024 * 1024)
+        .spawn(move || worker_loop(request_rx, response_tx, cancel_flag))
+        .unwrap();
 
     (request_tx, response_rx, app_cancel_flag, handle)
 }
@@ -5395,9 +5527,10 @@ fn handle_load_dataset(path: PathBuf) -> Result<WorkerResponse, String> {
     let (molecules, smiles, properties, failed_rows) = match extension.as_str() {
         "csv" => load_dataset_from_csv(&path)?,
         "smi" | "smiles" => load_dataset_from_smi(&path)?,
+        "sdf" => load_dataset_from_sdf(&path)?,
         _ => {
             return Err(format!(
-                "Unsupported file extension for '{}'. Use .csv or .smi",
+                "Unsupported file extension for '{}'. Use .csv, .smi, or .sdf",
                 path.display()
             ));
         }
@@ -5770,12 +5903,12 @@ fn handle_art2a_clustering(
     }
     let (fitted_scaler, scaled) = match scaler {
         MlScalerChoice::Standard => {
-            let scaler = StandardScaler::fit(&data);
+            let scaler = StandardScaler::fit(&data).unwrap();
             let scaled = scaler.transform(&data);
             (ScalerType::Standard(scaler), scaled)
         }
         MlScalerChoice::MinMax => {
-            let scaler = MinMaxScaler::fit(&data);
+            let scaler = MinMaxScaler::fit(&data).unwrap();
             let scaled = scaler.transform(&data);
             (ScalerType::MinMax(scaler), scaled)
         }
@@ -5916,9 +6049,10 @@ fn handle_predict_file(
     let (mut molecules, smiles, properties, failed_rows) = match extension.as_str() {
         "csv" => load_dataset_from_csv(&path)?,
         "smi" | "smiles" => load_dataset_from_smi(&path)?,
+        "sdf" => load_dataset_from_sdf(&path)?,
         _ => {
             return Err(format!(
-                "Unsupported prediction input '{}'. Use .csv or .smi",
+                "Unsupported prediction input '{}'. Use .csv, .smi, or .sdf",
                 path.display()
             ));
         }
@@ -6121,13 +6255,7 @@ fn decode_pipeline_bundle(bytes: &[u8], primary_target: &str) -> Result<QsarPipe
     Ok(bundle[0].1.clone())
 }
 
-/// Trains pipeline.
-///
-/// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
-/// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
-fn train_pipeline(data: &QsarDataset, config: &MlTrainingConfig) -> Result<QsarPipeline, String> {
-    train_pipeline_with_progress(data, config, &mut |_fraction, _label| {})
-}
+
 
 /// Trains pipeline with optional progress callback.
 ///
@@ -6187,12 +6315,12 @@ fn train_pipeline_with_progress(
 
     let (scaler, scaled) = match config.scaler {
         MlScalerChoice::Standard => {
-            let scaler = StandardScaler::fit(&data.features);
+            let scaler = StandardScaler::fit(&data.features).unwrap();
             let scaled = scaler.transform(&data.features);
             (ScalerType::Standard(scaler), scaled)
         }
         MlScalerChoice::MinMax => {
-            let scaler = MinMaxScaler::fit(&data.features);
+            let scaler = MinMaxScaler::fit(&data.features).unwrap();
             let scaled = scaler.transform(&data.features);
             (ScalerType::MinMax(scaler), scaled)
         }
@@ -6261,7 +6389,7 @@ fn scaffold_keys_for_molecules(molecules: &[Molecule]) -> Vec<String> {
             let mut ring_atoms = BTreeSet::new();
             for ring in rings {
                 for &bond_idx in &ring {
-                    let bond = &clone.bonds[bond_idx];
+                    let bond = &clone.bonds[bond_idx as usize];
                     ring_atoms.insert(bond.source as usize);
                     ring_atoms.insert(bond.target as usize);
                 }
@@ -6307,9 +6435,7 @@ fn train_rf_pipeline(
         cv_folds,
         config.seed,
         |train_x, train_y| {
-            let model = RandomForestRegressor::fit(
-                train_x,
-                train_y,
+            let model = RandomForestRegressor::fit(train_x.view(), train_y.view(),
                 n_trees,
                 max_depth,
                 min_samples_split,
@@ -6320,16 +6446,14 @@ fn train_rf_pipeline(
         },
     );
 
-    let model = RandomForestRegressor::fit(
-        &scaled,
-        &data.targets,
+    let model = RandomForestRegressor::fit(scaled.view(), data.targets.view(),
         n_trees,
         max_depth,
         min_samples_split,
         max_features_fraction,
         config.seed,
     );
-    let train_predictions = model.predict(&scaled);
+    let train_predictions = model.predict(scaled.view());
     let train_targets = data.targets.to_vec();
     let train_preds = train_predictions.to_vec();
     let train_r2 = metrics::r_squared(&train_targets, &train_preds);
@@ -6371,9 +6495,7 @@ fn train_knn_pipeline(
         config.seed,
         |train_x, train_y| {
             let train_k = k.min(train_x.nrows().max(1));
-            let model = KnnRegressor::fit(
-                train_x.clone(),
-                train_y.clone(),
+            let model = KnnRegressor::fit(train_x.view(), train_y.view(),
                 train_k,
                 DistanceMetric::Euclidean,
             );
@@ -6381,13 +6503,11 @@ fn train_knn_pipeline(
         },
     );
 
-    let model = KnnRegressor::fit(
-        scaled.clone(),
-        data.targets.clone(),
+    let model = KnnRegressor::fit(scaled.view(), data.targets.view(),
         k.min(scaled.nrows().max(1)),
         DistanceMetric::Euclidean,
     );
-    let train_predictions = model.predict(&scaled);
+    let train_predictions = model.predict(scaled.view());
     let train_targets = data.targets.to_vec();
     let train_preds = train_predictions.to_vec();
     let train_r2 = metrics::r_squared(&train_targets, &train_preds);
@@ -6427,13 +6547,13 @@ fn train_pls_pipeline(
         config.seed,
         |train_x, train_y| {
             let nc = components.min(train_x.ncols().min(train_x.nrows()).max(1));
-            let model = PlsRegression::fit(train_x, train_y, nc);
+            let model = PlsRegression::fit(train_x.view(), train_y.view(), nc);
             ModelType::PlsRegression(model)
         },
     );
 
-    let model = PlsRegression::fit(&scaled, &data.targets, components);
-    let train_predictions = model.predict(&scaled);
+    let model = PlsRegression::fit(scaled.view(), data.targets.view(), components);
+    let train_predictions = model.predict(scaled.view());
     let train_targets = data.targets.to_vec();
     let train_preds = train_predictions.to_vec();
     let train_r2 = metrics::r_squared(&train_targets, &train_preds);
@@ -6474,13 +6594,13 @@ fn train_elastic_net_pipeline(
         cv_folds,
         config.seed,
         |train_x, train_y| {
-            let model = ElasticNet::fit(train_x, train_y, alpha, l1_ratio, max_iter, tol);
+            let model = ElasticNet::fit(train_x.view(), train_y.view(), alpha, l1_ratio, max_iter, tol);
             ModelType::ElasticNet(model)
         },
     );
 
-    let model = ElasticNet::fit(&scaled, &data.targets, alpha, l1_ratio, max_iter, tol);
-    let train_predictions = model.predict(&scaled);
+    let model = ElasticNet::fit(scaled.view(), data.targets.view(), alpha, l1_ratio, max_iter, tol);
+    let train_predictions = model.predict(scaled.view());
     let train_targets = data.targets.to_vec();
     let train_preds = train_predictions.to_vec();
     let train_r2 = metrics::r_squared(&train_targets, &train_preds);
@@ -6525,10 +6645,10 @@ where
 
         let model = build_model(&train_x, &train_y);
         let preds = match &model {
-            ModelType::KnnRegressor(m) => m.predict(&test_x),
-            ModelType::RandomForestRegressor(m) => m.predict(&test_x),
-            ModelType::PlsRegression(m) => m.predict(&test_x),
-            ModelType::ElasticNet(m) => m.predict(&test_x),
+            ModelType::KnnRegressor(m) => m.predict(test_x.view()),
+            ModelType::RandomForestRegressor(m) => m.predict(test_x.view()),
+            ModelType::PlsRegression(m) => m.predict(test_x.view()),
+            ModelType::ElasticNet(m) => m.predict(test_x.view()),
             _ => Array1::zeros(test_idx.len()),
         };
 
@@ -7010,7 +7130,7 @@ fn load_dataset_from_csv(
     (
         Vec<Molecule>,
         Vec<String>,
-        Vec<Vec<(Arc<str>, String)>>,
+        Vec<Vec<(Arc<str>, Box<str>)>>,
         usize,
     ),
     String,
@@ -7049,7 +7169,7 @@ fn load_dataset_from_smi(
     (
         Vec<Molecule>,
         Vec<String>,
-        Vec<Vec<(Arc<str>, String)>>,
+        Vec<Vec<(Arc<str>, Box<str>)>>,
         usize,
     ),
     String,
@@ -7092,6 +7212,32 @@ fn load_dataset_from_smi(
     Ok((molecules, smiles_vec, properties_vec, failed_rows))
 }
 
+/// Implements load dataset from sdf.
+///
+/// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+/// System-layer note: component execution and pipeline orchestration.
+fn load_dataset_from_sdf(
+    path: &Path,
+) -> Result<
+    (
+        Vec<Molecule>,
+        Vec<String>,
+        Vec<Vec<(Arc<str>, Box<str>)>>,
+        usize,
+    ),
+    String,
+> {
+    match ferrum_core::io::sdf::parse_sdf(path) {
+        Ok(molecules) => {
+            let num = molecules.len();
+            let smiles_vec = vec![String::from("SDF_Molecule"); num];
+            let properties_vec = vec![Vec::new(); num];
+            Ok((molecules, smiles_vec, properties_vec, 0))
+        }
+        Err(e) => Err(format!("Failed to parse SDF '{}': {}", path.display(), e)),
+    }
+}
+
 /// Implements feature names.
 ///
 /// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
@@ -7111,10 +7257,14 @@ fn descriptor_feature_names(descriptors: &[BatchDescriptor]) -> Vec<String> {
     names
 }
 
+/// Implements build prediction flat by expected names.
+///
+/// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+/// System-layer note: component execution and pipeline orchestration.
 fn build_prediction_flat_by_expected_names(
     source: &FlatDescriptorMatrix,
     source_feature_names: &[String],
-    properties: &[Vec<(Arc<str>, String)>],
+    properties: &[Vec<(Arc<str>, Box<str>)>],
     expected_feature_names: &[String],
 ) -> Result<FlatDescriptorMatrix, String> {
     if expected_feature_names.is_empty() {
@@ -7218,7 +7368,7 @@ fn descriptor_from_name(name: &str) -> Option<BatchDescriptor> {
 /// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
 /// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
 fn extract_targets(
-    properties: &[Vec<(Arc<str>, String)>],
+    properties: &[Vec<(Arc<str>, Box<str>)>],
     target_column: &str,
 ) -> Result<Vec<f64>, String> {
     let mut targets = Vec::with_capacity(properties.len());
@@ -7321,14 +7471,14 @@ fn build_projection(matrix: &FeatureMatrixPayload) -> Option<ProjectionData> {
         .map(|v| if v.is_finite() { *v } else { 0.0 })
         .collect::<Vec<_>>();
     let data = Array2::from_shape_vec((matrix.rows, matrix.cols), sanitized_matrix_data).ok()?;
-    let scaler = StandardScaler::fit(&data);
+    let scaler = StandardScaler::fit(&data).unwrap();
     let mut scaled = scaler.transform(&data);
     scaled.iter_mut().for_each(|value| {
         if !value.is_finite() {
             *value = 0.0;
         }
     });
-    let (pca, mut projected) = Pca::fit_transform(&scaled, 2);
+    let (pca, mut projected) = Pca::fit_transform(&scaled, 2).unwrap();
     projected.iter_mut().for_each(|value| {
         if !value.is_finite() {
             *value = 0.0;
@@ -7821,12 +7971,20 @@ mod tests {
         atomic::{AtomicBool, Ordering},
     };
 
+    /// Implements canceled flag.
+    ///
+    /// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+    /// System-layer note: component execution and pipeline orchestration.
     fn canceled_flag() -> Arc<AtomicBool> {
         let flag = Arc::new(AtomicBool::new(false));
         flag.store(true, Ordering::Relaxed);
         flag
     }
 
+    /// Implements empty matrix payload.
+    ///
+    /// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+    /// System-layer note: component execution and pipeline orchestration.
     fn empty_matrix_payload() -> FeatureMatrixPayload {
         FeatureMatrixPayload {
             rows: 0,
@@ -7839,6 +7997,10 @@ mod tests {
     }
 
     #[test]
+    /// Implements test supported browser file filters by purpose.
+    ///
+    /// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+    /// System-layer note: component execution and pipeline orchestration.
     fn test_supported_browser_file_filters_by_purpose() {
         assert!(is_supported_browser_file(
             Path::new("data.csv"),
@@ -7867,6 +8029,10 @@ mod tests {
         ));
     }
 
+    /// Implements make test app.
+    ///
+    /// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+    /// System-layer note: component execution and pipeline orchestration.
     fn make_test_app() -> App {
         let (worker_tx, _worker_rx_unused) = mpsc::channel::<WorkerRequest>();
         let (_response_tx_unused, worker_rx) = mpsc::channel::<WorkerResponse>();
@@ -7875,6 +8041,10 @@ mod tests {
     }
 
     #[test]
+    /// Implements test descriptor handler returns job canceled when flag set.
+    ///
+    /// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+    /// System-layer note: component execution and pipeline orchestration.
     fn test_descriptor_handler_returns_job_canceled_when_flag_set() {
         let flag = canceled_flag();
         let response = handle_calculate_descriptors(Vec::new(), Vec::new(), None, &flag)
@@ -7888,6 +8058,10 @@ mod tests {
     }
 
     #[test]
+    /// Implements test training handler returns job canceled when flag set.
+    ///
+    /// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+    /// System-layer note: component execution and pipeline orchestration.
     fn test_training_handler_returns_job_canceled_when_flag_set() {
         let flag = canceled_flag();
         let response = handle_train_model(
@@ -7909,6 +8083,10 @@ mod tests {
     }
 
     #[test]
+    /// Implements test art2a handler returns job canceled when flag set.
+    ///
+    /// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+    /// System-layer note: component execution and pipeline orchestration.
     fn test_art2a_handler_returns_job_canceled_when_flag_set() {
         let flag = canceled_flag();
         let response = handle_art2a_clustering(
@@ -7932,6 +8110,10 @@ mod tests {
     }
 
     #[test]
+    /// Implements test prediction handler returns job canceled when flag set.
+    ///
+    /// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+    /// System-layer note: component execution and pipeline orchestration.
     fn test_prediction_handler_returns_job_canceled_when_flag_set() {
         let flag = canceled_flag();
         let response = handle_predict_file(
@@ -7953,6 +8135,10 @@ mod tests {
     }
 
     #[test]
+    /// Implements test fast ml preset only enables preset descriptors.
+    ///
+    /// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+    /// System-layer note: component execution and pipeline orchestration.
     fn test_fast_ml_preset_only_enables_preset_descriptors() {
         let (worker_tx, _worker_rx_unused) = mpsc::channel::<WorkerRequest>();
         let (_response_tx_unused, worker_rx) = mpsc::channel::<WorkerResponse>();
@@ -7979,6 +8165,10 @@ mod tests {
     }
 
     #[test]
+    /// Implements test selected descriptor value count matches enabled sum.
+    ///
+    /// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+    /// System-layer note: component execution and pipeline orchestration.
     fn test_selected_descriptor_value_count_matches_enabled_sum() {
         let mut app = make_test_app();
 
@@ -7996,11 +8186,15 @@ mod tests {
     }
 
     #[test]
+    /// Implements test rebuild target columns includes csv and descriptor sources.
+    ///
+    /// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+    /// System-layer note: component execution and pipeline orchestration.
     fn test_rebuild_target_columns_includes_csv_and_descriptor_sources() {
         let mut app = make_test_app();
         app.loaded_properties = vec![
-            vec![(Arc::<str>::from("alogp"), "1.2".to_string())],
-            vec![(Arc::<str>::from("alogp"), "2.4".to_string())],
+            vec![(Arc::<str>::from("alogp"), "1.2".to_string().into())],
+            vec![(Arc::<str>::from("alogp"), "2.4".to_string().into())],
         ];
         app.feature_matrix = Some(FeatureMatrix {
             rows: 2,
@@ -8033,11 +8227,15 @@ mod tests {
     }
 
     #[test]
+    /// Implements test descriptor target overlay uses matrix values.
+    ///
+    /// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+    /// System-layer note: component execution and pipeline orchestration.
     fn test_descriptor_target_overlay_uses_matrix_values() {
         let mut app = make_test_app();
         app.loaded_properties = vec![
-            vec![(Arc::<str>::from("alogp"), "1.0".to_string())],
-            vec![(Arc::<str>::from("alogp"), "2.0".to_string())],
+            vec![(Arc::<str>::from("alogp"), "1.0".to_string().into())],
+            vec![(Arc::<str>::from("alogp"), "2.0".to_string().into())],
         ];
         app.feature_matrix = Some(FeatureMatrix {
             rows: 2,
@@ -8069,6 +8267,10 @@ mod tests {
     }
 
     #[test]
+    /// Implements test descriptor target resolves drop index and matrix drop.
+    ///
+    /// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+    /// System-layer note: component execution and pipeline orchestration.
     fn test_descriptor_target_resolves_drop_index_and_matrix_drop() {
         let mut app = make_test_app();
         app.loaded_properties = vec![vec![], vec![]];
@@ -8106,11 +8308,15 @@ mod tests {
     }
 
     #[test]
+    /// Implements test csv target resolves drop index when descriptor name matches.
+    ///
+    /// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+    /// System-layer note: component execution and pipeline orchestration.
     fn test_csv_target_resolves_drop_index_when_descriptor_name_matches() {
         let mut app = make_test_app();
         app.loaded_properties = vec![
-            vec![(Arc::<str>::from("alogp"), "1.2".to_string())],
-            vec![(Arc::<str>::from("alogp"), "2.4".to_string())],
+            vec![(Arc::<str>::from("alogp"), "1.2".to_string().into())],
+            vec![(Arc::<str>::from("alogp"), "2.4".to_string().into())],
         ];
         app.feature_matrix = Some(FeatureMatrix {
             rows: 2,
@@ -8140,6 +8346,10 @@ mod tests {
     }
 
     #[test]
+    /// Implements test build projection sanitizes non finite values.
+    ///
+    /// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+    /// System-layer note: component execution and pipeline orchestration.
     fn test_build_projection_sanitizes_non_finite_values() {
         let matrix = FeatureMatrixPayload {
             rows: 4,
@@ -8162,6 +8372,10 @@ mod tests {
     }
 
     #[test]
+    /// Implements test art2a clustering sanitizes non finite matrix values.
+    ///
+    /// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+    /// System-layer note: component execution and pipeline orchestration.
     fn test_art2a_clustering_sanitizes_non_finite_matrix_values() {
         let matrix = FeatureMatrixPayload {
             rows: 4,
@@ -8223,6 +8437,10 @@ mod tests {
     }
 
     #[test]
+    /// Implements test clustering payload appends csv numeric columns row aligned.
+    ///
+    /// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+    /// System-layer note: component execution and pipeline orchestration.
     fn test_clustering_payload_appends_csv_numeric_columns_row_aligned() {
         let mut app = make_test_app();
         app.feature_matrix = Some(FeatureMatrix {
@@ -8235,12 +8453,12 @@ mod tests {
         });
         app.loaded_properties = vec![
             vec![
-                (Arc::<str>::from("target_a"), "10.0".to_string()),
-                (Arc::<str>::from("target_b"), "20.0".to_string()),
+                (Arc::<str>::from("target_a"), "10.0".to_string().into()),
+                (Arc::<str>::from("target_b"), "20.0".to_string().into()),
             ],
             vec![
-                (Arc::<str>::from("target_a"), "11.0".to_string()),
-                (Arc::<str>::from("target_b"), "21.0".to_string()),
+                (Arc::<str>::from("target_a"), "11.0".to_string().into()),
+                (Arc::<str>::from("target_b"), "21.0".to_string().into()),
             ],
         ];
         app.include_csv_numeric_in_clustering = true;
@@ -8267,6 +8485,10 @@ mod tests {
     }
 
     #[test]
+    /// Implements test compute cluster centroids returns expected means.
+    ///
+    /// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+    /// System-layer note: component execution and pipeline orchestration.
     fn test_compute_cluster_centroids_returns_expected_means() {
         let points = vec![(0.0, 0.0), (2.0, 2.0), (10.0, 0.0), (12.0, 2.0)];
         let labels = vec![0usize, 0usize, 1usize, 1usize];
@@ -8277,6 +8499,10 @@ mod tests {
     }
 
     #[test]
+    /// Implements test cluster size histogram counts each cluster.
+    ///
+    /// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+    /// System-layer note: component execution and pipeline orchestration.
     fn test_cluster_size_histogram_counts_each_cluster() {
         let labels = vec![2usize, 0usize, 2usize, 1usize, 1usize, 1usize];
         let sizes = cluster_size_histogram(&labels);
@@ -8284,6 +8510,10 @@ mod tests {
     }
 
     #[test]
+    /// Implements test cluster summaries from predictions reconstructs stats.
+    ///
+    /// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+    /// System-layer note: component execution and pipeline orchestration.
     fn test_cluster_summaries_from_predictions_reconstructs_stats() {
         let rows = vec![
             PredictionOutputRow {
@@ -8310,6 +8540,10 @@ mod tests {
     }
 
     #[test]
+    /// Implements test display label from output target name maps known suffixes.
+    ///
+    /// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+    /// System-layer note: component execution and pipeline orchestration.
     fn test_display_label_from_output_target_name_maps_known_suffixes() {
         assert_eq!(
             display_label_from_output_target_name("alogp__csv"),
@@ -8326,6 +8560,10 @@ mod tests {
     }
 
     #[test]
+    /// Implements test importance target cycle updates active importance table.
+    ///
+    /// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+    /// System-layer note: component execution and pipeline orchestration.
     fn test_importance_target_cycle_updates_active_importance_table() {
         let mut app = make_test_app();
         let mk_summary =
@@ -8366,6 +8604,10 @@ mod tests {
     }
 
     #[test]
+    /// Implements test resolve active model selection falls back to supervised when layouts differ.
+    ///
+    /// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+    /// System-layer note: component execution and pipeline orchestration.
     fn test_resolve_active_model_selection_falls_back_to_supervised_when_layouts_differ() {
         let mut app = make_test_app();
         app.pipeline_bundle_bytes = Some(vec![1, 2, 3]);
@@ -8394,6 +8636,10 @@ mod tests {
     }
 
     #[test]
+    /// Implements test build prediction flat by expected names handles csv features.
+    ///
+    /// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+    /// System-layer note: component execution and pipeline orchestration.
     fn test_build_prediction_flat_by_expected_names_handles_csv_features() {
         let source = FlatDescriptorMatrix {
             rows: 2,
@@ -8402,8 +8648,8 @@ mod tests {
         };
         let source_feature_names = vec!["D0".to_string(), "D1".to_string()];
         let properties = vec![
-            vec![(Arc::<str>::from("target"), "10.0".to_string())],
-            vec![(Arc::<str>::from("target"), "11.0".to_string())],
+            vec![(Arc::<str>::from("target"), "10.0".to_string().into())],
+            vec![(Arc::<str>::from("target"), "11.0".to_string().into())],
         ];
         let expected_feature_names = vec![
             "D1".to_string(),
@@ -8425,6 +8671,10 @@ mod tests {
     }
 
     #[test]
+    /// Implements test import model bundle allows csv augmented feature layout.
+    ///
+    /// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+    /// System-layer note: component execution and pipeline orchestration.
     fn test_import_model_bundle_allows_csv_augmented_feature_layout() {
         let bundle = PersistedModelBundle {
             schema_version: MODEL_BUNDLE_SCHEMA_VERSION,
@@ -8456,6 +8706,10 @@ mod tests {
     }
 
     #[test]
+    /// Implements test build cluster export rows prefers prediction art2a outputs.
+    ///
+    /// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+    /// System-layer note: component execution and pipeline orchestration.
     fn test_build_cluster_export_rows_prefers_prediction_art2a_outputs() {
         let prediction_rows = vec![
             PredictionOutputRow {
@@ -8484,6 +8738,10 @@ mod tests {
     }
 
     #[test]
+    /// Implements test build cluster export rows falls back to loaded labels and smiles.
+    ///
+    /// Function context: `crates/ferrum_cli/src/bin/tui.rs`.
+    /// System-layer note: component execution and pipeline orchestration.
     fn test_build_cluster_export_rows_falls_back_to_loaded_labels_and_smiles() {
         let labels = vec![0usize, 2usize];
         let smiles = vec!["C".to_string(), "CC".to_string()];

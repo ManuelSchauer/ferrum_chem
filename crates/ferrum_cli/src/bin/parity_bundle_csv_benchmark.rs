@@ -60,12 +60,20 @@ const DEFAULT_CSV_PATH: &str = "coconut_csv_lite-02-2026.csv";
 const DEFAULT_CSV_COLUMN: &str = "canonical_smiles";
 
 #[repr(C)]
+/// Implements TimeVal.
+///
+/// Function context: `crates/ferrum_cli/src/bin/parity_bundle_csv_benchmark.rs`.
+/// System-layer note: component execution and pipeline orchestration.
 struct TimeVal {
     tv_sec: i64,
     tv_usec: i64,
 }
 
 #[repr(C)]
+/// Implements RUsage.
+///
+/// Function context: `crates/ferrum_cli/src/bin/parity_bundle_csv_benchmark.rs`.
+/// System-layer note: component execution and pipeline orchestration.
 struct RUsage {
     ru_utime: TimeVal,
     ru_stime: TimeVal,
@@ -96,6 +104,10 @@ unsafe extern "C" {
 const RUSAGE_SELF: c_int = 0;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// Implements CsvBenchMode.
+///
+/// Function context: `crates/ferrum_cli/src/bin/parity_bundle_csv_benchmark.rs`.
+/// System-layer note: component execution and pipeline orchestration.
 enum CsvBenchMode {
     Buffered,
     Stream,

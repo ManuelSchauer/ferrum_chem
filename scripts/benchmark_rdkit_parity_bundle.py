@@ -46,6 +46,9 @@ SCALAR_DESCRIPTORS = [
 
 
 def bundle_output_len(smiles: str) -> int:
+    """
+    Implements bundle output len.
+    """
     mol = Chem.MolFromSmiles(smiles)
     for func in SCALAR_DESCRIPTORS:
         func(mol)
@@ -56,6 +59,9 @@ def bundle_output_len(smiles: str) -> int:
 
 
 def run_bundle(smiles: str) -> None:
+    """
+    Implements run bundle.
+    """
     mol = Chem.MolFromSmiles(smiles)
     for func in SCALAR_DESCRIPTORS:
         func(mol)
@@ -65,6 +71,9 @@ def run_bundle(smiles: str) -> None:
 
 
 def main() -> None:
+    """
+    Implements main.
+    """
     print(
         "tool\tcase\tsmiles\theavy_atoms\titerations\toutputs\tmedian_seconds\tms_per_molecule\tmolecules_per_second"
     )

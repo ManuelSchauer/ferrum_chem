@@ -340,7 +340,7 @@ impl Descriptor for BalabanIndex {
     fn calculate(
         &self,
         mol: &mut Molecule,
-        ctx: &mut crate::desc::context::CalculationContext,
+        _ctx: &mut crate::desc::context::CalculationContext,
     ) -> DescriptorValue {
         DescriptorValue::Float(calculate_cached(mol) as f32)
     }

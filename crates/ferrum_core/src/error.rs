@@ -37,6 +37,10 @@
 use thiserror::Error;
 
 #[derive(Error, Debug)]
+/// Implements FerrumError.
+///
+/// Function context: `crates/ferrum_core/src/error.rs`.
+/// System-layer note: component execution and pipeline orchestration.
 pub enum FerrumError {
     #[error("IO Error: {0}")]
     Io(#[from] std::io::Error),

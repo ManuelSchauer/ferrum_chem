@@ -66,7 +66,7 @@ impl Descriptor for FormalCharge {
     fn calculate(
         &self,
         mol: &mut Molecule,
-        ctx: &mut crate::desc::context::CalculationContext,
+        _ctx: &mut crate::desc::context::CalculationContext,
     ) -> DescriptorValue {
         let total: i32 = mol.atoms.iter().map(|atom| atom.formal_charge as i32).sum();
         DescriptorValue::Float(total as f32)

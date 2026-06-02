@@ -1,189 +1,283 @@
-//! Benchmark binary.
-//!
-//! This executable is a task-oriented demo or benchmark used to explore
-//! FerrumChem behavior from the command line. It is intentionally small and
-//! readable so learners can trace data flow from CSV/SMILES input to outputs.
-//!
-//! Learning focus:
-//! - Environment-driven configuration patterns in Rust CLIs.
-//! - How FerrumChem APIs are wired into practical workflows.
-
-//! ## File guide: Benchmark
-//!
-//! This file belongs to FerrumChem's **CLI/demo/benchmark executable layer**.
-//!
-//! What to learn here:
-//! - Which chemistry/ML concern this file owns in the pipeline.
-//! - How Rust types and control-flow encode that concern.
-//! - Which public symbols are the best entry points for reading/debugging.
-//!
-//! Key symbols in this file:
-//! - `fn main`
-//!
-//! Suggested reading workflow:
-//! 1. Read top-level type definitions and public APIs.
-//! 2. Trace helper functions used in hot/critical paths.
-//! 3. Cross-reference tests/examples that exercise this file.
-
-//!
-//! ### Algorithmic assumptions for this file
-//! - `Benchmark` is a task-focused executable; CLI environment variables are part of the stable workflow contract.
-//! - `Benchmark` should keep parse/descriptor/model behavior aligned with `ferrum_core` defaults to avoid demo drift.
-//! - Benchmark/demo paths in `Benchmark` prefer deterministic setup to keep measurements comparable over time.
-//! - Specific scope anchor: `crates/ferrum_cli/src/bin/benchmark.rs` defines benchmark behavior and should be updated together with its direct tests.
-//! ### Chemistry/ML references
-//! - Rust CLI patterns (argument/env handling, structured errors, stdout diagnostics) reflected by `Benchmark`.
-//! - FerrumChem benchmark/parity methodology documents referenced by `Benchmark` scripts.
-//! - Terminal UX libraries (where applicable) used by `Benchmark` for interactive workflows.
-//! - Code-local source of truth: symbols and tests declared in `crates/ferrum_cli/src/bin/benchmark.rs`.
-
-use ferrum_core::desc::{Descriptor, molecular_weight};
+use clap::{Parser, Subcommand};
+use ferrum_core::desc::batch::{BatchDescriptor, calculate_batch_flat_static};
+use ferrum_core::desc::{Descriptor, build_ml_matrix_parallel};
 use ferrum_core::io::smiles::parse_smiles;
+use ferrum_core::ml::random_forest::RandomForestRegressor;
+use ferrum_core::mol::molecule::Molecule;
+use ndarray::{Array1, Array2};
+use rand::Rng;
+use rayon::prelude::*;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 use std::time::Instant;
 
-/// Runs this executable entrypoint and orchestrates its top-level workflow.
+#[derive(Parser)]
+#[command(name = "ferrum_benchmark")]
+#[command(about = "FerrumChem Performance Benchmark Suite", long_about = None)]
+/// Implements Cli.
 ///
 /// Function context: `crates/ferrum_cli/src/bin/benchmark.rs`.
-/// CLI-layer note: keep workflow and configuration behavior stable for reproducible demos/benchmarks.
-fn main() {
-    println!("=== FerrumChem Performance Benchmarks ===\n");
+/// System-layer note: component execution and pipeline orchestration.
+struct Cli {
+    #[command(subcommand)]
+    command: Commands,
+}
 
-    // Test molecules of varying complexity
-    let test_smiles = vec![
-        ("Methane", "C"),
-        ("Ethanol", "CCO"),
-        ("Benzene", "c1ccccc1"),
-        ("Caffeine", "CN1C=NC2=C1C(=O)N(C(=O)N2C)C"),
-        ("Aspirin", "CC(=O)Oc1ccccc1C(=O)O"),
-        ("Ibuprofen", "CC(C)Cc1ccc(cc1)C(C)C(=O)O"),
-        (
-            "Complex",
-            "CC(C)Cc1ccc(cc1)[C@@H](C)C(=O)O.CN1C=NC2=C1C(=O)N(C(=O)N2C)C",
-        ),
+#[derive(Subcommand)]
+/// Implements Commands.
+///
+/// Function context: `crates/ferrum_cli/src/bin/benchmark.rs`.
+/// System-layer note: component execution and pipeline orchestration.
+enum Commands {
+    /// Scenario A (CPU-Heavy): 10,000 molecules + ML Descriptors
+    ScenarioA {
+        #[arg(short, long, default_value_t = 10000)]
+        molecules: usize,
+    },
+    /// Scenario B (Memory-Heavy): 100,000 molecules + ECFP4 Fingerprints
+    ScenarioB {
+        #[arg(short, long, default_value_t = 100000)]
+        molecules: usize,
+    },
+    /// Scenario C (ML-Heavy): Random Forest training
+    ScenarioC {
+        #[arg(short, long, default_value_t = 5000)]
+        samples: usize,
+        #[arg(short, long, default_value_t = 500)]
+        trees: usize,
+    },
+    /// Scenario D (IO-Heavy): Parse large volume of SMILES
+    ScenarioD {
+        #[arg(short, long, default_value_t = 1000000)]
+        count: usize,
+    },
+    /// Run all scenarios sequentially
+    All,
+}
+
+/// Spawns a background thread that samples RSS memory usage (macOS / Linux via ps)
+fn spawn_memory_monitor() -> (Arc<AtomicUsize>, std::sync::mpsc::Sender<()>) {
+    let peak_rss = Arc::new(AtomicUsize::new(0));
+    let peak_rss_clone = Arc::clone(&peak_rss);
+    let (tx, rx) = std::sync::mpsc::channel();
+    
+    let pid = std::process::id();
+    
+    std::thread::spawn(move || {
+        loop {
+            if rx.try_recv().is_ok() {
+                break;
+            }
+            
+            // Call `ps -o rss= -p <pid>`
+            if let Ok(output) = std::process::Command::new("ps")
+                .args(&["-o", "rss=", "-p", &pid.to_string()])
+                .output() 
+            {
+                if let Ok(mem_str) = String::from_utf8(output.stdout) {
+                    if let Ok(kb) = mem_str.trim().parse::<usize>() {
+                        let bytes = kb * 1024;
+                        let mut current_max = peak_rss_clone.load(Ordering::Relaxed);
+                        while bytes > current_max {
+                            match peak_rss_clone.compare_exchange_weak(current_max, bytes, Ordering::Relaxed, Ordering::Relaxed) {
+                                Ok(_) => break,
+                                Err(x) => current_max = x,
+                            }
+                        }
+                    }
+                }
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+    });
+    
+    (peak_rss, tx)
+}
+
+/// Prepares a repeated array of molecules for benchmarking
+fn prep_molecules(count: usize) -> Vec<Molecule> {
+    let seed_smiles = vec![
+        "C", "CCO", "c1ccccc1", "CC(=O)Oc1ccccc1C(=O)O",
+        "CC(C)Cc1ccc(cc1)C(C)C(=O)O", "CN1C=NC2=C1C(=O)N(C(=O)N2C)C"
     ];
+    let seed_mols: Vec<Molecule> = seed_smiles.iter().map(|s| parse_smiles(s).unwrap()).collect();
+    
+    (0..count).into_par_iter().map(|i| {
+        seed_mols[i % seed_mols.len()].clone()
+    }).collect()
+}
 
-    println!("--- SMILES Parsing Performance (with automatic implicit H) ---");
-    for (name, smiles) in &test_smiles {
-        let iterations = 10000;
-        let start = Instant::now();
+/// Implements run scenario a.
+///
+/// Function context: `crates/ferrum_cli/src/bin/benchmark.rs`.
+/// System-layer note: component execution and pipeline orchestration.
+fn run_scenario_a(molecules: usize) {
+    println!("\n=== Scenario A (CPU-Heavy) ===");
+    println!("Calculating Fast ML Descriptor preset for {} molecules...", molecules);
+    
+    let mut mols = prep_molecules(molecules);
+    let descriptors = BatchDescriptor::fast_ml_preset();
+    let num_features = descriptors.iter().map(|d| d.feature_len()).sum::<usize>();
+    
+    let (mem_tracker, stop_tx) = spawn_memory_monitor();
+    let start = Instant::now();
+    
+    let matrix = calculate_batch_flat_static(&mut mols, descriptors);
+    
+    let duration = start.elapsed();
+    let _ = stop_tx.send(());
+    
+    let peak_mb = mem_tracker.load(Ordering::Relaxed) as f64 / 1_048_576.0;
+    
+    assert_eq!(matrix.rows, molecules);
+    assert_eq!(matrix.cols, num_features);
+    
+    println!("Result     : Matrix {} x {}", matrix.rows, matrix.cols);
+    println!("Time       : {:.2?}", duration);
+    println!("Throughput : {:.0} MPS", molecules as f64 / duration.as_secs_f64());
+    println!("Peak RAM   : {:.2} MB", peak_mb);
+}
 
-        for _ in 0..iterations {
-            let _ = parse_smiles(smiles).unwrap();
+/// Implements run scenario b.
+///
+/// Function context: `crates/ferrum_cli/src/bin/benchmark.rs`.
+/// System-layer note: component execution and pipeline orchestration.
+fn run_scenario_b(molecules: usize) {
+    println!("\n=== Scenario B (Memory-Heavy) ===");
+    println!("Calculating ECFP4 (2048-bit) Fingerprints for {} molecules...", molecules);
+    
+    let mut mols = prep_molecules(molecules);
+    // ECFP4 is a single descriptor that outputs 2048 dimensions
+    let descriptors = vec![BatchDescriptor::Ecfp4];
+    
+    let (mem_tracker, stop_tx) = spawn_memory_monitor();
+    let start = Instant::now();
+    
+    let matrix = calculate_batch_flat_static(&mut mols, &descriptors);
+    
+    let duration = start.elapsed();
+    let _ = stop_tx.send(());
+    
+    let peak_mb = mem_tracker.load(Ordering::Relaxed) as f64 / 1_048_576.0;
+    
+    assert_eq!(matrix.rows, molecules);
+    assert_eq!(matrix.cols, 2048);
+    
+    println!("Result     : Matrix {} x {}", matrix.rows, matrix.cols);
+    println!("Time       : {:.2?}", duration);
+    println!("Throughput : {:.0} MPS", molecules as f64 / duration.as_secs_f64());
+    println!("Peak RAM   : {:.2} MB", peak_mb);
+}
+
+/// Implements run scenario c.
+///
+/// Function context: `crates/ferrum_cli/src/bin/benchmark.rs`.
+/// System-layer note: component execution and pipeline orchestration.
+fn run_scenario_c(samples: usize, trees: usize) {
+    println!("\n=== Scenario C (ML-Heavy) ===");
+    println!("Training Random Forest ({} trees) on {} samples x 200 features...", trees, samples);
+    
+    let features = 200;
+    let mut rng = rand::thread_rng();
+    
+    // Generate random mock dataset
+    let mut x_data = Vec::with_capacity(samples * features);
+    let mut y_data = Vec::with_capacity(samples);
+    for _ in 0..samples {
+        y_data.push(rng.gen_range(0.0..1.0));
+        for _ in 0..features {
+            x_data.push(rng.gen_range(0.0..1.0));
         }
-
-        let duration = start.elapsed();
-        let per_parse = duration.as_nanos() / iterations;
-        let per_second = 1_000_000_000.0 / per_parse as f64;
-
-        println!(
-            "{:12} ({:2} chars): {:6} ns/parse  ({:8.0} molecules/sec)",
-            name,
-            smiles.len(),
-            per_parse,
-            per_second
-        );
     }
+    
+    let x_arr = Array2::from_shape_vec((samples, features), x_data).unwrap();
+    let y_arr = Array1::from_shape_vec((samples,), y_data).unwrap();
+    
+    let (mem_tracker, stop_tx) = spawn_memory_monitor();
+    let start = Instant::now();
+    
+    let rf = RandomForestRegressor::fit(
+        x_arr.view(),
+        y_arr.view(),
+        trees,
+        15, // max_depth
+        2,  // min_samples_split
+        0.3, // max_features_fraction
+        42, // seed
+    );
+    
+    let duration = start.elapsed();
+    let _ = stop_tx.send(());
+    
+    let peak_mb = mem_tracker.load(Ordering::Relaxed) as f64 / 1_048_576.0;
+    
+    println!("Result     : RF Regressor with {} trained trees", trees);
+    println!("Time       : {:.2?}", duration);
+    println!("Peak RAM   : {:.2} MB", peak_mb);
+}
 
-    println!("\n--- Molecular Weight Calculation ---");
-    let descriptor = molecular_weight::MolecularWeight;
-
-    for (name, smiles) in &test_smiles {
-        let mut mol = parse_smiles(smiles).unwrap();
-
-        let iterations = 100000;
-
-        let start = Instant::now();
-        let mut mw_val = 0.0f32;
-        for _ in 0..iterations {
-            mw_val = descriptor
-                .calculate(
-                    &mut mol,
-                    &mut ferrum_core::desc::context::CalculationContext::new(),
-                )
-                .as_float();
+/// Implements run scenario d.
+///
+/// Function context: `crates/ferrum_cli/src/bin/benchmark.rs`.
+/// System-layer note: component execution and pipeline orchestration.
+fn run_scenario_d(count: usize) {
+    println!("\n=== Scenario D (IO-Heavy) ===");
+    println!("Parsing {} SMILES strings...", count);
+    
+    let seed_smiles = vec![
+        "C", "CCO", "c1ccccc1", "CC(=O)Oc1ccccc1C(=O)O",
+        "CC(C)Cc1ccc(cc1)C(C)C(=O)O", "CN1C=NC2=C1C(=O)N(C(=O)N2C)C"
+    ];
+    
+    // Create an in-memory vector of strings to simulate file IO reading overhead without disk IO bottlenecks
+    let mut lines = Vec::with_capacity(count);
+    for i in 0..count {
+        lines.push(seed_smiles[i % seed_smiles.len()]);
+    }
+    
+    let (mem_tracker, stop_tx) = spawn_memory_monitor();
+    let start = Instant::now();
+    
+    // We use sequential parsing to simulate realistic reading since typical CSV reading is sequential
+    let mut success = 0;
+    for s in lines {
+        if parse_smiles(s).is_ok() {
+            success += 1;
         }
-
-        let duration = start.elapsed();
-        let per_calc = duration.as_nanos() / iterations;
-        let per_second = 1_000_000_000.0 / per_calc as f64;
-
-        println!(
-            "{:12}: MW = {:7.2}, {:5} ns/calc  ({:9.0} calcs/sec)",
-            name, mw_val, per_calc, per_second
-        );
     }
+    
+    let duration = start.elapsed();
+    let _ = stop_tx.send(());
+    
+    let peak_mb = mem_tracker.load(Ordering::Relaxed) as f64 / 1_048_576.0;
+    
+    println!("Result     : {} successfully parsed", success);
+    println!("Time       : {:.2?}", duration);
+    println!("Throughput : {:.0} Parses/Sec", count as f64 / duration.as_secs_f64());
+    println!("Peak RAM   : {:.2} MB", peak_mb);
+}
 
-    println!("\n--- Combined Pipeline (Parse + Calculate MW) ---");
-    for (name, smiles) in &test_smiles {
-        let iterations = 10000;
+/// Implements main.
+///
+/// Function context: `crates/ferrum_cli/src/bin/benchmark.rs`.
+/// System-layer note: component execution and pipeline orchestration.
+fn main() {
+    let cli = Cli::parse();
+    
+    // Ensure Rayon threadpool is initialized
+    let threads = rayon::current_num_threads();
+    println!("FerrumChem Benchmark Suite (Using {} threads)\n", threads);
 
-        let start = Instant::now();
-        let mut last_mw = 0.0f32;
-        for _ in 0..iterations {
-            let mut mol = parse_smiles(smiles).unwrap();
-            last_mw = descriptor
-                .calculate(
-                    &mut mol,
-                    &mut ferrum_core::desc::context::CalculationContext::new(),
-                )
-                .as_float();
+    match cli.command {
+        Commands::ScenarioA { molecules } => run_scenario_a(molecules),
+        Commands::ScenarioB { molecules } => run_scenario_b(molecules),
+        Commands::ScenarioC { samples, trees } => run_scenario_c(samples, trees),
+        Commands::ScenarioD { count } => run_scenario_d(count),
+        Commands::All => {
+            run_scenario_a(10_000);
+            run_scenario_b(100_000);
+            run_scenario_c(5_000, 500);
+            run_scenario_d(1_000_000);
         }
-        let _ = last_mw;
-
-        let duration = start.elapsed();
-        let per_molecule = duration.as_nanos() / iterations;
-        let per_second = 1_000_000_000.0 / per_molecule as f64;
-
-        println!(
-            "{:12}: {:6} ns/molecule  ({:8.0} molecules/sec)",
-            name, per_molecule, per_second
-        );
-    }
-
-    println!("\n--- Batch Processing Simulation ---");
-    // Simulate processing a large dataset
-    let dataset_sizes = vec![1000, 10000, 100000];
-    let sample_smiles = "CC(C)Cc1ccc(cc1)C(C)C(=O)O"; // Ibuprofen
-
-    for size in dataset_sizes {
-        let start = Instant::now();
-
-        for _ in 0..size {
-            let mut mol = parse_smiles(sample_smiles).unwrap();
-            descriptor.calculate(
-                &mut mol,
-                &mut ferrum_core::desc::context::CalculationContext::new(),
-            );
-        }
-
-        let duration = start.elapsed();
-        let per_molecule = duration.as_micros() as f64 / size as f64;
-        let throughput = size as f64 / duration.as_secs_f64();
-
-        println!(
-            "{:6} molecules: {:7.2} ms total, {:6.2} μs/mol, {:9.0} mol/sec",
-            size,
-            duration.as_secs_f64() * 1000.0,
-            per_molecule,
-            throughput
-        );
-    }
-
-    println!("\n--- Memory Usage Estimate ---");
-    for (name, smiles) in &test_smiles {
-        let mol = parse_smiles(smiles).unwrap();
-        let atoms = mol.num_atoms();
-        let bonds = mol.num_bonds();
-
-        // Rough estimate:
-        // - Atom struct: 8 bytes
-        // - Bond struct: 6 bytes
-        // - Adjacency list: ~8 bytes/atom (SmallVec overhead)
-        let estimated_bytes = atoms * 16 + bonds * 6;
-
-        println!(
-            "{:12}: {} atoms, {} bonds → ~{} bytes",
-            name, atoms, bonds, estimated_bytes
-        );
     }
 }

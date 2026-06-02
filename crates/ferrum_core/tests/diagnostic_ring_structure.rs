@@ -55,7 +55,7 @@ fn debug_ring_structure() {
         // Collect atoms in this ring
         let mut atoms = std::collections::HashSet::new();
         for &bi in ring_bonds {
-            let b = &mol.bonds[bi];
+            let b = &mol.bonds[bi as usize];
             atoms.insert(b.source as usize);
             atoms.insert(b.target as usize);
         }
@@ -66,7 +66,7 @@ fn debug_ring_structure() {
         // Show bonds details
         eprintln!("  Bond details:");
         for &bi in ring_bonds {
-            let b = &mol.bonds[bi];
+            let b = &mol.bonds[bi as usize];
             eprintln!(
                 "    Bond {}: {} -- {}, type={:?}",
                 bi, b.source, b.target, b.bond_type

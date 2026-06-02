@@ -50,7 +50,6 @@
 use super::typed::{Descriptor, DescriptorValue};
 use crate::mol::molecule::Molecule;
 use crate::types::BondType;
-use ndarray::ArrayView2;
 #[cfg(not(target_os = "macos"))]
 use ndarray::ArrayViewMut2;
 #[cfg(not(target_os = "macos"))]
@@ -176,7 +175,7 @@ impl Descriptor for FractionCSP3 {
     fn calculate(
         &self,
         mol: &mut Molecule,
-        ctx: &mut crate::desc::context::CalculationContext,
+        _ctx: &mut crate::desc::context::CalculationContext,
     ) -> DescriptorValue {
         DescriptorValue::Float(compute_fraction_csp3(mol))
     }
@@ -190,9 +189,9 @@ impl Descriptor for FractionCSP3 {
 ///
 /// Function context: `crates/ferrum_core/src/desc/extra_counts.rs`.
 /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-fn ring_all_single_bonds(mol: &Molecule, ring: &[usize]) -> bool {
+fn ring_all_single_bonds(mol: &Molecule, ring: &[u16]) -> bool {
     ring.iter()
-        .all(|&bond_idx| mol.bonds[bond_idx].bond_type == BondType::Single)
+        .all(|&bond_idx| mol.bonds[bond_idx as usize].bond_type == BondType::Single)
 }
 
 /// Compute ring type counts: [aromatic, aliphatic, saturated, heteroaromatic, heterocyclic].
@@ -205,12 +204,12 @@ pub fn compute_ring_type_counts(mol: &Molecule) -> [u32; 5] {
     for ring in &rings {
         let all_aromatic = ring
             .iter()
-            .all(|&bond_idx| mol.bonds[bond_idx].is_aromatic());
+            .all(|&bond_idx| mol.bonds[bond_idx as usize].is_aromatic());
         let any_aromatic = ring
             .iter()
-            .any(|&bond_idx| mol.bonds[bond_idx].is_aromatic());
+            .any(|&bond_idx| mol.bonds[bond_idx as usize].is_aromatic());
         let has_heteroatom = ring.iter().any(|&bond_idx| {
-            let bond = &mol.bonds[bond_idx];
+            let bond = &mol.bonds[bond_idx as usize];
             let src_an = mol.atoms[bond.source as usize].atomic_number;
             let dst_an = mol.atoms[bond.target as usize].atomic_number;
             (src_an != 6 && src_an != 1) || (dst_an != 6 && dst_an != 1)
@@ -310,7 +309,7 @@ impl Descriptor for NumAmideBonds {
     fn calculate(
         &self,
         mol: &mut Molecule,
-        ctx: &mut crate::desc::context::CalculationContext,
+        _ctx: &mut crate::desc::context::CalculationContext,
     ) -> DescriptorValue {
         DescriptorValue::Int(compute_num_amide_bonds(mol))
     }
@@ -356,7 +355,7 @@ impl Descriptor for AromaticAtomFraction {
     fn calculate(
         &self,
         mol: &mut Molecule,
-        ctx: &mut crate::desc::context::CalculationContext,
+        _ctx: &mut crate::desc::context::CalculationContext,
     ) -> DescriptorValue {
         DescriptorValue::Float(compute_aromatic_atom_fraction(mol))
     }
@@ -463,7 +462,7 @@ impl Descriptor for HallKierAlpha {
     fn calculate(
         &self,
         mol: &mut Molecule,
-        ctx: &mut crate::desc::context::CalculationContext,
+        _ctx: &mut crate::desc::context::CalculationContext,
     ) -> DescriptorValue {
         DescriptorValue::Float(compute_hall_kier_alpha(mol))
     }
@@ -505,17 +504,22 @@ fn pack_bertz_pair_key(class_lo: usize, class_hi: usize) -> u64 {
 ///
 /// Layout:
 /// - bit 62 = 1 (triple discriminator)
+/// - bits 55..48 = hinge atomic number
 /// - bits 47..32 = first class id (min neighbor class)
 /// - bits 31..16 = hinge class id
 /// - bits 15..0  = third class id (max neighbor class)
 ///
 /// Bit 63 remains 0, so pair and triple key-spaces are disjoint.
 #[inline]
-fn pack_bertz_triple_key(class_a: usize, class_b: usize, class_c: usize) -> u64 {
+fn pack_bertz_triple_key(class_a: usize, class_b: usize, class_c: usize, hinge_z: u8) -> u64 {
     debug_assert!(class_a <= u16::MAX as usize);
     debug_assert!(class_b <= u16::MAX as usize);
     debug_assert!(class_c <= u16::MAX as usize);
-    (1u64 << 62) | ((class_a as u64) << 32) | ((class_b as u64) << 16) | class_c as u64
+    (1u64 << 62)
+        | ((hinge_z as u64) << 48)
+        | ((class_a as u64) << 32)
+        | ((class_b as u64) << 16)
+        | class_c as u64
 }
 
 /// Computes bertz ct.
@@ -551,10 +555,9 @@ fn compute_bertz_ct(mol: &mut Molecule, ctx: &mut crate::desc::context::Calculat
         neighbors[a2].push((a1, bo));
     }
 
-    // Step 2: Symmetry classes from bond-order-weighted distance matrix.
-    super::balaban::ensure_bo_distance_matrix_cached(mol);
-    let bo_dist = super::balaban::cached_bo_distance_matrix_ref(mol)
-        .expect("Balaban BO distance cache initialized");
+    // Step 2: Symmetry classes from unweighted distance matrix (matching RDKit).
+    let unweighted_dist = super::balaban::compute_distance_matrix(mol, false);
+    let bo_dist = unweighted_dist.as_slice();
 
     ctx.bfs_dist.clear();
     ctx.bfs_dist.resize(n, 0);
@@ -629,6 +632,7 @@ fn compute_bertz_ct(mol: &mut Molecule, ctx: &mut crate::desc::context::Calculat
                     ni_class.min(nj_class),
                     hinge_class,
                     ni_class.max(nj_class),
+                    z,
                 );
                 *connection_counts.entry(key).or_insert(0.0) += num_conn;
                 tot_conn += num_conn;
@@ -748,6 +752,10 @@ fn shannon_entropy(counts: &[u32]) -> f64 {
 pub struct Ipc;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// Implements IpcMode.
+///
+/// Function context: `crates/ferrum_core/src/desc/extra_counts.rs`.
+/// Descriptor-layer note: computes molecular properties for ML pipelines.
 enum IpcMode {
     Fast,
     Avg,
@@ -760,6 +768,10 @@ const IPC_DENSE_MATMUL_THRESHOLD_DEFAULT: usize = 64;
 #[cfg(not(target_os = "macos"))]
 const IPC_DENSE_MATMUL_THRESHOLD_DEFAULT: usize = usize::MAX;
 
+/// Implements ipc mode.
+///
+/// Function context: `crates/ferrum_core/src/desc/extra_counts.rs`.
+/// Descriptor-layer note: computes molecular properties for ML pipelines.
 fn ipc_mode() -> IpcMode {
     static MODE: OnceLock<IpcMode> = OnceLock::new();
     *MODE.get_or_init(|| {
@@ -774,6 +786,10 @@ fn ipc_mode() -> IpcMode {
     })
 }
 
+/// Implements ipc dense matmul threshold.
+///
+/// Function context: `crates/ferrum_core/src/desc/extra_counts.rs`.
+/// Descriptor-layer note: computes molecular properties for ML pipelines.
 fn ipc_dense_matmul_threshold() -> usize {
     static THRESHOLD: OnceLock<usize> = OnceLock::new();
     *THRESHOLD.get_or_init(|| {
@@ -788,6 +804,10 @@ fn ipc_dense_matmul_threshold() -> usize {
 const IPC_TRACE_PW_BLOCKSIZE: usize = 128;
 
 #[inline]
+/// Implements ipc pairwise diag sum recursive.
+///
+/// Function context: `crates/ferrum_core/src/desc/extra_counts.rs`.
+/// Descriptor-layer note: computes molecular properties for ML pipelines.
 fn ipc_pairwise_diag_sum_recursive(mat: &[f64], n: usize, start: usize, len: usize) -> f64 {
     let stride = n + 1;
     if len < 8 {
@@ -838,19 +858,35 @@ fn ipc_pairwise_diag_sum_recursive(mat: &[f64], n: usize, start: usize, len: usi
 }
 
 #[inline]
+/// Implements ipc trace.
+///
+/// Function context: `crates/ferrum_core/src/desc/extra_counts.rs`.
+/// Descriptor-layer note: computes molecular properties for ML pipelines.
 fn ipc_trace(mat: &[f64], n: usize) -> f64 {
     ipc_pairwise_diag_sum_recursive(mat, n, 0, n)
 }
 
+/// Implements compute ipc fast.
+///
+/// Function context: `crates/ferrum_core/src/desc/extra_counts.rs`.
+/// Descriptor-layer note: computes molecular properties for ML pipelines.
 fn compute_ipc_fast(mol: &Molecule, ctx: &mut crate::desc::context::CalculationContext) -> f64 {
     compute_ipc_recurrence(mol, ctx, false)
 }
 
+/// Implements compute ipc avg.
+///
+/// Function context: `crates/ferrum_core/src/desc/extra_counts.rs`.
+/// Descriptor-layer note: computes molecular properties for ML pipelines.
 fn compute_ipc_avg(mol: &Molecule, ctx: &mut crate::desc::context::CalculationContext) -> f64 {
     compute_ipc_recurrence(mol, ctx, true)
 }
 
 #[inline]
+/// Implements ipc matmul sparse.
+///
+/// Function context: `crates/ferrum_core/src/desc/extra_counts.rs`.
+/// Descriptor-layer note: computes molecular properties for ML pipelines.
 fn ipc_matmul_sparse(
     sorted_neighbors: &[SmallVec<[usize; 8]>],
     bn: &[f64],
@@ -870,6 +906,10 @@ fn ipc_matmul_sparse(
 }
 
 #[inline]
+/// Implements ipc matmul dense.
+///
+/// Function context: `crates/ferrum_core/src/desc/extra_counts.rs`.
+/// Descriptor-layer note: computes molecular properties for ML pipelines.
 fn ipc_matmul_dense(adj: &[f64], bn: &[f64], next: &mut [f64], n: usize) {
     #[cfg(target_os = "macos")]
     {
@@ -1018,6 +1058,10 @@ fn compute_ipc_recurrence(
     if average { ie } else { total * ie }
 }
 
+/// Implements compute ipc.
+///
+/// Function context: `crates/ferrum_core/src/desc/extra_counts.rs`.
+/// Descriptor-layer note: computes molecular properties for ML pipelines.
 fn compute_ipc(mol: &Molecule, ctx: &mut crate::desc::context::CalculationContext) -> f64 {
     match ipc_mode() {
         IpcMode::Fast => compute_ipc_fast(mol, ctx),
@@ -1087,7 +1131,7 @@ impl Descriptor for FragmentComplexity {
     fn calculate(
         &self,
         mol: &mut Molecule,
-        ctx: &mut crate::desc::context::CalculationContext,
+        _ctx: &mut crate::desc::context::CalculationContext,
     ) -> DescriptorValue {
         DescriptorValue::Float(compute_fragment_complexity(mol))
     }

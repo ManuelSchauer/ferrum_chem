@@ -57,6 +57,8 @@ use super::extra_counts::{
 };
 use super::fingerprint::{ECFP, FCFP};
 use super::formal_charge::FormalCharge;
+use super::shape_3d::{Asphericity, Pmi1, Pmi2, Pmi3};
+use super::biosynfoni::Biosynfoni;
 use super::functional_groups::{AcidicGroupCount, BasicGroupCount, FunctionalGroupCounts};
 use super::gasteiger_charge::{
     MaxAbsPartialCharge, MaxPartialCharge, MinAbsPartialCharge, MinPartialCharge,
@@ -215,6 +217,11 @@ pub enum BatchDescriptor {
     Fcfp4,
     AtomPairFingerprint,
     TopologicalTorsionFingerprint,
+    Pmi1,
+    Pmi2,
+    Pmi3,
+    Asphericity,
+    Biosynfoni,
 }
 
 impl BatchDescriptor {
@@ -223,7 +230,7 @@ impl BatchDescriptor {
     /// Function context: `crates/ferrum_core/src/desc/batch.rs`.
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     pub fn all() -> &'static [Self] {
-        const ALL: [BatchDescriptor; 66] = [
+        const ALL: [BatchDescriptor; 71] = [
             BatchDescriptor::MolecularWeight,
             BatchDescriptor::LogP,
             BatchDescriptor::MolarRefractivity,
@@ -290,6 +297,11 @@ impl BatchDescriptor {
             BatchDescriptor::Fcfp4,
             BatchDescriptor::AtomPairFingerprint,
             BatchDescriptor::TopologicalTorsionFingerprint,
+            BatchDescriptor::Pmi1,
+            BatchDescriptor::Pmi2,
+            BatchDescriptor::Pmi3,
+            BatchDescriptor::Asphericity,
+            BatchDescriptor::Biosynfoni,
         ];
         &ALL
     }
@@ -422,6 +434,11 @@ impl BatchDescriptor {
             Self::Fcfp4 => "FCFP4",
             Self::AtomPairFingerprint => "AtomPair",
             Self::TopologicalTorsionFingerprint => "TopologicalTorsion",
+            Self::Pmi1 => "PMI1",
+            Self::Pmi2 => "PMI2",
+            Self::Pmi3 => "PMI3",
+            Self::Asphericity => "Asphericity",
+            Self::Biosynfoni => "Biosynfoni",
         }
     }
 
@@ -503,6 +520,11 @@ impl BatchDescriptor {
             Self::TopologicalTorsionFingerprint => {
                 TopologicalTorsionFingerprint::default_size().calculate(mol, ctx)
             }
+            Self::Pmi1 => Pmi1.calculate(mol, ctx),
+            Self::Pmi2 => Pmi2.calculate(mol, ctx),
+            Self::Pmi3 => Pmi3.calculate(mol, ctx),
+            Self::Asphericity => Asphericity.calculate(mol, ctx),
+            Self::Biosynfoni => Biosynfoni.calculate(mol, ctx),
         }
     }
 
@@ -537,6 +559,7 @@ impl BatchDescriptor {
             | Self::Fcfp4
             | Self::AtomPairFingerprint
             | Self::TopologicalTorsionFingerprint => 2048,
+            Self::Biosynfoni => super::biosynfoni::BIOSYNFONI_FEATURES.len(),
             _ => 1,
         }
     }

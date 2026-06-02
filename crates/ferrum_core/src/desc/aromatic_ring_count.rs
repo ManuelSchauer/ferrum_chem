@@ -78,9 +78,9 @@ fn compute_aromatic_ring_count_cached(mol: &mut Molecule) -> u32 {
 ///
 /// Function context: `crates/ferrum_core/src/desc/aromatic_ring_count.rs`.
 /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-fn ring_bonds_all_aromatic(mol: &Molecule, ring: &[usize]) -> bool {
+fn ring_bonds_all_aromatic(mol: &Molecule, ring: &[u16]) -> bool {
     ring.iter()
-        .all(|&bond_idx| mol.bonds[bond_idx].is_aromatic())
+        .all(|&bond_idx| mol.bonds[bond_idx as usize].is_aromatic())
 }
 
 /// Counts aromatic cycles using a precomputed aromatic-bond mask.
@@ -88,12 +88,12 @@ fn ring_bonds_all_aromatic(mol: &Molecule, ring: &[usize]) -> bool {
 /// Function context: `crates/ferrum_core/src/desc/aromatic_ring_count.rs`.
 /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
 fn count_aromatic_cycles(
-    cycles: &[smallvec::SmallVec<[usize; 8]>],
+    cycles: &[smallvec::SmallVec<[u16; 8]>],
     aromatic_bond_mask: &[bool],
 ) -> u32 {
     cycles
         .iter()
-        .filter(|ring| ring.iter().all(|&bond_idx| aromatic_bond_mask[bond_idx]))
+        .filter(|ring| ring.iter().all(|&bond_idx| aromatic_bond_mask[bond_idx as usize]))
         .count() as u32
 }
 
@@ -123,7 +123,7 @@ impl Descriptor for AromaticRingCount {
     fn calculate(
         &self,
         mol: &mut Molecule,
-        ctx: &mut crate::desc::context::CalculationContext,
+        _ctx: &mut crate::desc::context::CalculationContext,
     ) -> DescriptorValue {
         DescriptorValue::Int(compute_aromatic_ring_count_cached(mol))
     }

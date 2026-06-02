@@ -79,7 +79,7 @@ impl Descriptor for LipinskiViolations {
     fn calculate(
         &self,
         mol: &mut Molecule,
-        ctx: &mut crate::desc::context::CalculationContext,
+        _ctx: &mut crate::desc::context::CalculationContext,
     ) -> DescriptorValue {
         let mw = compute_molecular_weight(mol);
         let logp = compute_logp_cached(mol).0;

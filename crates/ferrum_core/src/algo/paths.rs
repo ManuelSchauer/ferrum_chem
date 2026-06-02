@@ -249,11 +249,23 @@ use crate::desc::context::CalculationContext;
 /// Compute all-pairs unweighted shortest paths using BFS, utilizing the CalculationContext
 /// to avoid repeated allocations, and caching the result on the Molecule.
 
+/// Implements compute unweighted distance matrix cached.
+///
+/// Function context: `crates/ferrum_core/src/algo/paths.rs`.
+/// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
 pub fn compute_unweighted_distance_matrix_cached<'a>(
     mol: &crate::mol::molecule::Molecule,
     ctx: &'a mut CalculationContext,
 ) -> &'a [u8] {
-    if ctx.has_dist_u8 {
+    let cache_key = crate::desc::context::molecule_cache_key(mol);
+    if ctx.has_dist_u8 && ctx.active_molecule_key == Some(cache_key) {
+        return &ctx.dist_u8;
+    }
+    if let Some(cached) = ctx.dist_u8_global_cache.get(&cache_key) {
+        ctx.dist_u8.clear();
+        ctx.dist_u8.extend_from_slice(cached);
+        ctx.has_dist_u8 = true;
+        ctx.active_molecule_key = Some(cache_key);
         return &ctx.dist_u8;
     }
 
@@ -303,5 +315,7 @@ pub fn compute_unweighted_distance_matrix_cached<'a>(
     }
 
     ctx.has_dist_u8 = true;
+    ctx.active_molecule_key = Some(cache_key);
+    ctx.dist_u8_global_cache.insert(cache_key, ctx.dist_u8.clone());
     &ctx.dist_u8
 }

@@ -96,7 +96,7 @@ pub struct MoleculeRecord {
     ///
     /// Column names are interned as `Arc<str>` per CSV parse so repeated rows
     /// share one header allocation each.
-    pub properties: Vec<(Arc<str>, String)>,
+    pub properties: Vec<(Arc<str>, Box<str>)>,
 }
 
 impl CsvReader {
@@ -199,12 +199,12 @@ impl CsvReader {
                 let smiles = record.get(smiles_idx).unwrap_or("").trim().to_string();
 
                 let properties = if include_properties {
-                    let mut properties: Vec<(Arc<str>, String)> =
+                    let mut properties: Vec<(Arc<str>, Box<str>)> =
                         Vec::with_capacity(headers.len().saturating_sub(1));
                     for (idx, header) in headers.iter().enumerate() {
                         if idx != smiles_idx {
                             let value = record.get(idx).unwrap_or("");
-                            properties.push((Arc::clone(header), value.to_string()));
+                            properties.push((Arc::clone(header), value.to_string().into_boxed_str()));
                         }
                     }
                     properties
@@ -354,6 +354,10 @@ impl CsvReader {
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+/// Implements ParseSummary.
+///
+/// Function context: `crates/ferrum_core/src/io/csv_reader.rs`.
+/// I/O-layer note: parsing/ingestion should surface explicit errors instead of silently repairing malformed input.
 pub struct ParseSummary {
     pub total_rows: usize,
     pub valid_molecules: usize,
@@ -500,7 +504,7 @@ c1ccccc1,Benzene
         assert_eq!(records[1].smiles, "c1ccccc1");
         // Properties should include Name column
         assert_eq!(records[0].properties[0].0.as_ref(), "Name");
-        assert_eq!(records[0].properties[0].1, "Ethanol");
+        assert_eq!(records[0].properties[0].1.as_ref(), "Ethanol");
     }
 
     #[test]

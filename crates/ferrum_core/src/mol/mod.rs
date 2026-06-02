@@ -43,5 +43,6 @@
 
 pub mod atom;
 pub mod bond;
+pub mod conformer;
 pub mod elements;
 pub mod molecule;

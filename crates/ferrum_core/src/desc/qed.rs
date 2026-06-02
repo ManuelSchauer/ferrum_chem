@@ -200,6 +200,10 @@ static QED_ACCEPTOR_SMARTS: &[&str] = &[
 ];
 
 #[derive(Clone)]
+/// Implements QueryScreen.
+///
+/// Function context: `crates/ferrum_core/src/desc/qed.rs`.
+/// Descriptor-layer note: computes molecular properties for ML pipelines.
 struct QueryScreen {
     min_atoms: usize,
     min_bonds: usize,
@@ -210,18 +214,30 @@ struct QueryScreen {
 }
 
 #[derive(Clone)]
+/// Implements RequiredElementSet.
+///
+/// Function context: `crates/ferrum_core/src/desc/qed.rs`.
+/// Descriptor-layer note: computes molecular properties for ML pipelines.
 struct RequiredElementSet {
     elements: SmallVec<[u8; 8]>,
     count: u16,
 }
 
 #[derive(Clone)]
+/// Implements ScreenedQuery.
+///
+/// Function context: `crates/ferrum_core/src/desc/qed.rs`.
+/// Descriptor-layer note: computes molecular properties for ML pipelines.
 struct ScreenedQuery {
     query: QueryGraph,
     screen: QueryScreen,
 }
 
 #[derive(Clone, Copy)]
+/// Implements MoleculeScreenStats.
+///
+/// Function context: `crates/ferrum_core/src/desc/qed.rs`.
+/// Descriptor-layer note: computes molecular properties for ML pipelines.
 struct MoleculeScreenStats {
     num_atoms: usize,
     num_bonds: usize,
@@ -591,12 +607,12 @@ fn compute_qed_hbond_acceptors_with_stats(mol: &Molecule, stats: &MoleculeScreen
 /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
 fn ring_membership_from_bond_cycles(
     mol: &Molecule,
-    cycles: &[smallvec::SmallVec<[usize; 8]>],
+    cycles: &[smallvec::SmallVec<[u16; 8]>],
 ) -> Vec<bool> {
     let mut in_ring = vec![false; mol.num_atoms()];
     for cycle in cycles {
         for &bond_idx in cycle {
-            let bond = &mol.bonds[bond_idx];
+            let bond = &mol.bonds[bond_idx as usize];
             in_ring[bond.source as usize] = true;
             in_ring[bond.target as usize] = true;
         }
@@ -652,7 +668,7 @@ fn build_qed_aromatic_subgraph(mol: &Molecule, in_ring: &[bool]) -> Option<Molec
 /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
 fn compute_qed_aromatic_ring_count_with_cycles(
     mol: &Molecule,
-    cycles: &[smallvec::SmallVec<[usize; 8]>],
+    cycles: &[smallvec::SmallVec<[u16; 8]>],
 ) -> u32 {
     let in_ring = ring_membership_from_bond_cycles(mol, cycles);
     let Some(mut subgraph) = build_qed_aromatic_subgraph(mol, &in_ring) else {
@@ -985,7 +1001,7 @@ impl Descriptor for Qed {
     fn calculate(
         &self,
         mol: &mut Molecule,
-        ctx: &mut crate::desc::context::CalculationContext,
+        _ctx: &mut crate::desc::context::CalculationContext,
     ) -> DescriptorValue {
         DescriptorValue::Float(compute_qed_cached(mol) as f32)
     }

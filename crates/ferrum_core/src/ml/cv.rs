@@ -44,6 +44,32 @@ pub struct KFoldSplits {
     pub folds: Vec<(Vec<usize>, Vec<usize>)>, // (train_indices, test_indices)
 }
 
+impl rayon::iter::IntoParallelIterator for KFoldSplits {
+    type Iter = rayon::vec::IntoIter<(Vec<usize>, Vec<usize>)>;
+    type Item = (Vec<usize>, Vec<usize>);
+
+    /// Implements into par iter.
+    ///
+    /// Function context: `crates/ferrum_core/src/ml/cv.rs`.
+    /// ML-layer note: optimized for batch computation and zero-allocation passes.
+    fn into_par_iter(self) -> Self::Iter {
+        self.folds.into_par_iter()
+    }
+}
+
+impl IntoIterator for KFoldSplits {
+    type Item = (Vec<usize>, Vec<usize>);
+    type IntoIter = std::vec::IntoIter<(Vec<usize>, Vec<usize>)>;
+
+    /// Implements into iter.
+    ///
+    /// Function context: `crates/ferrum_core/src/ml/cv.rs`.
+    /// ML-layer note: optimized for batch computation and zero-allocation passes.
+    fn into_iter(self) -> Self::IntoIter {
+        self.folds.into_iter()
+    }
+}
+
 /// Iterator over K-Fold splits generated lazily.
 pub struct KFoldIter {
     indices: Vec<usize>,
@@ -63,6 +89,10 @@ pub struct LeaveOneOutIter {
 impl Iterator for LeaveOneOutIter {
     type Item = (Vec<usize>, Vec<usize>);
 
+    /// Implements next.
+    ///
+    /// Function context: `crates/ferrum_core/src/ml/cv.rs`.
+    /// ML-layer note: optimized for batch computation and zero-allocation passes.
     fn next(&mut self) -> Option<Self::Item> {
         if self.current >= self.n_samples {
             return None;
@@ -121,6 +151,10 @@ pub fn leave_one_out(n_samples: usize) -> KFoldSplits {
 impl Iterator for KFoldIter {
     type Item = (Vec<usize>, Vec<usize>);
 
+    /// Implements next.
+    ///
+    /// Function context: `crates/ferrum_core/src/ml/cv.rs`.
+    /// ML-layer note: optimized for batch computation and zero-allocation passes.
     fn next(&mut self) -> Option<Self::Item> {
         if self.current_fold >= self.k {
             return None;
@@ -222,6 +256,10 @@ mod tests {
     }
 
     #[test]
+    /// Implements test k fold iter matches materialized k fold.
+    ///
+    /// Function context: `crates/ferrum_core/src/ml/cv.rs`.
+    /// ML-layer note: optimized for batch computation and zero-allocation passes.
     fn test_k_fold_iter_matches_materialized_k_fold() {
         let materialized = k_fold(32, 5, 123);
         let iterated: Vec<(Vec<usize>, Vec<usize>)> = k_fold_iter(32, 5, 123).collect();

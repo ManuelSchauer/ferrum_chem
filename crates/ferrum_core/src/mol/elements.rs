@@ -177,22 +177,39 @@ pub const ELEMENT_SYMBOLS: [&str; 119] = [
 
 /// Typical valences for organic elements (for implicit hydrogen calculation).
 /// Returns common valence states as a slice.
+const VALENCE_EMPTY: &[u8] = &[];
+const VALENCE_1: &[u8] = &[1];
+const VALENCE_2: &[u8] = &[2];
+const VALENCE_3: &[u8] = &[3];
+const VALENCE_4: &[u8] = &[4];
+const VALENCE_3_5: &[u8] = &[3, 5];
+const VALENCE_2_4_6: &[u8] = &[2, 4, 6];
+
+const fn build_valence_table() -> [&'static [u8]; 119] {
+    let mut table = [VALENCE_EMPTY; 119];
+    table[1] = VALENCE_1; // H
+    table[5] = VALENCE_3; // B
+    table[6] = VALENCE_4; // C
+    table[7] = VALENCE_3_5; // N
+    table[8] = VALENCE_2; // O
+    table[9] = VALENCE_1; // F
+    table[14] = VALENCE_4; // Si
+    table[15] = VALENCE_3_5; // P
+    table[16] = VALENCE_2_4_6; // S
+    table[17] = VALENCE_1; // Cl
+    table[35] = VALENCE_1; // Br
+    table[53] = VALENCE_1; // I
+    table
+}
+
+const VALENCE_TABLE: [&[u8]; 119] = build_valence_table();
+
 #[inline]
 pub const fn get_valences(atomic_number: u8) -> &'static [u8] {
-    match atomic_number {
-        1 => &[1],        // H
-        5 => &[3],        // B
-        6 => &[4],        // C
-        7 => &[3, 5],     // N
-        8 => &[2],        // O
-        9 => &[1],        // F
-        14 => &[4],       // Si
-        15 => &[3, 5],    // P
-        16 => &[2, 4, 6], // S
-        17 => &[1],       // Cl
-        35 => &[1],       // Br
-        53 => &[1],       // I
-        _ => &[],         // Unknown/metal
+    if (atomic_number as usize) < VALENCE_TABLE.len() {
+        VALENCE_TABLE[atomic_number as usize]
+    } else {
+        VALENCE_EMPTY
     }
 }
 
@@ -227,12 +244,40 @@ pub const fn get_aromatic_valences(atomic_number: u8) -> &'static [u8] {
 /// Number of valence (outer shell) electrons for an element.
 /// Returns `true` if this element is a transition metal with no default valence.
 /// These elements can form dative/coordinate bonds with donor atoms (N, O, S, P).
+const fn build_transition_metal_mask() -> [bool; 119] {
+    let mut mask = [false; 119];
+    let mut z = 21usize;
+    while z <= 30 {
+        mask[z] = true;
+        z += 1;
+    }
+    z = 39usize;
+    while z <= 48 {
+        mask[z] = true;
+        z += 1;
+    }
+    z = 57usize;
+    while z <= 80 {
+        mask[z] = true;
+        z += 1;
+    }
+    z = 89usize;
+    while z <= 99 {
+        mask[z] = true;
+        z += 1;
+    }
+    mask
+}
+
+const TRANSITION_METAL_MASK: [bool; 119] = build_transition_metal_mask();
+
 #[inline]
 pub const fn is_transition_metal(atomic_number: u8) -> bool {
-    matches!(
-        atomic_number,
-        21..=30 | 39..=48 | 57..=80 | 89..=99
-    )
+    if (atomic_number as usize) < TRANSITION_METAL_MASK.len() {
+        TRANSITION_METAL_MASK[atomic_number as usize]
+    } else {
+        false
+    }
 }
 
 /// Used for calculating total valence electron count in molecules.
@@ -242,8 +287,7 @@ pub const fn is_transition_metal(atomic_number: u8) -> bool {
 /// - C (6): 4 valence electrons
 /// - N (7): 5 valence electrons
 /// - O (8): 6 valence electrons
-#[inline]
-pub const fn outer_electrons(atomic_number: u8) -> u8 {
+const fn compute_outer_electrons_value(atomic_number: u8) -> u8 {
     match atomic_number {
         1 => 1,  // H
         2 => 2,  // He
@@ -324,6 +368,27 @@ pub const fn outer_electrons(atomic_number: u8) -> u8 {
                 8
             }
         }
+    }
+}
+
+const fn build_outer_electrons_table() -> [u8; 119] {
+    let mut table = [0u8; 119];
+    let mut z = 1usize;
+    while z < 119 {
+        table[z] = compute_outer_electrons_value(z as u8);
+        z += 1;
+    }
+    table
+}
+
+const OUTER_ELECTRONS_TABLE: [u8; 119] = build_outer_electrons_table();
+
+#[inline]
+pub const fn outer_electrons(atomic_number: u8) -> u8 {
+    if (atomic_number as usize) < OUTER_ELECTRONS_TABLE.len() {
+        OUTER_ELECTRONS_TABLE[atomic_number as usize]
+    } else {
+        0
     }
 }
 

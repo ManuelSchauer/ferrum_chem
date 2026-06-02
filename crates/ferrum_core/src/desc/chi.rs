@@ -308,6 +308,10 @@ fn sum_cluster_combinations(neighbor_deltas: &[f64], k: usize, center_delta: f64
 }
 
 #[derive(Clone)]
+/// Implements ArmPath.
+///
+/// Function context: `crates/ferrum_core/src/desc/chi.rs`.
+/// Descriptor-layer note: computes molecular properties for ML pipelines.
 struct ArmPath {
     atoms: Vec<AtomIdx>,
     prod: f64,
@@ -812,7 +816,7 @@ impl Descriptor for ChiIndices {
     fn calculate(
         &self,
         mol: &mut Molecule,
-        ctx: &mut crate::desc::context::CalculationContext,
+        _ctx: &mut crate::desc::context::CalculationContext,
     ) -> DescriptorValue {
         let mut values = Vec::with_capacity(26);
 

@@ -294,7 +294,7 @@ fn calculate_n_contribution(
 
 /// Fallback formula for nitrogen
 fn fallback_n(n_nbrs: i32, n_hs: i32) -> f64 {
-    let tmp = 30.5 - (n_nbrs as f64) * 8.2 + (n_hs as f64) * 1.5;
+    let tmp = (n_hs as f64).mul_add(1.5, (n_nbrs as f64).mul_add(-8.2, 30.5));
     tmp.max(0.0)
 }
 
@@ -337,7 +337,7 @@ fn calculate_o_contribution(
 
 /// Fallback formula for oxygen
 fn fallback_o(n_nbrs: i32, n_hs: i32) -> f64 {
-    let tmp = 28.5 - (n_nbrs as f64) * 8.6 + (n_hs as f64) * 1.5;
+    let tmp = (n_hs as f64).mul_add(1.5, (n_nbrs as f64).mul_add(-8.6, 28.5));
     tmp.max(0.0)
 }
 
@@ -769,7 +769,7 @@ impl Descriptor for Tpsa {
     fn calculate(
         &self,
         mol: &mut Molecule,
-        ctx: &mut crate::desc::context::CalculationContext,
+        _ctx: &mut crate::desc::context::CalculationContext,
     ) -> DescriptorValue {
         let tpsa = compute_tpsa_cached(mol, false) as f32;
         DescriptorValue::Float(tpsa)

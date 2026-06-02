@@ -125,7 +125,7 @@ impl Descriptor for HBondDonor {
     fn calculate(
         &self,
         mol: &mut Molecule,
-        ctx: &mut crate::desc::context::CalculationContext,
+        _ctx: &mut crate::desc::context::CalculationContext,
     ) -> DescriptorValue {
         DescriptorValue::Int(compute_hbond_donors_cached(mol))
     }
@@ -152,7 +152,7 @@ impl Descriptor for HBondAcceptor {
     fn calculate(
         &self,
         mol: &mut Molecule,
-        ctx: &mut crate::desc::context::CalculationContext,
+        _ctx: &mut crate::desc::context::CalculationContext,
     ) -> DescriptorValue {
         DescriptorValue::Int(compute_hbond_acceptors_cached(mol))
     }

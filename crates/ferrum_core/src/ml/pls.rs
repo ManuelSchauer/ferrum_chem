@@ -35,7 +35,8 @@
 //! - OECD QSAR validation principles where `Pls` is used in predictive chemistry contexts.
 //! - Code-local source of truth: symbols and tests declared in `crates/ferrum_core/src/ml/pls.rs`.
 
-use ndarray::{Array1, Array2, Axis, Zip};
+use ndarray::{Array1, Array2, ArrayView1, ArrayView2, Axis, Zip};
+use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
 /// PLS Regression model (PLS1 — single y variable).
@@ -63,7 +64,7 @@ pub struct PlsRegression {
 
 impl PlsRegression {
     /// Fit PLS regression using NIPALS algorithm.
-    pub fn fit(features: &Array2<f64>, targets: &Array1<f64>, n_components: usize) -> Self {
+    pub fn fit(features: ArrayView2<f64>, targets: ArrayView1<f64>, n_components: usize) -> Self {
         let n = features.nrows();
         let p = features.ncols();
         let nc = n_components.min(p).min(n);
@@ -81,7 +82,7 @@ impl PlsRegression {
             x_std[j] = var.sqrt().max(1e-12);
         }
 
-        let mut x = features.clone();
+        let mut x = features.to_owned();
         Zip::from(x.rows_mut()).for_each(|mut row| {
             Zip::from(&mut row)
                 .and(&x_mean)
@@ -122,12 +123,17 @@ impl PlsRegression {
             t_scores.column_mut(a).assign(&t);
 
             // Deflate X and y
-            for i in 0..n {
-                for j in 0..p {
-                    x[[i, j]] -= t[i] * p_loading[j];
-                }
-                y[i] -= t[i] * q;
-            }
+            ndarray::Zip::from(x.rows_mut())
+                .and(&t)
+                .for_each(|mut row, &ti| {
+                    ndarray::Zip::from(&mut row)
+                        .and(&p_loading)
+                        .for_each(|xij, &pj| *xij -= ti * pj);
+                });
+
+            ndarray::Zip::from(&mut y)
+                .and(&t)
+                .for_each(|yi, &ti| *yi -= ti * q);
         }
 
         // Compute regression coefficients: B = W(P'W)^{-1} q
@@ -188,12 +194,12 @@ impl PlsRegression {
     }
 
     /// Predict for multiple samples.
-    pub fn predict(&self, features: &Array2<f64>) -> Array1<f64> {
-        Array1::from_vec(
-            (0..features.nrows())
-                .map(|i| self.predict_one(features.row(i).as_slice().unwrap()))
-                .collect(),
-        )
+    pub fn predict(&self, features: ArrayView2<f64>) -> Array1<f64> {
+        let preds = (0..features.nrows())
+            .into_par_iter()
+            .map(|i| self.predict_one(features.row(i).as_slice().unwrap()))
+            .collect::<Vec<_>>();
+        Array1::from_vec(preds)
     }
 
     /// Predict for a single sample.
@@ -232,8 +238,8 @@ mod tests {
             .map(|r| 2.0 * r[0] + 3.0 * r[1])
             .collect();
 
-        let model = PlsRegression::fit(&features, &targets, 2);
-        let preds = model.predict(&features);
+        let model = PlsRegression::fit(features.view(), targets.view(), 2);
+        let preds = model.predict(features.view());
 
         for (&actual, &pred) in targets.iter().zip(preds.iter()) {
             assert!(
@@ -257,7 +263,7 @@ mod tests {
         .unwrap();
         let targets = array![1.0, 2.0, 3.0, 4.0, 5.0];
 
-        let model = PlsRegression::fit(&features, &targets, 1);
+        let model = PlsRegression::fit(features.view(), targets.view(), 1);
         let pred = model.predict_one(&[3.0, 6.0]);
         assert!((pred - 3.0).abs() < 0.5, "Collinear PLS pred = {pred}");
     }
@@ -278,9 +284,9 @@ mod tests {
         .unwrap();
         let targets = array![1.0, 2.0, 3.0, 3.0, 5.0, 4.0];
 
-        let model = PlsRegression::fit(&features, &targets, 2);
+        let model = PlsRegression::fit(features.view(), targets.view(), 2);
         assert_eq!(model.n_components, 2);
-        let preds = model.predict(&features);
+        let preds = model.predict(features.view());
         assert_eq!(preds.len(), 6);
     }
 }

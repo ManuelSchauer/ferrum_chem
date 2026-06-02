@@ -444,7 +444,7 @@ impl Descriptor for LogP {
     fn calculate(
         &self,
         mol: &mut Molecule,
-        ctx: &mut crate::desc::context::CalculationContext,
+        _ctx: &mut crate::desc::context::CalculationContext,
     ) -> super::typed::DescriptorValue {
         let (logp, _) = compute_logp_cached(mol);
         super::typed::DescriptorValue::Float(logp as f32)
@@ -475,7 +475,7 @@ impl Descriptor for MolarRefractivity {
     fn calculate(
         &self,
         mol: &mut Molecule,
-        ctx: &mut crate::desc::context::CalculationContext,
+        _ctx: &mut crate::desc::context::CalculationContext,
     ) -> super::typed::DescriptorValue {
         super::typed::DescriptorValue::Float(compute_molar_refractivity_cached(mol) as f32)
     }

@@ -120,7 +120,7 @@ impl Descriptor for APol {
     fn calculate(
         &self,
         mol: &mut Molecule,
-        ctx: &mut crate::desc::context::CalculationContext,
+        _ctx: &mut crate::desc::context::CalculationContext,
     ) -> DescriptorValue {
         let h_pol = POLARIZABILITY[1];
         let mut sum = 0.0f32;
@@ -151,7 +151,7 @@ impl Descriptor for BPol {
     fn calculate(
         &self,
         mol: &mut Molecule,
-        ctx: &mut crate::desc::context::CalculationContext,
+        _ctx: &mut crate::desc::context::CalculationContext,
     ) -> DescriptorValue {
         let mut sum = 0.0f32;
         for bond in &mol.bonds {

@@ -50,6 +50,10 @@ use once_cell::sync::Lazy;
 use smallvec::SmallVec;
 
 #[derive(Clone)]
+/// Implements QueryScreen.
+///
+/// Function context: `crates/ferrum_core/src/desc/maccs.rs`.
+/// Descriptor-layer note: computes molecular properties for ML pipelines.
 struct QueryScreen {
     min_atoms: usize,
     min_bonds: usize,
@@ -58,12 +62,20 @@ struct QueryScreen {
 }
 
 #[derive(Clone)]
+/// Implements ScreenedQuery.
+///
+/// Function context: `crates/ferrum_core/src/desc/maccs.rs`.
+/// Descriptor-layer note: computes molecular properties for ML pipelines.
 struct ScreenedQuery {
     query: QueryGraph,
     screen: QueryScreen,
 }
 
 #[derive(Clone, Copy)]
+/// Implements MoleculeScreenStats.
+///
+/// Function context: `crates/ferrum_core/src/desc/maccs.rs`.
+/// Descriptor-layer note: computes molecular properties for ML pipelines.
 struct MoleculeScreenStats {
     num_atoms: usize,
     num_bonds: usize,

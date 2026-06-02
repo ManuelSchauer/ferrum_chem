@@ -36,7 +36,8 @@
 //! - OECD QSAR validation principles where `Elastic Net` is used in predictive chemistry contexts.
 //! - Code-local source of truth: symbols and tests declared in `crates/ferrum_core/src/ml/elastic_net.rs`.
 
-use ndarray::{Array1, Array2, Axis};
+use ndarray::{Array1, ArrayView1, ArrayView2, Axis};
+use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
 /// Elastic Net regression model.
@@ -72,8 +73,8 @@ impl ElasticNet {
     /// - `max_iter`: maximum iterations
     /// - `tol`: convergence tolerance
     pub fn fit(
-        features: &Array2<f64>,
-        targets: &Array1<f64>,
+        features: ArrayView2<f64>,
+        targets: ArrayView1<f64>,
         alpha: f64,
         l1_ratio: f64,
         max_iter: usize,
@@ -95,7 +96,7 @@ impl ElasticNet {
             x_std[j] = var.sqrt().max(1e-12);
         }
 
-        let mut x = features.clone();
+        let mut x = features.to_owned();
         ndarray::Zip::from(x.rows_mut()).for_each(|mut row| {
             ndarray::Zip::from(&mut row)
                 .and(&x_mean)
@@ -125,28 +126,22 @@ impl ElasticNet {
             for j in 0..p {
                 let old_beta = beta[j];
 
-                // Partial residual (add back contribution of feature j)
-                if old_beta != 0.0 {
-                    let col_j = x.column(j);
-                    ndarray::Zip::from(&mut residual)
-                        .and(col_j)
-                        .for_each(|r, &xij| *r += xij * old_beta);
-                }
-
-                // Compute the simple least squares update
-                let rho = x.column(j).dot(&residual);
+                // rho_j = X_j^T * (r + X_j * old_beta) 
+                //       = X_j^T * r + X_j^T * X_j * old_beta
+                let rho = x.column(j).dot(&residual) + x_sq[j] * old_beta;
 
                 // Soft thresholding (proximal operator for L1)
                 let new_beta = soft_threshold(rho, l1_penalty * n) / (x_sq[j] + l2_penalty * n);
 
                 beta[j] = new_beta;
 
-                // Update residual
-                if new_beta != 0.0 {
+                // Update residual only if beta changed
+                let delta = old_beta - new_beta;
+                if delta.abs() > 1e-15 {
                     let col_j = x.column(j);
                     ndarray::Zip::from(&mut residual)
                         .and(col_j)
-                        .for_each(|r, &xij| *r -= xij * new_beta);
+                        .for_each(|r, &xij| *r += xij * delta);
                 }
 
                 max_change = max_change.max((new_beta - old_beta).abs());
@@ -181,12 +176,12 @@ impl ElasticNet {
     }
 
     /// Convenience constructor for pure LASSO (l1_ratio = 1.0).
-    pub fn lasso(features: &Array2<f64>, targets: &Array1<f64>, alpha: f64) -> Self {
+    pub fn lasso(features: ArrayView2<f64>, targets: ArrayView1<f64>, alpha: f64) -> Self {
         Self::fit(features, targets, alpha, 1.0, 1000, 1e-6)
     }
 
     /// Convenience constructor for pure Ridge (l1_ratio = 0.0).
-    pub fn ridge(features: &Array2<f64>, targets: &Array1<f64>, alpha: f64) -> Self {
+    pub fn ridge(features: ArrayView2<f64>, targets: ArrayView1<f64>, alpha: f64) -> Self {
         Self::fit(features, targets, alpha, 0.0, 1000, 1e-6)
     }
 
@@ -200,12 +195,12 @@ impl ElasticNet {
     }
 
     /// Predict for multiple samples.
-    pub fn predict(&self, features: &Array2<f64>) -> Array1<f64> {
-        Array1::from_vec(
-            (0..features.nrows())
-                .map(|i| self.predict_one(features.row(i).as_slice().unwrap()))
-                .collect(),
-        )
+    pub fn predict(&self, features: ArrayView2<f64>) -> Array1<f64> {
+        let preds = (0..features.nrows())
+            .into_par_iter()
+            .map(|i| self.predict_one(features.row(i).as_slice().unwrap()))
+            .collect::<Vec<_>>();
+        Array1::from_vec(preds)
     }
 
     /// Number of non-zero coefficients (selected features).
@@ -250,8 +245,8 @@ mod tests {
             .map(|r| 2.0 * r[0] + 3.0 * r[1])
             .collect();
 
-        let model = ElasticNet::fit(&features, &targets, 0.001, 0.5, 1000, 1e-8);
-        let preds = model.predict(&features);
+        let model = ElasticNet::fit(features.view(), targets.view(), 0.001, 0.5, 1000, 1e-8);
+        let preds = model.predict(features.view());
 
         for (&actual, &pred) in targets.iter().zip(preds.iter()) {
             assert!(
@@ -278,7 +273,7 @@ mod tests {
         .unwrap();
         let targets = array![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0];
 
-        let model = ElasticNet::lasso(&features, &targets, 0.1);
+        let model = ElasticNet::lasso(features.view(), targets.view(), 0.1);
 
         // Feature 0 should have the largest coefficient
         assert!(
@@ -306,7 +301,7 @@ mod tests {
         .unwrap();
         let targets = array![3.0, 5.0, 7.0, 9.0, 11.0];
 
-        let model = ElasticNet::ridge(&features, &targets, 0.01);
+        let model = ElasticNet::ridge(features.view(), targets.view(), 0.01);
         // Ridge should keep all features (non-zero)
         assert!(model.coefficients[0].abs() > 1e-6);
         assert!(model.coefficients[1].abs() > 1e-6);
@@ -339,7 +334,7 @@ mod tests {
         .unwrap();
         let targets = array![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
 
-        let model = ElasticNet::lasso(&features, &targets, 0.5);
+        let model = ElasticNet::lasso(features.view(), targets.view(), 0.5);
         // Constant feature (col 1) should be dropped
         assert!(
             !model.selected_features.contains(&1),

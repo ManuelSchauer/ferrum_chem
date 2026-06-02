@@ -169,6 +169,49 @@ impl DescriptorValue {
         }
     }
 
+    /// Write directly to a pre-allocated f64 slice to avoid intermediate Vec allocations.
+    /// Returns the number of elements written.
+    pub fn to_f64_slice(&self, slice: &mut [f64]) -> usize {
+        match self {
+            DescriptorValue::Int(v) => {
+                slice[0] = *v as f64;
+                1
+            }
+            DescriptorValue::Float(v) => {
+                slice[0] = *v as f64;
+                1
+            }
+            DescriptorValue::Float64(v) => {
+                slice[0] = *v;
+                1
+            }
+            DescriptorValue::IntVec(v) => {
+                for (i, &val) in v.iter().enumerate() {
+                    slice[i] = val as f64;
+                }
+                v.len()
+            }
+            DescriptorValue::IntU16Vec(v) => {
+                for (i, &val) in v.iter().enumerate() {
+                    slice[i] = val as f64;
+                }
+                v.len()
+            }
+            DescriptorValue::FloatVec(v) => {
+                for (i, &val) in v.iter().enumerate() {
+                    slice[i] = val as f64;
+                }
+                v.len()
+            }
+            DescriptorValue::Binary(bv) => {
+                for (i, bit) in bv.iter().by_vals().enumerate() {
+                    slice[i] = if bit { 1.0 } else { 0.0 };
+                }
+                bv.len()
+            }
+        }
+    }
+
     /// Number of float values this will produce when converted to ML vector.
     ///
     /// # Example
@@ -385,6 +428,44 @@ pub fn build_ml_vectors_parallel(
         .collect()
 }
 
+/// Batch ML matrix builder — returns a pre-allocated f64 Array2 using zero-copy slice iteration.
+pub fn build_ml_matrix_parallel(
+    molecules: &mut [Molecule],
+    descriptors: &[Box<dyn Descriptor>],
+) -> ndarray::Array2<f64> {
+    use rayon::prelude::*;
+    let n_samples = molecules.len();
+    if n_samples == 0 {
+        return ndarray::Array2::zeros((0, 0));
+    }
+    
+    // First, calculate the total length needed per molecule by calculating for the first one
+    // (Assuming all molecules produce the same number of features for a given descriptor set)
+    let mut ctx = crate::desc::context::CalculationContext::new();
+    let n_features: usize = descriptors.iter().map(|d| d.size(&mut molecules[0], &mut ctx)).sum();
+
+    let mut matrix = ndarray::Array2::<f64>::zeros((n_samples, n_features));
+
+    // Parallel fill row by row
+    matrix
+        .as_slice_mut()
+        .unwrap()
+        .par_chunks_mut(n_features)
+        .zip(molecules.par_iter_mut())
+        .for_each(|(slice, mol)| {
+            let mut local_ctx = crate::desc::context::CalculationContext::new();
+            let mut offset = 0;
+            
+            for desc in descriptors {
+                let value = desc.calculate(mol, &mut local_ctx);
+                let written = value.to_f64_slice(&mut slice[offset..]);
+                offset += written;
+            }
+        });
+
+    matrix
+}
+
 // ---------------------------------------------------------------------------
 // Thread safety assertions
 // ---------------------------------------------------------------------------
@@ -577,6 +658,10 @@ mod tests {
     }
 
     // Example Descriptor implementation for testing
+    /// Implements ExampleDescriptor.
+    ///
+    /// Function context: `crates/ferrum_core/src/desc/typed.rs`.
+    /// Descriptor-layer note: computes molecular properties for ML pipelines.
     struct ExampleDescriptor;
 
     impl Descriptor for ExampleDescriptor {

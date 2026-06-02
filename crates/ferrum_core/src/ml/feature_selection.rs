@@ -34,6 +34,7 @@
 //! - Code-local source of truth: symbols and tests declared in `crates/ferrum_core/src/ml/feature_selection.rs`.
 
 use ndarray::{Array2, Axis};
+use rayon::prelude::*;
 
 /// Remove features with variance below a threshold.
 ///
@@ -79,23 +80,26 @@ pub fn correlation_filter(data: &Array2<f64>, threshold: f64) -> Vec<usize> {
         std_devs[j] = var.sqrt().max(1e-12);
     }
 
-    // Compute packed upper-triangle correlation matrix.
-    let upper_len = n_feat * (n_feat + 1) / 2;
-    let mut corr_upper = vec![0.0f64; upper_len];
+    // Compute packed upper-triangle correlation matrix in parallel.
     let mut row_start = vec![0usize; n_feat];
     for (i, slot) in row_start.iter_mut().enumerate() {
         *slot = i * n_feat - (i * i.saturating_sub(1)) / 2;
     }
-    for i in 0..n_feat {
-        let row_start_i = row_start[i];
-        corr_upper[row_start_i] = 1.0;
-        let col_i = centered_data.column(i);
-        for j in (i + 1)..n_feat {
-            let cov = col_i.dot(&centered_data.column(j)) / n;
-            let r = cov / (std_devs[i] * std_devs[j]);
-            corr_upper[row_start_i + (j - i)] = r;
-        }
-    }
+    
+    let corr_upper: Vec<f64> = (0..n_feat)
+        .into_par_iter()
+        .flat_map(|i| {
+            let col_i = centered_data.column(i);
+            let mut row = Vec::with_capacity(n_feat - i);
+            row.push(1.0);
+            for j in (i + 1)..n_feat {
+                let cov = col_i.dot(&centered_data.column(j)) / n;
+                let r = cov / (std_devs[i] * std_devs[j]);
+                row.push(r);
+            }
+            row
+        })
+        .collect();
 
     // Greedy removal: find pairs above threshold, remove the one with higher mean |corr|
     let mut removed = vec![false; n_feat];

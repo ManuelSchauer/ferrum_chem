@@ -42,6 +42,10 @@ use ferrum_core::desc::aromatic_ring_count::compute_aromatic_ring_count;
 use ferrum_core::io::smiles::parse_smiles;
 use ferrum_core::types::BondType;
 
+/// Implements RepresentativeCase.
+///
+/// Function context: `crates/ferrum_core/tests/test_specific_molecules.rs`.
+/// Mol-layer note: core graph data structure component.
 struct RepresentativeCase {
     id: &'static str,
     smiles: &'static str,
@@ -164,7 +168,7 @@ fn assert_aromatic_state_consistent(case: &RepresentativeCase) {
         .into_iter()
         .filter(|ring| {
             ring.iter()
-                .all(|&bond_idx| mol.bonds[bond_idx].is_aromatic())
+                .all(|&bond_idx| mol.bonds[bond_idx as usize].is_aromatic())
         })
         .count() as u32;
     assert_eq!(

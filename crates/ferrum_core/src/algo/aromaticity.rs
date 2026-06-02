@@ -48,11 +48,19 @@ use rustc_hash::FxHashSet;
 use std::collections::VecDeque;
 
 #[derive(Clone, PartialEq, Eq, Hash)]
+/// Implements RingDedupKey.
+///
+/// Function context: `crates/ferrum_core/src/algo/aromaticity.rs`.
+/// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
 enum RingDedupKey {
     Small(u128),
     Large(Vec<AtomIdx>),
 }
 
+/// Implements ShortestPathWorkspace.
+///
+/// Function context: `crates/ferrum_core/src/algo/aromaticity.rs`.
+/// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
 struct ShortestPathWorkspace {
     dist: Vec<usize>,
     prev: Vec<usize>,
@@ -60,6 +68,10 @@ struct ShortestPathWorkspace {
 }
 
 impl ShortestPathWorkspace {
+    /// Implements new.
+    ///
+    /// Function context: `crates/ferrum_core/src/algo/aromaticity.rs`.
+    /// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
     fn new(n_atoms: usize) -> Self {
         Self {
             dist: vec![usize::MAX; n_atoms],
@@ -68,6 +80,10 @@ impl ShortestPathWorkspace {
         }
     }
 
+    /// Implements prepare.
+    ///
+    /// Function context: `crates/ferrum_core/src/algo/aromaticity.rs`.
+    /// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
     fn prepare(&mut self, n_atoms: usize, start: usize) {
         if self.dist.len() != n_atoms {
             self.dist.clear();
@@ -255,6 +271,10 @@ pub fn perceive_aromaticity(mol: &mut Molecule) {
 }
 
 #[derive(Clone)]
+/// Implements KekulizedPerimeter.
+///
+/// Function context: `crates/ferrum_core/src/algo/aromaticity.rs`.
+/// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
 struct KekulizedPerimeter {
     ring: Vec<AtomIdx>,
     chord_bond_idx: usize,

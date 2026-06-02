@@ -66,6 +66,9 @@ def safe_calc(func, mol, default="NaN"):
 
 
 def main():
+    """
+    Implements main.
+    """
     molecules = []
     with open(INPUT_CSV) as f:
         reader = csv.DictReader(f)

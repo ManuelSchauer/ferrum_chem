@@ -312,7 +312,7 @@ impl Descriptor for CarbonTypes {
     fn calculate(
         &self,
         mol: &mut Molecule,
-        ctx: &mut crate::desc::context::CalculationContext,
+        _ctx: &mut crate::desc::context::CalculationContext,
     ) -> DescriptorValue {
         use crate::types::BondType;
 

@@ -95,14 +95,16 @@ fn diagnostic_cnp0515307_2() {
     let mut rings_with_44_51 = Vec::new();
 
     for (ri, ring_bonds) in ring_basis.iter().enumerate() {
-        let all_aromatic = ring_bonds.iter().all(|&bi| mol.bonds[bi].is_aromatic());
+        let all_aromatic = ring_bonds
+            .iter()
+            .all(|&bi| mol.bonds[bi as usize].is_aromatic());
 
         if all_aromatic {
             aromatic_ring_count += 1;
             let ring_atoms: Vec<usize> = ring_bonds
                 .iter()
                 .flat_map(|&bi| {
-                    let b = &mol.bonds[bi];
+                    let b = &mol.bonds[bi as usize];
                     vec![b.source as usize, b.target as usize]
                 })
                 .collect::<HashSet<_>>()
@@ -110,7 +112,7 @@ fn diagnostic_cnp0515307_2() {
                 .collect();
 
             let has_44_51 = ring_bonds.iter().any(|&bi| {
-                let b = &mol.bonds[bi];
+                let b = &mol.bonds[bi as usize];
                 (b.source == 44 && b.target == 51) || (b.source == 51 && b.target == 44)
             });
 

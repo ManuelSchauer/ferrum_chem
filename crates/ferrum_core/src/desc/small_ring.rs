@@ -41,7 +41,10 @@
 //! - Repository unit and parity tests covering `Small Ring` behavior and edge molecules.
 //! - Code-local source of truth: symbols and tests declared in `crates/ferrum_core/src/desc/small_ring.rs`.
 
-use crate::algo::rings::{cached_symmetrized_sssr_bonds_ref, ensure_symmetrized_sssr_bonds_cached};
+use crate::algo::rings::{
+    cached_symmetrized_sssr_bonds_ref, ensure_symmetrized_sssr_bonds_cached,
+    find_symmetrized_sssr_bonds,
+};
 use crate::desc::typed::{Descriptor, DescriptorValue};
 use crate::mol::molecule::Molecule;
 use crate::types::AtomIdx;
@@ -78,7 +81,7 @@ impl Descriptor for SmallRingDescriptor {
     fn calculate(
         &self,
         mol: &mut Molecule,
-        ctx: &mut crate::desc::context::CalculationContext,
+        _ctx: &mut crate::desc::context::CalculationContext,
     ) -> DescriptorValue {
         let mut counts = vec![0u16; 11];
 
@@ -142,195 +145,97 @@ fn compute_total_ring_count(mol: &mut Molecule) -> usize {
 
 /// Find all small rings in a molecule (sizes min_size to max_size).
 fn find_small_rings(mol: &Molecule, min_size: usize, max_size: usize) -> Vec<Vec<AtomIdx>> {
-    let n_atoms = mol.num_atoms();
-    if n_atoms == 0 {
-        return Vec::new();
-    }
-
-    // Mark atoms in rings using ring blocks
-    let ring_blocks = identify_ring_blocks(mol);
-
-    let mut rings = Vec::new();
-
-    // Search for rings of each size
-    for ring_size in min_size..=max_size {
-        for start_atom in 0..n_atoms {
-            let start_idx = start_atom as AtomIdx;
-
-            // Skip if not in a ring
-            if ring_blocks[start_atom] == 0 {
-                continue;
-            }
-
-            // Try to find a ring starting from this atom
-            let mut path = vec![start_idx];
-            let block_id = ring_blocks[start_atom];
-
-            find_rings_recursive(
-                mol,
-                &mut path,
-                ring_size,
-                start_idx,
-                block_id,
-                &ring_blocks,
-                &mut rings,
-            );
-        }
-    }
-
-    // Deduplicate rings
-    deduplicate_rings(rings)
+    ring_atom_cycles_from_symmetrized(mol)
+        .into_iter()
+        .filter(|ring| ring.len() >= min_size && ring.len() <= max_size)
+        .collect()
 }
 
-/// Recursively search for rings of a specific size.
-fn find_rings_recursive(
-    mol: &Molecule,
-    path: &mut Vec<AtomIdx>,
-    target_size: usize,
-    start_atom: AtomIdx,
-    block_id: usize,
-    ring_blocks: &[usize],
-    rings: &mut Vec<Vec<AtomIdx>>,
-) {
-    let current = *path.last().unwrap();
-
-    // If we've reached target size, check if we can close the ring
-    if path.len() == target_size {
-        // Check if current atom is connected to start
-        for &bond_idx in &mol.adjacency[current as usize] {
+/// Convert symmetrized ring bond cycles to per-ring atom cycles.
+fn ring_atom_cycles_from_symmetrized(mol: &Molecule) -> Vec<Vec<AtomIdx>> {
+    let mut out = Vec::new();
+    for ring_bonds in find_symmetrized_sssr_bonds(mol) {
+        let mut ring_atoms = Vec::with_capacity(ring_bonds.len());
+        for &bond_idx in &ring_bonds {
             let bond = &mol.bonds[bond_idx as usize];
-            let neighbor = if bond.source == current {
-                bond.target
-            } else {
-                bond.source
-            };
-
-            if neighbor == start_atom {
-                // Found a ring!
-                rings.push(path.clone());
-                return;
+            if !ring_atoms.contains(&bond.source) {
+                ring_atoms.push(bond.source);
+            }
+            if !ring_atoms.contains(&bond.target) {
+                ring_atoms.push(bond.target);
             }
         }
-        return;
-    }
-
-    // Not at target size yet, explore neighbors
-    for &bond_idx in &mol.adjacency[current as usize] {
-        let bond = &mol.bonds[bond_idx as usize];
-        let neighbor = if bond.source == current {
-            bond.target
-        } else {
-            bond.source
-        };
-
-        // Skip if not in same ring block
-        if ring_blocks[neighbor as usize] != block_id {
-            continue;
+        if ring_atoms.len() >= 3 {
+            out.push(ring_atoms);
         }
-
-        // Skip if already in path (except we allow start atom at the end)
-        if path.len() < target_size && path.contains(&neighbor) {
-            continue;
-        }
-
-        // Add to path and recurse
-        path.push(neighbor);
-        find_rings_recursive(
-            mol,
-            path,
-            target_size,
-            start_atom,
-            block_id,
-            ring_blocks,
-            rings,
-        );
-        path.pop();
     }
+    deduplicate_rings(out)
 }
 
 /// Identify which atoms belong to which ring blocks (ring systems).
 /// Returns a vector where 0 = not in ring, 1..N = ring block ID.
 fn identify_ring_blocks(mol: &Molecule) -> Vec<usize> {
     let n_atoms = mol.num_atoms();
-    let mut ring_blocks = vec![0; n_atoms];
-    let mut visited = vec![false; n_atoms];
+    if n_atoms == 0 {
+        return Vec::new();
+    }
 
-    // Use DFS to find cycles and mark ring blocks
-    let mut path = Vec::new();
-    let mut next_block_id = 1;
+    let ring_cycles = find_symmetrized_sssr_bonds(mol);
+    if ring_cycles.is_empty() {
+        return vec![0; n_atoms];
+    }
+
+    let mut ring_bond_mask = vec![false; mol.num_bonds()];
+    for ring in &ring_cycles {
+        for &bond_idx in ring {
+            ring_bond_mask[bond_idx as usize] = true;
+        }
+    }
+
+    let mut ring_blocks = vec![0usize; n_atoms];
+    let mut visited = vec![false; n_atoms];
+    let mut block_id = 1usize;
+    let mut stack = Vec::new();
 
     for start in 0..n_atoms {
         if visited[start] {
             continue;
         }
-
-        path.clear();
-        path.push(start as AtomIdx);
-        visited[start] = true;
-
-        dfs_mark_rings(
-            mol,
-            &mut path,
-            &mut visited,
-            &mut ring_blocks,
-            &mut next_block_id,
-        );
-    }
-
-    ring_blocks
-}
-
-/// DFS helper to mark ring blocks.
-fn dfs_mark_rings(
-    mol: &Molecule,
-    path: &mut Vec<AtomIdx>,
-    visited: &mut [bool],
-    ring_blocks: &mut [usize],
-    next_block_id: &mut usize,
-) {
-    let current = *path.last().unwrap();
-
-    for &bond_idx in &mol.adjacency[current as usize] {
-        let bond = &mol.bonds[bond_idx as usize];
-        let neighbor = if bond.source == current {
-            bond.target
-        } else {
-            bond.source
-        };
-
-        if path.len() >= 2 && neighbor == path[path.len() - 2] {
-            // Skip back edge to parent
+        let has_ring_bond = mol.adjacency[start]
+            .iter()
+            .any(|&bond_idx| ring_bond_mask[bond_idx as usize]);
+        if !has_ring_bond {
             continue;
         }
 
-        if visited[neighbor as usize] {
-            // Found a cycle - mark all atoms in the cycle
-            if let Some(pos) = path.iter().position(|&a| a == neighbor) {
-                let block_id = *next_block_id;
-                *next_block_id += 1;
+        stack.clear();
+        stack.push(start as AtomIdx);
+        visited[start] = true;
+        ring_blocks[start] = block_id;
 
-                for &atom in &path[pos..] {
-                    if ring_blocks[atom as usize] == 0 {
-                        ring_blocks[atom as usize] = block_id;
-                    } else {
-                        // Merge ring blocks
-                        let old_id = ring_blocks[atom as usize];
-                        for rb in ring_blocks.iter_mut() {
-                            if *rb == old_id {
-                                *rb = block_id;
-                            }
-                        }
-                    }
+        while let Some(current) = stack.pop() {
+            for &bond_idx in &mol.adjacency[current as usize] {
+                if !ring_bond_mask[bond_idx as usize] {
+                    continue;
+                }
+                let bond = &mol.bonds[bond_idx as usize];
+                let neighbor = if bond.source == current {
+                    bond.target
+                } else {
+                    bond.source
+                };
+                if !visited[neighbor as usize] {
+                    visited[neighbor as usize] = true;
+                    ring_blocks[neighbor as usize] = block_id;
+                    stack.push(neighbor);
                 }
             }
-        } else {
-            // Continue DFS
-            visited[neighbor as usize] = true;
-            path.push(neighbor);
-            dfs_mark_rings(mol, path, visited, ring_blocks, next_block_id);
-            path.pop();
         }
+
+        block_id += 1;
     }
+
+    ring_blocks
 }
 
 /// Count the number of distinct ring blocks (ring systems).

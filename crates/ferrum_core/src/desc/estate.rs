@@ -71,14 +71,14 @@ fn intrinsic_states(mol: &Molecule) -> Vec<f64> {
                 return 0.0;
             }
 
-            let n = principal_quantum_number(an) as f64;
+            let _n = principal_quantum_number(an) as f64;
             let zv = outer_electrons(an) as f64;
             let h = atom.total_h() as f64;
-            let delta = mol.get_degree(0) as f64; // placeholder, fixed below
-            let delta_v = zv - h;
+            let _delta = mol.get_degree(0) as f64; // placeholder, fixed below
+            let _delta_v = zv - h;
 
             // σ = number of sigma bonds to heavy atoms = degree
-            let sigma = 0.0; // placeholder
+            let _sigma = 0.0; // placeholder
             0.0 // placeholder
         })
         .collect()
@@ -212,23 +212,23 @@ fn classify_atom(mol: &Molecule, idx: usize) -> Option<usize> {
             // Carbon
             if arom {
                 match (deg, h) {
-                    (2, 1) => Some(ESTATE_aCH),         // aromatic CH
-                    (2, 0) | (3, 0) => Some(ESTATE_aC), // aromatic C (substituted)
-                    _ => Some(ESTATE_aCH),
+                    (2, 1) => Some(ESTATE_A_CH),         // aromatic CH
+                    (2, 0) | (3, 0) => Some(ESTATE_A_C), // aromatic C (substituted)
+                    _ => Some(ESTATE_A_CH),
                 }
             } else {
                 match (deg, h) {
-                    (1, 3) => Some(ESTATE_sCH3),  // -CH3
-                    (2, 2) => Some(ESTATE_ssCH2), // -CH2-
-                    (3, 1) => Some(ESTATE_sssCH), // >CH-
-                    (4, 0) => Some(ESTATE_ssssC), // >C<
-                    (1, 2) => Some(ESTATE_dCH2),  // =CH2
-                    (2, 1) => Some(ESTATE_dsCH),  // =CH-
-                    (2, 0) => Some(ESTATE_ddC),   // =C= or =C(-)-
-                    (3, 0) => Some(ESTATE_dssC),  // =C<
-                    (1, 1) => Some(ESTATE_tCH),   // ≡CH
-                    (1, 0) => Some(ESTATE_tCH),   // ≡C (terminal)
-                    _ => Some(ESTATE_sCH3),
+                    (1, 3) => Some(ESTATE_S_CH3),  // -CH3
+                    (2, 2) => Some(ESTATE_SS_CH2), // -CH2-
+                    (3, 1) => Some(ESTATE_SSS_CH), // >CH-
+                    (4, 0) => Some(ESTATE_SSSS_C), // >C<
+                    (1, 2) => Some(ESTATE_D_CH2),  // =CH2
+                    (2, 1) => Some(ESTATE_DS_CH),  // =CH-
+                    (2, 0) => Some(ESTATE_DD_C),   // =C= or =C(-)-
+                    (3, 0) => Some(ESTATE_DSS_C),  // =C<
+                    (1, 1) => Some(ESTATE_T_CH),   // ≡CH
+                    (1, 0) => Some(ESTATE_T_CH),   // ≡C (terminal)
+                    _ => Some(ESTATE_S_CH3),
                 }
             }
         }
@@ -236,59 +236,59 @@ fn classify_atom(mol: &Molecule, idx: usize) -> Option<usize> {
             // Nitrogen
             if arom {
                 match (deg, h) {
-                    (2, 0) => Some(ESTATE_aaN),           // aromatic N (pyridine-like)
-                    (2, 1) | (3, 1) => Some(ESTATE_aaNH), // aromatic NH (pyrrole-like)
-                    _ => Some(ESTATE_aaN),
+                    (2, 0) => Some(ESTATE_AA_N),           // aromatic N (pyridine-like)
+                    (2, 1) | (3, 1) => Some(ESTATE_AA_NH), // aromatic NH (pyrrole-like)
+                    _ => Some(ESTATE_AA_N),
                 }
             } else {
                 match (deg, h) {
-                    (1, 2) => Some(ESTATE_sNH2), // -NH2
-                    (2, 1) => Some(ESTATE_ssNH), // >NH
-                    (3, 0) => Some(ESTATE_sssN), // >N-
-                    (1, 0) => Some(ESTATE_tN),   // ≡N or =N
-                    (2, 0) => Some(ESTATE_dsN),  // =N-
-                    _ => Some(ESTATE_sNH2),
+                    (1, 2) => Some(ESTATE_S_NH2), // -NH2
+                    (2, 1) => Some(ESTATE_SS_NH), // >NH
+                    (3, 0) => Some(ESTATE_SSS_N), // >N-
+                    (1, 0) => Some(ESTATE_T_N),   // ≡N or =N
+                    (2, 0) => Some(ESTATE_DS_N),  // =N-
+                    _ => Some(ESTATE_S_NH2),
                 }
             }
         }
         8 => {
             // Oxygen
             if arom {
-                Some(ESTATE_aO)
+                Some(ESTATE_A_O)
             } else {
                 match (deg, h) {
-                    (1, 1) => Some(ESTATE_sOH), // -OH
-                    (2, 0) => Some(ESTATE_ssO), // -O-
-                    (1, 0) => Some(ESTATE_dO),  // =O
-                    _ => Some(ESTATE_sOH),
+                    (1, 1) => Some(ESTATE_S_OH), // -OH
+                    (2, 0) => Some(ESTATE_SS_O), // -O-
+                    (1, 0) => Some(ESTATE_D_O),  // =O
+                    _ => Some(ESTATE_S_OH),
                 }
             }
         }
-        9 => Some(ESTATE_sF),   // F
-        17 => Some(ESTATE_sCl), // Cl
-        35 => Some(ESTATE_sBr), // Br
-        53 => Some(ESTATE_sI),  // I
+        9 => Some(ESTATE_S_F),   // F
+        17 => Some(ESTATE_S_CL), // Cl
+        35 => Some(ESTATE_S_BR), // Br
+        53 => Some(ESTATE_S_I),  // I
         16 => {
             // Sulfur
             if arom {
-                Some(ESTATE_aS)
+                Some(ESTATE_A_S)
             } else {
                 match (deg, h) {
-                    (1, 1) => Some(ESTATE_sSH),
-                    (2, 0) => Some(ESTATE_ssS),
-                    (1, 0) => Some(ESTATE_dS),
-                    (3, 0) => Some(ESTATE_dssS),
-                    (4, 0) => Some(ESTATE_ddssS),
-                    _ => Some(ESTATE_sSH),
+                    (1, 1) => Some(ESTATE_S_SH),
+                    (2, 0) => Some(ESTATE_SS_S),
+                    (1, 0) => Some(ESTATE_D_S),
+                    (3, 0) => Some(ESTATE_DSS_S),
+                    (4, 0) => Some(ESTATE_DDSS_S),
+                    _ => Some(ESTATE_S_SH),
                 }
             }
         }
         15 => {
             // Phosphorus
             match (deg, h) {
-                (3, 0) | (3, _) => Some(ESTATE_sssP),
-                (4, 0) => Some(ESTATE_dsssP),
-                _ => Some(ESTATE_sssP),
+                (3, 0) | (3, _) => Some(ESTATE_SSS_P),
+                (4, 0) => Some(ESTATE_DSSS_P),
+                _ => Some(ESTATE_SSS_P),
             }
         }
         _ => None,
@@ -296,51 +296,51 @@ fn classify_atom(mol: &Molecule, idx: usize) -> Option<usize> {
 }
 
 // E-State atom type indices (44 types)
-const ESTATE_sCH3: usize = 0;
-const ESTATE_ssCH2: usize = 1;
-const ESTATE_sssCH: usize = 2;
-const ESTATE_ssssC: usize = 3;
-const ESTATE_dCH2: usize = 4;
-const ESTATE_dsCH: usize = 5;
-const ESTATE_ddC: usize = 6;
-const ESTATE_dssC: usize = 7;
-const ESTATE_tCH: usize = 8;
-const ESTATE_aCH: usize = 9;
-const ESTATE_aC: usize = 10;
-const ESTATE_sNH2: usize = 11;
-const ESTATE_ssNH: usize = 12;
-const ESTATE_sssN: usize = 13;
-const ESTATE_tN: usize = 14;
-const ESTATE_dsN: usize = 15;
-const ESTATE_aaN: usize = 16;
-const ESTATE_aaNH: usize = 17;
-const ESTATE_sOH: usize = 18;
-const ESTATE_ssO: usize = 19;
-const ESTATE_dO: usize = 20;
-const ESTATE_aO: usize = 21;
-const ESTATE_sF: usize = 22;
-const ESTATE_sCl: usize = 23;
-const ESTATE_sBr: usize = 24;
-const ESTATE_sI: usize = 25;
-const ESTATE_sSH: usize = 26;
-const ESTATE_ssS: usize = 27;
-const ESTATE_dS: usize = 28;
-const ESTATE_aS: usize = 29;
-const ESTATE_dssS: usize = 30;
-const ESTATE_ddssS: usize = 31;
-const ESTATE_sssP: usize = 32;
-const ESTATE_dsssP: usize = 33;
+const ESTATE_S_CH3: usize = 0;
+const ESTATE_SS_CH2: usize = 1;
+const ESTATE_SSS_CH: usize = 2;
+const ESTATE_SSSS_C: usize = 3;
+const ESTATE_D_CH2: usize = 4;
+const ESTATE_DS_CH: usize = 5;
+const ESTATE_DD_C: usize = 6;
+const ESTATE_DSS_C: usize = 7;
+const ESTATE_T_CH: usize = 8;
+const ESTATE_A_CH: usize = 9;
+const ESTATE_A_C: usize = 10;
+const ESTATE_S_NH2: usize = 11;
+const ESTATE_SS_NH: usize = 12;
+const ESTATE_SSS_N: usize = 13;
+const ESTATE_T_N: usize = 14;
+const ESTATE_DS_N: usize = 15;
+const ESTATE_AA_N: usize = 16;
+const ESTATE_AA_NH: usize = 17;
+const ESTATE_S_OH: usize = 18;
+const ESTATE_SS_O: usize = 19;
+const ESTATE_D_O: usize = 20;
+const ESTATE_A_O: usize = 21;
+const ESTATE_S_F: usize = 22;
+const ESTATE_S_CL: usize = 23;
+const ESTATE_S_BR: usize = 24;
+const ESTATE_S_I: usize = 25;
+const ESTATE_S_SH: usize = 26;
+const ESTATE_SS_S: usize = 27;
+const ESTATE_D_S: usize = 28;
+const ESTATE_A_S: usize = 29;
+const ESTATE_DSS_S: usize = 30;
+const ESTATE_DDSS_S: usize = 31;
+const ESTATE_SSS_P: usize = 32;
+const ESTATE_DSSS_P: usize = 33;
 // Additional combined types for summary statistics
-const ESTATE_sNH3: usize = 34; // -NH3+ (charged)
-const ESTATE_dNH: usize = 35; // =NH
-const ESTATE_ssNH2: usize = 36; // >NH2 (charged)
-const ESTATE_tC: usize = 37; // ≡C-
-const ESTATE_ddsC: usize = 38; // ==C-
-const ESTATE_ssssN: usize = 39; // quaternary N
-const ESTATE_sssNH: usize = 40; // >NH (charged?)
-const ESTATE_ssPH: usize = 41;
-const ESTATE_dsssS: usize = 42;
-const ESTATE_ddsssP: usize = 43;
+const ESTATE_S_NH3: usize = 34; // -NH3+ (charged)
+const ESTATE_D_NH: usize = 35; // =NH
+const ESTATE_SS_NH2: usize = 36; // >NH2 (charged)
+const ESTATE_T_C: usize = 37; // ≡C-
+const ESTATE_DDS_C: usize = 38; // ==C-
+const ESTATE_SSSS_N: usize = 39; // quaternary N
+const ESTATE_SSS_NH: usize = 40; // >NH (charged?)
+const ESTATE_SS_PH: usize = 41;
+const ESTATE_DSSS_S: usize = 42;
+const ESTATE_DDSSS_P: usize = 43;
 const NUM_ESTATE_TYPES: usize = 44;
 
 /// E-State atom type names (for CSV headers).
@@ -469,8 +469,8 @@ mod tests {
     fn test_estate_atom_types_ethanol() {
         let v = calc_estate("CCO");
         // v[3 + ESTATE_sCH3] and v[3 + ESTATE_sOH] should be nonzero
-        assert!(v[3 + ESTATE_sCH3] != 0.0, "should have sCH3");
-        assert!(v[3 + ESTATE_sOH] != 0.0, "should have sOH");
+        assert!(v[3 + ESTATE_S_CH3] != 0.0, "should have sCH3");
+        assert!(v[3 + ESTATE_S_OH] != 0.0, "should have sOH");
     }
 
     #[test]
@@ -481,9 +481,9 @@ mod tests {
     fn test_estate_atom_types_benzene() {
         let v = calc_estate("c1ccccc1");
         assert!(
-            v[3 + ESTATE_aCH] != 0.0,
+            v[3 + ESTATE_A_CH] != 0.0,
             "benzene should have aCH: {}",
-            v[3 + ESTATE_aCH]
+            v[3 + ESTATE_A_CH]
         );
     }
 

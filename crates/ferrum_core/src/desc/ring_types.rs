@@ -47,18 +47,18 @@ use crate::types::BondType;
 ///
 /// Function context: `crates/ferrum_core/src/desc/ring_types.rs`.
 /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-fn ring_bonds_all_single(mol: &Molecule, ring: &[usize]) -> bool {
+fn ring_bonds_all_single(mol: &Molecule, ring: &[u16]) -> bool {
     ring.iter()
-        .all(|&bond_idx| mol.bonds[bond_idx].bond_type == BondType::Single)
+        .all(|&bond_idx| mol.bonds[bond_idx as usize].bond_type == BondType::Single)
 }
 
 /// Implements bonds all aromatic.
 ///
 /// Function context: `crates/ferrum_core/src/desc/ring_types.rs`.
 /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-fn ring_bonds_all_aromatic(mol: &Molecule, ring: &[usize]) -> bool {
+fn ring_bonds_all_aromatic(mol: &Molecule, ring: &[u16]) -> bool {
     ring.iter()
-        .all(|&bond_idx| mol.bonds[bond_idx].is_aromatic())
+        .all(|&bond_idx| mol.bonds[bond_idx as usize].is_aromatic())
 }
 
 /// Count number of saturated rings (no double/triple bonds)
@@ -286,7 +286,7 @@ impl Descriptor for RingTypeCounts {
     fn calculate(
         &self,
         mol: &mut Molecule,
-        ctx: &mut crate::desc::context::CalculationContext,
+        _ctx: &mut crate::desc::context::CalculationContext,
     ) -> DescriptorValue {
         ensure_symmetrized_sssr_bonds_cached(mol);
         let rings =

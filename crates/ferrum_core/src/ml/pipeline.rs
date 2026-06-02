@@ -33,14 +33,14 @@
 //! - Breiman (2001), Zou & Hastie (2005), and KNN/PLS literature reflected by selectable model backends.
 //! - OECD QSAR validation principles motivating explicit applicability-domain handling.
 
-use ndarray::{Array1, Array2};
+use ndarray::{Array1, Array2, ArrayView1, ArrayView2};
+use rand::SeedableRng;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::env;
 use std::sync::mpsc;
 
 use crate::ml::ad::{ApplicabilityDomain, KnnDistanceAD};
-use crate::ml::cv;
 use crate::ml::dataset::QsarDataset;
 use crate::ml::elastic_net::ElasticNet;
 use crate::ml::knn::{DistanceMetric, KnnClassifier, KnnRegressor};
@@ -163,12 +163,12 @@ impl QsarPipeline {
     /// ML-layer note: numerical stability and reproducibility are important for comparable model evaluation.
     fn model_predict(&self, features: &Array2<f64>) -> Array1<f64> {
         match &self.model {
-            ModelType::KnnRegressor(m) => m.predict(features),
-            ModelType::KnnClassifier(m) => m.predict(features),
-            ModelType::RandomForestRegressor(m) => m.predict(features),
-            ModelType::RandomForestClassifier(m) => m.predict(features),
-            ModelType::PlsRegression(m) => m.predict(features),
-            ModelType::ElasticNet(m) => m.predict(features),
+            ModelType::KnnRegressor(m) => m.predict(features.view()),
+            ModelType::KnnClassifier(m) => m.predict(features.view()),
+            ModelType::RandomForestRegressor(m) => m.predict(features.view()),
+            ModelType::RandomForestClassifier(m) => m.predict(features.view()),
+            ModelType::PlsRegression(m) => m.predict(features.view()),
+            ModelType::ElasticNet(m) => m.predict(features.view()),
         }
     }
 
@@ -187,12 +187,20 @@ impl QsarPipeline {
 pub struct AutoQsar;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Implements AutoQsarParallelMode.
+///
+/// Function context: `crates/ferrum_core/src/ml/pipeline.rs`.
+/// ML-layer note: optimized for batch computation and zero-allocation passes.
 enum AutoQsarParallelMode {
     Candidate,
     Fold,
 }
 
 impl AutoQsarParallelMode {
+    /// Implements as str.
+    ///
+    /// Function context: `crates/ferrum_core/src/ml/pipeline.rs`.
+    /// ML-layer note: optimized for batch computation and zero-allocation passes.
     fn as_str(self) -> &'static str {
         match self {
             AutoQsarParallelMode::Candidate => "candidate",
@@ -202,6 +210,10 @@ impl AutoQsarParallelMode {
 }
 
 #[derive(Debug, Clone, Copy)]
+/// Implements AutoQsarRuntimeConfig.
+///
+/// Function context: `crates/ferrum_core/src/ml/pipeline.rs`.
+/// ML-layer note: optimized for batch computation and zero-allocation passes.
 struct AutoQsarRuntimeConfig {
     parallel_mode: AutoQsarParallelMode,
     max_threads: Option<usize>,
@@ -209,6 +221,10 @@ struct AutoQsarRuntimeConfig {
     prune_folds: usize,
 }
 
+/// Implements resolve auto qsar runtime config.
+///
+/// Function context: `crates/ferrum_core/src/ml/pipeline.rs`.
+/// ML-layer note: optimized for batch computation and zero-allocation passes.
 fn resolve_auto_qsar_runtime_config(
     parallel_mode_raw: Option<&str>,
     max_threads_raw: Option<&str>,
@@ -248,6 +264,10 @@ fn resolve_auto_qsar_runtime_config(
 }
 
 #[cfg(test)]
+/// Implements make runtime config for tests.
+///
+/// Function context: `crates/ferrum_core/src/ml/pipeline.rs`.
+/// ML-layer note: optimized for batch computation and zero-allocation passes.
 fn make_runtime_config_for_tests(
     mode: AutoQsarParallelMode,
     max_threads: Option<usize>,
@@ -262,6 +282,10 @@ fn make_runtime_config_for_tests(
     }
 }
 
+/// Implements parse parallel mode.
+///
+/// Function context: `crates/ferrum_core/src/ml/pipeline.rs`.
+/// ML-layer note: optimized for batch computation and zero-allocation passes.
 fn parse_parallel_mode(raw: &str) -> AutoQsarParallelMode {
     match raw.to_ascii_lowercase().as_str() {
         "fold" => AutoQsarParallelMode::Fold,
@@ -269,6 +293,10 @@ fn parse_parallel_mode(raw: &str) -> AutoQsarParallelMode {
     }
 }
 
+/// Implements parse runtime config from env.
+///
+/// Function context: `crates/ferrum_core/src/ml/pipeline.rs`.
+/// ML-layer note: optimized for batch computation and zero-allocation passes.
 fn parse_runtime_config_from_env(
     total_candidates: usize,
     n_cv_folds: usize,
@@ -283,6 +311,10 @@ fn parse_runtime_config_from_env(
     )
 }
 
+/// Implements effective prune keep.
+///
+/// Function context: `crates/ferrum_core/src/ml/pipeline.rs`.
+/// ML-layer note: optimized for batch computation and zero-allocation passes.
 fn effective_prune_keep(
     total_candidates: usize,
     n_cv_folds: usize,
@@ -298,6 +330,10 @@ fn effective_prune_keep(
     })
 }
 
+/// Implements build optional thread pool.
+///
+/// Function context: `crates/ferrum_core/src/ml/pipeline.rs`.
+/// ML-layer note: optimized for batch computation and zero-allocation passes.
 fn build_optional_thread_pool(max_threads: Option<usize>) -> Option<rayon::ThreadPool> {
     max_threads.map(|threads| {
         rayon::ThreadPoolBuilder::new()
@@ -307,6 +343,10 @@ fn build_optional_thread_pool(max_threads: Option<usize>) -> Option<rayon::Threa
     })
 }
 
+/// Implements install in pool.
+///
+/// Function context: `crates/ferrum_core/src/ml/pipeline.rs`.
+/// ML-layer note: optimized for batch computation and zero-allocation passes.
 fn install_in_pool<T, F>(pool: Option<&rayon::ThreadPool>, operation: F) -> T
 where
     F: FnOnce() -> T + Send,
@@ -319,6 +359,10 @@ where
 }
 
 #[derive(Debug, Clone, Copy)]
+/// Implements RegressionCandidate.
+///
+/// Function context: `crates/ferrum_core/src/ml/pipeline.rs`.
+/// ML-layer note: optimized for batch computation and zero-allocation passes.
 enum RegressionCandidate {
     Knn {
         k: usize,
@@ -339,6 +383,10 @@ enum RegressionCandidate {
 }
 
 impl RegressionCandidate {
+    /// Implements label.
+    ///
+    /// Function context: `crates/ferrum_core/src/ml/pipeline.rs`.
+    /// ML-layer note: optimized for batch computation and zero-allocation passes.
     fn label(self) -> &'static str {
         match self {
             Self::Knn { label, .. }
@@ -348,6 +396,10 @@ impl RegressionCandidate {
         }
     }
 
+    /// Implements pipeline name.
+    ///
+    /// Function context: `crates/ferrum_core/src/ml/pipeline.rs`.
+    /// ML-layer note: optimized for batch computation and zero-allocation passes.
     fn pipeline_name(self) -> String {
         match self {
             Self::Knn { k, .. } => format!("kNN-{k}"),
@@ -357,6 +409,10 @@ impl RegressionCandidate {
         }
     }
 
+    /// Implements evaluate q2.
+    ///
+    /// Function context: `crates/ferrum_core/src/ml/pipeline.rs`.
+    /// ML-layer note: optimized for batch computation and zero-allocation passes.
     fn evaluate_q2(
         self,
         scaled: &Array2<f64>,
@@ -374,8 +430,8 @@ impl RegressionCandidate {
                 parallel_folds,
                 |train_x, train_y| {
                     let model = KnnRegressor::fit(
-                        train_x.clone(),
-                        train_y.clone(),
+                        train_x,
+                        train_y,
                         k,
                         DistanceMetric::Euclidean,
                     );
@@ -419,28 +475,36 @@ impl RegressionCandidate {
         }
     }
 
+    /// Implements fit model.
+    ///
+    /// Function context: `crates/ferrum_core/src/ml/pipeline.rs`.
+    /// ML-layer note: optimized for batch computation and zero-allocation passes.
     fn fit_model(self, scaled: &Array2<f64>, targets: &Array1<f64>, seed: u64) -> ModelType {
         match self {
             Self::Knn { k, .. } => ModelType::KnnRegressor(KnnRegressor::fit(
-                scaled.clone(),
-                targets.clone(),
+                scaled.view(),
+                targets.view(),
                 k,
                 DistanceMetric::Euclidean,
             )),
             Self::RandomForest { n_trees, .. } => ModelType::RandomForestRegressor(
-                RandomForestRegressor::fit(scaled, targets, n_trees, 10, 2, 0.33, seed),
+                RandomForestRegressor::fit(scaled.view(), targets.view(), n_trees, 10, 2, 0.33, seed),
             ),
             Self::Pls { n_components, .. } => {
-                ModelType::PlsRegression(PlsRegression::fit(scaled, targets, n_components))
+                ModelType::PlsRegression(PlsRegression::fit(scaled.view(), targets.view(), n_components))
             }
             Self::ElasticNet { alpha, .. } => {
-                ModelType::ElasticNet(ElasticNet::fit(scaled, targets, alpha, 0.5, 1000, 1e-6))
+                ModelType::ElasticNet(ElasticNet::fit(scaled.view(), targets.view(), alpha, 0.5, 1000, 1e-6))
             }
         }
     }
 }
 
 #[derive(Debug, Clone, Copy)]
+/// Implements CandidateEvaluation.
+///
+/// Function context: `crates/ferrum_core/src/ml/pipeline.rs`.
+/// ML-layer note: optimized for batch computation and zero-allocation passes.
 struct CandidateEvaluation {
     order: usize,
     candidate: RegressionCandidate,
@@ -448,10 +512,18 @@ struct CandidateEvaluation {
 }
 
 #[derive(Debug, Clone, Copy)]
+/// Implements CandidateProgressEvent.
+///
+/// Function context: `crates/ferrum_core/src/ml/pipeline.rs`.
+/// ML-layer note: optimized for batch computation and zero-allocation passes.
 enum CandidateProgressEvent {
     Done(CandidateEvaluation),
 }
 
+/// Implements build regression candidates.
+///
+/// Function context: `crates/ferrum_core/src/ml/pipeline.rs`.
+/// ML-layer note: optimized for batch computation and zero-allocation passes.
 fn build_regression_candidates(n_features: usize) -> Vec<RegressionCandidate> {
     let mut candidates = vec![
         RegressionCandidate::Knn {
@@ -507,6 +579,10 @@ fn build_regression_candidates(n_features: usize) -> Vec<RegressionCandidate> {
     candidates
 }
 
+/// Implements top k candidates.
+///
+/// Function context: `crates/ferrum_core/src/ml/pipeline.rs`.
+/// ML-layer note: optimized for batch computation and zero-allocation passes.
 fn top_k_candidates(
     mut evaluations: Vec<CandidateEvaluation>,
     keep: usize,
@@ -598,6 +674,10 @@ impl AutoQsar {
         )
     }
 
+    /// Implements regression with runtime config.
+    ///
+    /// Function context: `crates/ferrum_core/src/ml/pipeline.rs`.
+    /// ML-layer note: optimized for batch computation and zero-allocation passes.
     fn regression_with_runtime_config(
         data: &QsarDataset,
         n_cv_folds: usize,
@@ -605,7 +685,7 @@ impl AutoQsar {
         on_progress: &mut dyn FnMut(AutoQsarProgress),
         runtime_cfg: AutoQsarRuntimeConfig,
     ) -> QsarPipeline {
-        let scaler = StandardScaler::fit(&data.features);
+        let scaler = StandardScaler::fit(&data.features).expect("Dataset features must not be empty");
         let scaled = scaler.transform(&data.features);
         let candidates = build_regression_candidates(data.n_features());
         let total_candidates = candidates.len();
@@ -785,10 +865,10 @@ impl AutoQsar {
         let best_candidate = best_eval.candidate;
         let model = best_candidate.fit_model(&scaled, &data.targets, seed);
         let train_preds = match &model {
-            ModelType::KnnRegressor(m) => m.predict(&scaled),
-            ModelType::RandomForestRegressor(m) => m.predict(&scaled),
-            ModelType::PlsRegression(m) => m.predict(&scaled),
-            ModelType::ElasticNet(m) => m.predict(&scaled),
+            ModelType::KnnRegressor(m) => m.predict(scaled.view()),
+            ModelType::RandomForestRegressor(m) => m.predict(scaled.view()),
+            ModelType::PlsRegression(m) => m.predict(scaled.view()),
+            ModelType::ElasticNet(m) => m.predict(scaled.view()),
             _ => unreachable!("AutoQsar regression candidates are regression-only"),
         };
         let train_r2 = metrics::r_squared(
@@ -833,123 +913,86 @@ fn cv_regression_q2_with_mode<F>(
     build_model: F,
 ) -> f64
 where
-    F: Fn(&Array2<f64>, &Array1<f64>) -> ModelType + Sync + Send,
+    F: Fn(ArrayView2<f64>, ArrayView1<f64>) -> ModelType + Sync + Send,
 {
     let n = features.nrows();
+    let p = features.ncols();
     let mut all_preds = vec![0.0f64; n];
+
+    // Generate permutation for K-Fold
+    let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
+    let mut perm: Vec<usize> = (0..n).collect();
+    rand::seq::SliceRandom::shuffle(perm.as_mut_slice(), &mut rng);
+
+    // Build circular buffers
+    let mut circ_features = Array2::<f64>::zeros((2 * n, p));
+    let mut circ_targets = Array1::<f64>::zeros(2 * n);
+
+    for i in 0..n {
+        let orig_idx = perm[i];
+        let row = features.row(orig_idx);
+        circ_features.row_mut(i).assign(&row);
+        circ_features.row_mut(i + n).assign(&row);
+        circ_targets[i] = targets[orig_idx];
+        circ_targets[i + n] = targets[orig_idx];
+    }
+
+    let fold_size = n / n_folds;
+    let remainder = n % n_folds;
+    
+    let mut fold_bounds = Vec::with_capacity(n_folds);
+    let mut start = 0;
+    for i in 0..n_folds {
+        let end = start + fold_size + usize::from(i < remainder);
+        fold_bounds.push((start, end));
+        start = end;
+    }
+
     if parallel_folds {
-        let splits = cv::k_fold(n, n_folds, seed);
-        let eval_fold = |(train_idx, test_idx): &(Vec<usize>, Vec<usize>)| {
-            let train_x = select_rows(features, train_idx);
-            let train_y = select_elements(targets, train_idx);
-            let test_x = select_rows(features, test_idx);
-            let model = build_model(&train_x, &train_y);
+        let fold_preds = fold_bounds.par_iter().map(|&(start, end)| {
+            let test_x = circ_features.slice(ndarray::s![start..end, ..]);
+            let train_len = n - (end - start);
+            let train_x = circ_features.slice(ndarray::s![end..end+train_len, ..]);
+            let train_y = circ_targets.slice(ndarray::s![end..end+train_len]);
+            
+            let model = build_model(train_x, train_y);
             let preds = match &model {
-                ModelType::KnnRegressor(m) => m.predict(&test_x),
-                ModelType::RandomForestRegressor(m) => m.predict(&test_x),
-                ModelType::PlsRegression(m) => m.predict(&test_x),
-                ModelType::ElasticNet(m) => m.predict(&test_x),
-                _ => Array1::zeros(test_idx.len()),
+                ModelType::KnnRegressor(m) => m.predict(test_x),
+                ModelType::RandomForestRegressor(m) => m.predict(test_x),
+                ModelType::PlsRegression(m) => m.predict(test_x),
+                ModelType::ElasticNet(m) => m.predict(test_x),
+                _ => Array1::zeros(end - start),
             };
-            (test_idx.clone(), preds.to_vec())
-        };
-        let fold_preds = splits.folds.par_iter().map(eval_fold).collect::<Vec<_>>();
-        for (test_idx, preds) in fold_preds {
-            for (i, idx) in test_idx.into_iter().enumerate() {
-                all_preds[idx] = preds[i];
-            }
-        }
-    } else if n <= 4096 {
-        for (train_idx, test_idx) in cv::k_fold_iter(n, n_folds, seed) {
-            let train_x = select_rows(features, &train_idx);
-            let train_y = select_elements(targets, &train_idx);
-            let test_x = select_rows(features, &test_idx);
-            let model = build_model(&train_x, &train_y);
-            let preds = match &model {
-                ModelType::KnnRegressor(m) => m.predict(&test_x),
-                ModelType::RandomForestRegressor(m) => m.predict(&test_x),
-                ModelType::PlsRegression(m) => m.predict(&test_x),
-                ModelType::ElasticNet(m) => m.predict(&test_x),
-                _ => Array1::zeros(test_idx.len()),
-            };
-            for (i, idx) in test_idx.into_iter().enumerate() {
-                all_preds[idx] = preds[i];
+            (start, end, preds.to_vec())
+        }).collect::<Vec<_>>();
+        
+        for (start, end, preds) in fold_preds {
+            for (i, &orig_idx) in perm[start..end].iter().enumerate() {
+                all_preds[orig_idx] = preds[i];
             }
         }
     } else {
-        // Large-N path: avoid allocating per-fold train/test matrices by scoring row-wise.
-        for (train_idx, test_idx) in cv::k_fold_iter(n, n_folds, seed) {
-            let train_x = select_rows(features, &train_idx);
-            let train_y = select_elements(targets, &train_idx);
-            let model = build_model(&train_x, &train_y);
-            for idx in test_idx {
-                let row = features.row(idx);
-                let pred = if let Some(slice) = row.as_slice() {
-                    match &model {
-                        ModelType::KnnRegressor(m) => m.predict_one(slice),
-                        ModelType::RandomForestRegressor(m) => m.predict_one(slice),
-                        ModelType::PlsRegression(m) => m.predict_one(slice),
-                        ModelType::ElasticNet(m) => m.predict_one(slice),
-                        _ => 0.0,
-                    }
-                } else {
-                    let owned = row.to_vec();
-                    match &model {
-                        ModelType::KnnRegressor(m) => m.predict_one(&owned),
-                        ModelType::RandomForestRegressor(m) => m.predict_one(&owned),
-                        ModelType::PlsRegression(m) => m.predict_one(&owned),
-                        ModelType::ElasticNet(m) => m.predict_one(&owned),
-                        _ => 0.0,
-                    }
-                };
-                all_preds[idx] = pred;
+        for &(start, end) in &fold_bounds {
+            let test_x = circ_features.slice(ndarray::s![start..end, ..]);
+            let train_len = n - (end - start);
+            let train_x = circ_features.slice(ndarray::s![end..end+train_len, ..]);
+            let train_y = circ_targets.slice(ndarray::s![end..end+train_len]);
+            
+            let model = build_model(train_x, train_y);
+            let preds = match &model {
+                ModelType::KnnRegressor(m) => m.predict(test_x),
+                ModelType::RandomForestRegressor(m) => m.predict(test_x),
+                ModelType::PlsRegression(m) => m.predict(test_x),
+                ModelType::ElasticNet(m) => m.predict(test_x),
+                _ => Array1::zeros(end - start),
+            };
+            for (i, &orig_idx) in perm[start..end].iter().enumerate() {
+                all_preds[orig_idx] = preds[i];
             }
         }
     }
 
     metrics::r_squared(targets.as_slice().unwrap(), &all_preds)
-}
-
-/// Implements rows.
-///
-/// Function context: `crates/ferrum_core/src/ml/pipeline.rs`.
-/// ML-layer note: numerical stability and reproducibility are important for comparable model evaluation.
-fn select_rows(data: &Array2<f64>, indices: &[usize]) -> Array2<f64> {
-    let ncols = data.ncols();
-    if indices.is_empty() {
-        return Array2::<f64>::zeros((0, ncols));
-    }
-    if ncols == 0 {
-        return Array2::<f64>::zeros((indices.len(), 0));
-    }
-    if let Some(buf) = data.as_slice_memory_order() {
-        if buf.len() == data.nrows() * ncols {
-            let mut packed = Vec::with_capacity(indices.len() * ncols);
-            for &old_i in indices {
-                let start = old_i * ncols;
-                packed.extend_from_slice(&buf[start..start + ncols]);
-            }
-            return Array2::from_shape_vec((indices.len(), ncols), packed)
-                .expect("packed row slice must match target shape");
-        }
-    }
-    let mut result = Array2::<f64>::zeros((indices.len(), ncols));
-    for (new_i, &old_i) in indices.iter().enumerate() {
-        result.row_mut(new_i).assign(&data.row(old_i));
-    }
-    result
-}
-
-/// Implements elements.
-///
-/// Function context: `crates/ferrum_core/src/ml/pipeline.rs`.
-/// ML-layer note: numerical stability and reproducibility are important for comparable model evaluation.
-fn select_elements(data: &Array1<f64>, indices: &[usize]) -> Array1<f64> {
-    let mut out = Vec::with_capacity(indices.len());
-    for &idx in indices {
-        out.push(data[idx]);
-    }
-    Array1::from_vec(out)
 }
 
 #[cfg(test)]
@@ -984,11 +1027,11 @@ mod tests {
     /// ML-layer note: numerical stability and reproducibility are important for comparable model evaluation.
     fn test_pipeline_predict() {
         let ds = make_regression_dataset();
-        let scaler = StandardScaler::fit(&ds.features);
+        let scaler = StandardScaler::fit(&ds.features).expect("Dataset features must not be empty");
         let scaled = scaler.transform(&ds.features);
         let model = KnnRegressor::fit(
-            scaled.clone(),
-            ds.targets.clone(),
+            scaled.view(),
+            ds.targets.view(),
             3,
             DistanceMetric::Euclidean,
         );
@@ -1016,9 +1059,9 @@ mod tests {
     /// ML-layer note: numerical stability and reproducibility are important for comparable model evaluation.
     fn test_pipeline_serialization() {
         let ds = make_regression_dataset();
-        let scaler = StandardScaler::fit(&ds.features);
+        let scaler = StandardScaler::fit(&ds.features).expect("Dataset features must not be empty");
         let scaled = scaler.transform(&ds.features);
-        let model = KnnRegressor::fit(scaled, ds.targets.clone(), 3, DistanceMetric::Euclidean);
+        let model = KnnRegressor::fit(scaled.view(), ds.targets.view(), 3, DistanceMetric::Euclidean);
 
         let pipeline = QsarPipeline {
             name: "test-serial".into(),
@@ -1173,11 +1216,11 @@ mod tests {
     /// ML-layer note: numerical stability and reproducibility are important for comparable model evaluation.
     fn test_preprocess_one_matches_batch_with_pca() {
         let ds = make_regression_dataset();
-        let scaler = StandardScaler::fit(&ds.features);
+        let scaler = StandardScaler::fit(&ds.features).expect("Dataset features must not be empty");
         let scaled = scaler.transform(&ds.features);
-        let pca = Pca::fit(&scaled, 1);
+        let pca = Pca::fit(&scaled, 1).expect("PCA dataset must not be empty");
         let projected = pca.transform(&scaled);
-        let model = KnnRegressor::fit(projected, ds.targets.clone(), 3, DistanceMetric::Euclidean);
+        let model = KnnRegressor::fit(projected.view(), ds.targets.view(), 3, DistanceMetric::Euclidean);
 
         let pipeline = QsarPipeline {
             name: "test-pca-one".into(),

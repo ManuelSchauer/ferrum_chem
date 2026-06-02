@@ -85,20 +85,10 @@ pub fn parse_smiles(smiles: &str) -> Result<Molecule> {
     let mut parser = SmilesParser::new(smiles);
     let mut mol = parser.parse()?;
     let saw_ring_closure = parser.saw_ring_closure;
+    let has_transition_metal = parser.has_transition_metal;
 
-    // ✅ Automatically calculate implicit hydrogens
-    // This ensures molecules are always complete and ready to use
+    // First pass: establish baseline valence/implicit-H before aromaticity.
     crate::algo::valency::assign_implicit_hydrogens(&mut mol)?;
-
-    // ✅ Detect dative (coordinate) bonds for transition metal complexes.
-    // Skip the pass for all-organic molecules to avoid unnecessary bond scans.
-    if mol
-        .atoms
-        .iter()
-        .any(|atom| crate::mol::elements::is_transition_metal(atom.atomic_number))
-    {
-        crate::algo::valency::assign_dative_bonds(&mut mol);
-    }
 
     // ✅ Automatically perceive aromaticity when pi candidates are present.
     // Molecules without aromatic atoms or multiple bonds cannot become aromatic,
@@ -110,8 +100,17 @@ pub fn parse_smiles(smiles: &str) -> Result<Molecule> {
             .any(|bond| matches!(bond.bond_type, BondType::Double | BondType::Aromatic));
     if needs_aromaticity {
         crate::algo::aromaticity::perceive_aromaticity(&mut mol);
+        // Second pass: re-evaluate implicit H after aromatic flags/bond types settle.
+        // This aligns Kekule inputs with aromatic-context valence assignment.
+        crate::algo::valency::assign_implicit_hydrogens(&mut mol)?;
     } else if saw_ring_closure {
         crate::algo::rings::find_sssr(&mut mol);
+    }
+
+    // ✅ Detect dative (coordinate) bonds for transition metal complexes.
+    // Use parser-time metal detection to avoid an O(N_atoms) scan here.
+    if has_transition_metal {
+        crate::algo::valency::assign_dative_bonds(&mut mol);
     }
 
     // Prime minimum cycle basis for ring-containing molecules so descriptors that
@@ -145,6 +144,8 @@ struct SmilesParser<'a> {
     pending_bond: Option<BondType>,
     // Tracks whether ring-closure syntax was encountered.
     saw_ring_closure: bool,
+    // O(1) trigger for dative-bond scan after parsing.
+    has_transition_metal: bool,
 }
 
 impl<'a> SmilesParser<'a> {
@@ -164,6 +165,7 @@ impl<'a> SmilesParser<'a> {
             last_atom: None,
             pending_bond: None,
             saw_ring_closure: false,
+            has_transition_metal: false,
         }
     }
 
@@ -474,6 +476,9 @@ impl<'a> SmilesParser<'a> {
         let new_idx = self.mol.atoms.len() as u16;
         self.mol.atoms.push(Atom::new(atomic_num));
         self.mol.adjacency.push(smallvec::SmallVec::new());
+        if crate::mol::elements::is_transition_metal(atomic_num) {
+            self.has_transition_metal = true;
+        }
 
         {
             let atom = &mut self.mol.atoms[new_idx as usize];
@@ -759,5 +764,32 @@ mod tests {
                 .contains("Inconsistent ring closure bond types"),
             "unexpected error: {err}"
         );
+    }
+
+    #[test]
+    /// Runs regression test for kekulized aromatic nitrogens keep correct implicit h.
+    ///
+    /// Function context: `crates/ferrum_core/src/io/smiles.rs`.
+    /// I/O-layer note: parsing/ingestion should surface explicit errors instead of silently repairing malformed input.
+    fn test_kekulized_aromatic_nitrogens_keep_correct_implicit_h() {
+        // Kekulized pyridine: aromatic N should stay pyridine-like (no implicit H).
+        let pyridine = parse_smiles("C1=CC=NC=C1").unwrap();
+        let n_idx = pyridine
+            .atoms
+            .iter()
+            .position(|atom| atom.atomic_number == 7)
+            .expect("contains nitrogen");
+        assert!(pyridine.atoms[n_idx].is_aromatic());
+        assert_eq!(pyridine.atoms[n_idx].num_implicit_h, 0);
+
+        // Kekulized pyrrole: aromatic N should remain pyrrolic (implicit H = 1).
+        let pyrrole = parse_smiles("C1=CC=CN1").unwrap();
+        let n_idx = pyrrole
+            .atoms
+            .iter()
+            .position(|atom| atom.atomic_number == 7)
+            .expect("contains nitrogen");
+        assert!(pyrrole.atoms[n_idx].is_aromatic());
+        assert_eq!(pyrrole.atoms[n_idx].num_implicit_h, 1);
     }
 }

@@ -39,7 +39,7 @@
 //! - RDKit SMARTS parser behavior and query semantics used as parity target in this repository.
 //! - Weininger, D. (1988). SMILES notation specification for shared atom/bond grammar roots.
 
-use crate::algo::rings::find_sssr_cycles;
+use crate::algo::rings::find_symmetrized_sssr_bonds;
 use crate::error::{FerrumError, Result};
 use crate::mol::molecule::Molecule;
 use crate::types::BondType;
@@ -230,13 +230,23 @@ impl SmartsRingContext {
         let mut atom_ring_membership = vec![0u8; mol.num_atoms()];
         let mut atom_ring_sizes = vec![SmallVec::new(); mol.num_atoms()];
 
-        // Build ring context from read-only SSSR cycle enumeration to preserve
-        // ring-size semantics without cloning the full molecule graph.
-        let rings = find_sssr_cycles(mol);
+        // Use symmetrized SSSR-like cycles so SMARTS r/R semantics include
+        // topologically equivalent rings in highly fused/symmetric systems.
+        let ring_bond_cycles = find_symmetrized_sssr_bonds(mol);
+        for ring_bonds in ring_bond_cycles {
+            let mut ring_atoms = SmallVec::<[u16; 8]>::new();
+            for &bond_idx in &ring_bonds {
+                let bond = &mol.bonds[bond_idx as usize];
+                if !ring_atoms.contains(&bond.source) {
+                    ring_atoms.push(bond.source);
+                }
+                if !ring_atoms.contains(&bond.target) {
+                    ring_atoms.push(bond.target);
+                }
+            }
 
-        for ring in rings {
-            let ring_size = ring.len().min(u8::MAX as usize) as u8;
-            for &atom_idx in &ring {
+            let ring_size = ring_atoms.len().min(u8::MAX as usize) as u8;
+            for atom_idx in ring_atoms {
                 let idx = atom_idx as usize;
                 atom_ring_membership[idx] = atom_ring_membership[idx].saturating_add(1);
                 if !atom_ring_sizes[idx].contains(&ring_size) {
@@ -263,8 +273,8 @@ impl SmartsRingContext {
     ///
     /// Function context: `crates/ferrum_core/src/io/smarts.rs`.
     /// I/O-layer note: parsing/ingestion should surface explicit errors instead of silently repairing malformed input.
-    fn has_ring_size(&self, atom_idx: u16, ring_size: u8) -> bool {
-        self.atom_ring_sizes[atom_idx as usize].contains(&ring_size)
+    fn min_ring_size(&self, atom_idx: u16) -> Option<u8> {
+        self.atom_ring_sizes[atom_idx as usize].iter().copied().min()
     }
 }
 
@@ -439,7 +449,7 @@ fn match_primitive(
             if !atom.is_in_ring() {
                 return false;
             }
-            ring_ctx.is_some_and(|ctx| ctx.has_ring_size(atom_idx, *size))
+            ring_ctx.is_some_and(|ctx| ctx.min_ring_size(atom_idx) == Some(*size))
         }
 
         AtomPrimitive::RingMembership(count) => {
@@ -591,6 +601,10 @@ pub fn parse_smarts(smarts: &str) -> Result<QueryGraph> {
         .map_err(|e| FerrumError::ParseError(format!("SMARTS: {}", e)))
 }
 
+/// Implements SmartsParser.
+///
+/// Function context: `crates/ferrum_core/src/io/smarts.rs`.
+/// I/O-layer note: parsing/ingestion should surface explicit errors instead of silently repairing malformed input.
 struct SmartsParser {
     input: Vec<char>,
     pos: usize,
@@ -650,7 +664,7 @@ impl SmartsParser {
     fn parse_chain(&mut self) -> std::result::Result<(), String> {
         let mut prev_atom_idx: Option<u16> = None;
         let mut bond_type: Option<QueryBond> = None;
-        let mut branch_stack: Vec<u16> = Vec::new(); // Stack for handling branches
+        let mut branch_stack: SmallVec<[u16; 16]> = SmallVec::new(); // Stack for handling branches
 
         while self.pos < self.input.len() {
             let ch = self.input[self.pos];
@@ -658,7 +672,7 @@ impl SmartsParser {
             // Check for ring closure digits BEFORE matching other characters
             // Ring closures can appear after atoms OR after bonds
             if ch.is_ascii_digit() && prev_atom_idx.is_some() {
-                self.parse_ring_closures(prev_atom_idx.unwrap(), &mut bond_type)?;
+                self.parse_ring_closures(prev_atom_idx.ok_or("Ring closure before any atom")?, &mut bond_type)?;
                 continue; // Skip to next iteration
             }
 
@@ -977,7 +991,7 @@ impl SmartsParser {
         if semi_groups.is_empty() {
             Ok(vec![AtomPrimitive::AnyAtom])
         } else if semi_groups.len() == 1 {
-            Ok(vec![semi_groups.into_iter().next().unwrap()])
+            Ok(vec![semi_groups.into_iter().next().ok_or("Empty semi group")?])
         } else {
             Ok(vec![AtomPrimitive::And(semi_groups)])
         }
@@ -1001,7 +1015,7 @@ impl SmartsParser {
         }
 
         if branches.len() == 1 {
-            Ok(branches.into_iter().next().unwrap())
+            Ok(branches.into_iter().next().ok_or("Empty branches")?)
         } else {
             Ok(AtomPrimitive::Or(branches))
         }
@@ -1030,7 +1044,7 @@ impl SmartsParser {
         if prims.is_empty() {
             Ok(AtomPrimitive::AnyAtom)
         } else if prims.len() == 1 {
-            Ok(prims.into_iter().next().unwrap())
+            Ok(prims.into_iter().next().ok_or("Empty prims")?)
         } else {
             Ok(AtomPrimitive::And(prims))
         }
@@ -1334,7 +1348,8 @@ impl SmartsParser {
         } else if element == "-" {
             Ok(AtomPrimitive::Charge(-1))
         } else {
-            let is_aromatic = element.chars().next().unwrap().is_lowercase();
+            let first_char = element.chars().next().ok_or("Empty element parsed")?;
+            let is_aromatic = first_char.is_lowercase();
             // Preserve lowercase aromatic two-letter symbols like [se], [as], [te].
             // Uppercasing them would produce "SE"/"AS"/"TE", which are not valid
             // element symbols in `symbol_to_atomic_number()`.

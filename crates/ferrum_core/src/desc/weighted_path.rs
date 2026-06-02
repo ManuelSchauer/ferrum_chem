@@ -131,7 +131,7 @@ impl Descriptor for WeightedPath {
     fn calculate(
         &self,
         mol: &mut Molecule,
-        ctx: &mut crate::desc::context::CalculationContext,
+        _ctx: &mut crate::desc::context::CalculationContext,
     ) -> DescriptorValue {
         let mut values = vec![0.0f32; MAX_PATH_LEN * 2];
 

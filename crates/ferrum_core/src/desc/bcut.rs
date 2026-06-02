@@ -99,6 +99,10 @@ fn burden_bond_value(bond_type: crate::types::BondType) -> f64 {
     (bo as f64).sqrt() * 0.1
 }
 
+/// Implements BcutWorkspace.
+///
+/// Function context: `crates/ferrum_core/src/desc/bcut.rs`.
+/// Descriptor-layer note: computes molecular properties for ML pipelines.
 struct BcutWorkspace {
     x: Vec<f64>,
     y: Vec<f64>,
@@ -134,6 +138,10 @@ impl BcutWorkspace {
     }
 }
 
+/// Implements BurdenLinearOperator.
+///
+/// Function context: `crates/ferrum_core/src/desc/bcut.rs`.
+/// Descriptor-layer note: computes molecular properties for ML pipelines.
 struct BurdenLinearOperator {
     n: usize,
     diag: Vec<f64>,
@@ -620,7 +628,7 @@ impl Descriptor for BCUT {
     fn calculate(
         &self,
         mol: &mut Molecule,
-        ctx: &mut crate::desc::context::CalculationContext,
+        _ctx: &mut crate::desc::context::CalculationContext,
     ) -> DescriptorValue {
         let mut values = vec![0.0f32; 8];
 

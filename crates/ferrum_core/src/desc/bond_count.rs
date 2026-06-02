@@ -538,7 +538,7 @@ impl Descriptor for BondCount {
     fn calculate(
         &self,
         mol: &mut Molecule,
-        ctx: &mut crate::desc::context::CalculationContext,
+        _ctx: &mut crate::desc::context::CalculationContext,
     ) -> DescriptorValue {
         DescriptorValue::Int(compute_bond_count(mol))
     }
@@ -565,7 +565,7 @@ impl Descriptor for BondCountDetailed {
     fn calculate(
         &self,
         mol: &mut Molecule,
-        ctx: &mut crate::desc::context::CalculationContext,
+        _ctx: &mut crate::desc::context::CalculationContext,
     ) -> DescriptorValue {
         let mut counts = vec![0u32; 5]; // total, single, double, triple, aromatic
 
@@ -607,7 +607,7 @@ impl Descriptor for RotatableBondCount {
     fn calculate(
         &self,
         mol: &mut Molecule,
-        ctx: &mut crate::desc::context::CalculationContext,
+        _ctx: &mut crate::desc::context::CalculationContext,
     ) -> DescriptorValue {
         DescriptorValue::Int(compute_rotatable_bond_count_cached(mol))
     }

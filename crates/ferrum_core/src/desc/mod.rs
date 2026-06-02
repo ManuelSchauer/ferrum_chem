@@ -54,6 +54,7 @@ pub mod autocorrelation;
 pub mod balaban;
 pub mod batch;
 pub mod bcut;
+pub mod biosynfoni;
 pub mod bond_count;
 pub mod carbon_types;
 pub mod chains;
@@ -84,6 +85,7 @@ pub mod ring_types;
 pub mod simple_counts;
 pub mod small_ring;
 pub mod spiro;
+pub mod shape_3d;
 pub mod topo;
 pub mod tpsa;
 pub mod typed;
@@ -94,7 +96,8 @@ pub mod zagreb;
 
 // Re-export the core descriptor API
 pub use typed::{
-    BitVector, Descriptor, DescriptorValue, build_ml_vector, build_ml_vectors_parallel,
+    BitVector, Descriptor, DescriptorValue, build_ml_matrix_parallel, build_ml_vector,
+    build_ml_vectors_parallel,
 };
 
 #[cfg(test)]

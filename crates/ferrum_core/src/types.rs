@@ -42,6 +42,10 @@ pub type Real = f32;
 
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Implements BondType.
+///
+/// Function context: `crates/ferrum_core/src/types.rs`.
+/// System-layer note: component execution and pipeline orchestration.
 pub enum BondType {
     Single,
     Double,
@@ -53,6 +57,10 @@ pub enum BondType {
 
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Implements Hybridization.
+///
+/// Function context: `crates/ferrum_core/src/types.rs`.
+/// System-layer note: component execution and pipeline orchestration.
 pub enum Hybridization {
     SP,
     SP2,

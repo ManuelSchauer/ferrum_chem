@@ -33,8 +33,9 @@
 //! - OECD QSAR validation principles where `Ad` is used in predictive chemistry contexts.
 //! - Code-local source of truth: symbols and tests declared in `crates/ferrum_core/src/ml/ad.rs`.
 
-use ndarray::{Array1, Array2, Axis};
+use ndarray::{Array1, Array2};
 use serde::{Deserialize, Serialize};
+use crate::ml::knn::{DistanceMetric, VpNode, build_vp_tree, vp_tree_search};
 
 #[cfg(feature = "native-linalg")]
 use ndarray_linalg::{Inverse, SVD};
@@ -178,9 +179,8 @@ pub trait ApplicabilityDomain: Send + Sync {
 /// is below a threshold (mean + z*std of training distances).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct KnnDistanceAD {
-    pub train_features: Array2<f64>,
-    #[serde(default)]
-    pub train_features_t: Array2<f64>,
+    pub train_features: Array2<f32>,
+    pub vp_tree: Vec<VpNode>,
     pub k: usize,
     pub threshold: f64,
     pub mean_dist: f64,
@@ -198,53 +198,77 @@ impl KnnDistanceAD {
     pub fn fit(features: &Array2<f64>, k: usize, z_cutoff: f64) -> Self {
         let n = features.nrows();
         let k = k.min(n - 1).max(1);
-        let train_features_t = features.t().to_owned();
         let sample_step = resolve_knn_ad_sample_step(n);
 
-        // Compute mean k-NN distance for each training sample
-        let mut distances = Vec::with_capacity(n);
-        let mut best_dists = vec![f64::INFINITY; k];
-        scan_rows(features, |i, sample| {
-            let filled = if train_features_t.nrows() == features.ncols()
-                && train_features_t.ncols() == features.nrows()
-            {
-                knn_select_k_distances_colmajor(
-                    features,
-                    &train_features_t,
-                    sample,
-                    Some(i),
-                    sample_step,
-                    &mut best_dists,
-                )
-            } else {
-                knn_select_k_distances(features, sample, Some(i), sample_step, &mut best_dists)
-            };
-            if filled == 0 {
-                distances.push(0.0);
-                return;
-            }
-            let mean_k_dist = best_dists
-                .iter()
-                .take(filled)
-                .map(|d| d.sqrt())
-                .sum::<f64>()
-                / filled as f64;
-            distances.push(mean_k_dist);
-        });
+        let train_features = features.mapv(|v| v as f32);
+        let vp_tree = build_vp_tree(&train_features, DistanceMetric::Euclidean);
 
-        let mean_dist = distances.iter().sum::<f64>() / n as f64;
-        let std_dist = (distances
-            .iter()
-            .map(|&d| (d - mean_dist).powi(2))
-            .sum::<f64>()
-            / n as f64)
-            .sqrt();
+        let mut distances = Vec::with_capacity(n);
+        let mut best_dists = vec![f64::INFINITY; k + 1]; // +1 to exclude self
+        let mut best_indices = vec![0usize; k + 1];
+        let slice = train_features.as_slice_memory_order().unwrap();
+        let ncols = train_features.ncols();
+
+        for i in 0..n {
+            if sample_step > 1 && i % sample_step != 0 {
+                distances.push(0.0);
+                continue;
+            }
+            
+            let row = train_features.row(i);
+            let sample = row.as_slice().unwrap();
+
+            let mut filled = 0usize;
+            let mut worst_idx = 0usize;
+            let mut worst_dist = f64::INFINITY;
+            
+            // Reinitialize best_dists
+            for d in &mut best_dists {
+                *d = f64::INFINITY;
+            }
+
+            vp_tree_search(
+                &vp_tree,
+                slice,
+                ncols,
+                sample,
+                DistanceMetric::Euclidean,
+                &mut best_dists,
+                &mut best_indices,
+                &mut filled,
+                &mut worst_idx,
+                &mut worst_dist,
+            );
+
+            // Calculate mean of k nearest, excluding self (distance 0)
+            let mut sum = 0.0;
+            let mut count = 0;
+            for j in 0..filled {
+                if best_dists[j] > 1e-6 && count < k {
+                    sum += best_dists[j];
+                    count += 1;
+                }
+            }
+
+            if count == 0 {
+                distances.push(0.0);
+            } else {
+                distances.push(sum / count as f64);
+            }
+        }
+
+        // Only compute stats on valid sampled distances
+        let valid_distances: Vec<f64> = distances.iter().copied().filter(|&d| d > 0.0).collect();
+        let mean_dist = if valid_distances.is_empty() { 0.0 } else { valid_distances.iter().sum::<f64>() / valid_distances.len() as f64 };
+        let std_dist = if valid_distances.is_empty() { 0.0 } else {
+            (valid_distances.iter().map(|&d| (d - mean_dist).powi(2)).sum::<f64>() / valid_distances.len() as f64).sqrt()
+        };
 
         let threshold = mean_dist + z_cutoff * std_dist;
 
         Self {
-            train_features: features.clone(),
-            train_features_t,
+            train_features,
+            vp_tree,
             k,
             threshold,
             mean_dist,
@@ -259,34 +283,36 @@ impl KnnDistanceAD {
     /// Function context: `crates/ferrum_core/src/ml/ad.rs`.
     /// ML-layer note: numerical stability and reproducibility are important for comparable model evaluation.
     fn mean_knn_distance(&self, sample: &[f64]) -> f64 {
+        let sample32: Vec<f32> = sample.iter().map(|&v| v as f32).collect();
         let mut best_dists = vec![f64::INFINITY; self.k];
-        let filled = if self.train_features_t.nrows() == self.train_features.ncols()
-            && self.train_features_t.ncols() == self.train_features.nrows()
-        {
-            knn_select_k_distances_colmajor(
-                &self.train_features,
-                &self.train_features_t,
-                sample,
-                None,
-                self.sample_step,
-                &mut best_dists,
-            )
-        } else {
-            knn_select_k_distances(
-                &self.train_features,
-                sample,
-                None,
-                self.sample_step,
-                &mut best_dists,
-            )
-        };
+        let mut best_indices = vec![0usize; self.k];
+        
+        let slice = self.train_features.as_slice_memory_order().unwrap();
+        let ncols = self.train_features.ncols();
+        
+        let mut filled = 0usize;
+        let mut worst_idx = 0usize;
+        let mut worst_dist = f64::INFINITY;
+
+        vp_tree_search(
+            &self.vp_tree,
+            slice,
+            ncols,
+            &sample32,
+            DistanceMetric::Euclidean,
+            &mut best_dists,
+            &mut best_indices,
+            &mut filled,
+            &mut worst_idx,
+            &mut worst_dist,
+        );
+
         if filled == 0 {
             return 0.0;
         }
         best_dists
             .iter()
             .take(filled)
-            .map(|d| d.sqrt())
             .sum::<f64>()
             / filled as f64
     }
@@ -849,6 +875,10 @@ mod tests {
     }
 
     #[test]
+    /// Implements test solve spd system identity rhs.
+    ///
+    /// Function context: `crates/ferrum_core/src/ml/ad.rs`.
+    /// ML-layer note: optimized for batch computation and zero-allocation passes.
     fn test_solve_spd_system_identity_rhs() {
         let a = Array2::<f64>::eye(3);
         let b = Array2::from_shape_vec((3, 2), vec![1.0, 4.0, 2.0, 5.0, 3.0, 6.0]).unwrap();
@@ -861,6 +891,10 @@ mod tests {
     }
 
     #[test]
+    /// Implements test solve spd system reconstructs rhs.
+    ///
+    /// Function context: `crates/ferrum_core/src/ml/ad.rs`.
+    /// ML-layer note: optimized for batch computation and zero-allocation passes.
     fn test_solve_spd_system_reconstructs_rhs() {
         let a = Array2::from_shape_vec((3, 3), vec![4.0, 1.0, 0.5, 1.0, 3.0, 0.25, 0.5, 0.25, 2.0])
             .unwrap();

@@ -51,12 +51,20 @@ use std::path::PathBuf;
 #[derive(Parser)]
 #[command(name = "FerrumChem")]
 #[command(about = "High-Performance QSAR Engine in Rust", long_about = None)]
+/// Implements Cli.
+///
+/// Function context: `crates/ferrum_cli/src/main.rs`.
+/// System-layer note: component execution and pipeline orchestration.
 struct Cli {
     #[command(subcommand)]
     command: Commands,
 }
 
 #[derive(Subcommand)]
+/// Implements Commands.
+///
+/// Function context: `crates/ferrum_cli/src/main.rs`.
+/// System-layer note: component execution and pipeline orchestration.
 enum Commands {
     /// Berechnet Deskriptoren für eine Datei
     Calc {

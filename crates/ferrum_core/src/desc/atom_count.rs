@@ -92,7 +92,7 @@ impl Descriptor for AtomCount {
     fn calculate(
         &self,
         mol: &mut Molecule,
-        ctx: &mut crate::desc::context::CalculationContext,
+        _ctx: &mut crate::desc::context::CalculationContext,
     ) -> super::typed::DescriptorValue {
         super::typed::DescriptorValue::Int(compute_atom_count(mol))
     }
@@ -117,7 +117,7 @@ impl Descriptor for HeavyAtomCount {
     fn calculate(
         &self,
         mol: &mut Molecule,
-        ctx: &mut crate::desc::context::CalculationContext,
+        _ctx: &mut crate::desc::context::CalculationContext,
     ) -> super::typed::DescriptorValue {
         super::typed::DescriptorValue::Int(compute_heavy_atom_count(mol))
     }
@@ -145,7 +145,7 @@ impl Descriptor for ElementCounts {
     fn calculate(
         &self,
         mol: &mut Molecule,
-        ctx: &mut crate::desc::context::CalculationContext,
+        _ctx: &mut crate::desc::context::CalculationContext,
     ) -> super::typed::DescriptorValue {
         let mut counts = vec![0u16; 12]; // C, N, O, S, P, F, Cl, Br, I, Others, H, Heavy
 
@@ -229,7 +229,7 @@ impl Descriptor for SingleAtomCount {
     fn calculate(
         &self,
         mol: &mut Molecule,
-        ctx: &mut crate::desc::context::CalculationContext,
+        _ctx: &mut crate::desc::context::CalculationContext,
     ) -> super::typed::DescriptorValue {
         if self.atomic_number == 1 {
             // Hydrogen: count explicit + implicit
@@ -265,7 +265,7 @@ impl Descriptor for AromaticAtomCount {
     fn calculate(
         &self,
         mol: &mut Molecule,
-        ctx: &mut crate::desc::context::CalculationContext,
+        _ctx: &mut crate::desc::context::CalculationContext,
     ) -> super::typed::DescriptorValue {
         super::typed::DescriptorValue::Int(compute_aromatic_atom_count(mol))
     }

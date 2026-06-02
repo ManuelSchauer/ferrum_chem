@@ -76,7 +76,7 @@ impl Descriptor for MaxPartialCharge {
     fn calculate(
         &self,
         mol: &mut Molecule,
-        ctx: &mut crate::desc::context::CalculationContext,
+        _ctx: &mut crate::desc::context::CalculationContext,
     ) -> DescriptorValue {
         let charges = compute_charges_cached(mol);
         let max = charges.iter().copied().fold(f64::NEG_INFINITY, f64::max);
@@ -103,7 +103,7 @@ impl Descriptor for MinPartialCharge {
     fn calculate(
         &self,
         mol: &mut Molecule,
-        ctx: &mut crate::desc::context::CalculationContext,
+        _ctx: &mut crate::desc::context::CalculationContext,
     ) -> DescriptorValue {
         let charges = compute_charges_cached(mol);
         let min = charges.iter().copied().fold(f64::INFINITY, f64::min);
@@ -130,7 +130,7 @@ impl Descriptor for MaxAbsPartialCharge {
     fn calculate(
         &self,
         mol: &mut Molecule,
-        ctx: &mut crate::desc::context::CalculationContext,
+        _ctx: &mut crate::desc::context::CalculationContext,
     ) -> DescriptorValue {
         let charges = compute_charges_cached(mol);
         let max_abs = charges
@@ -164,7 +164,7 @@ impl Descriptor for MinAbsPartialCharge {
     fn calculate(
         &self,
         mol: &mut Molecule,
-        ctx: &mut crate::desc::context::CalculationContext,
+        _ctx: &mut crate::desc::context::CalculationContext,
     ) -> DescriptorValue {
         let charges = compute_charges_cached(mol);
         let min_abs = charges
@@ -198,7 +198,7 @@ impl Descriptor for GasteigerCharges {
     fn calculate(
         &self,
         mol: &mut Molecule,
-        ctx: &mut crate::desc::context::CalculationContext,
+        _ctx: &mut crate::desc::context::CalculationContext,
     ) -> DescriptorValue {
         let charges = compute_charges_cached(mol);
         DescriptorValue::FloatVec(charges.iter().map(|&c| c as f32).collect())

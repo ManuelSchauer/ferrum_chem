@@ -63,12 +63,20 @@ struct PubChemKey {
 }
 
 #[derive(Clone, Copy)]
+/// Implements PatternEntry.
+///
+/// Function context: `crates/ferrum_core/src/desc/pubchem.rs`.
+/// Descriptor-layer note: computes molecular properties for ML pipelines.
 struct PatternEntry {
     bit_index: usize,
     threshold: usize,
 }
 
 #[derive(Clone)]
+/// Implements QueryScreen.
+///
+/// Function context: `crates/ferrum_core/src/desc/pubchem.rs`.
+/// Descriptor-layer note: computes molecular properties for ML pipelines.
 struct QueryScreen {
     min_atoms: usize,
     min_bonds: usize,
@@ -76,6 +84,10 @@ struct QueryScreen {
     requires_aromatic_atom: bool,
 }
 
+/// Implements ScreenedPubChemPattern.
+///
+/// Function context: `crates/ferrum_core/src/desc/pubchem.rs`.
+/// Descriptor-layer note: computes molecular properties for ML pipelines.
 struct ScreenedPubChemPattern {
     query: QueryGraph,
     screen: QueryScreen,
@@ -84,6 +96,10 @@ struct ScreenedPubChemPattern {
 }
 
 #[derive(Clone, Copy)]
+/// Implements MoleculeScreenStats.
+///
+/// Function context: `crates/ferrum_core/src/desc/pubchem.rs`.
+/// Descriptor-layer note: computes molecular properties for ML pipelines.
 struct MoleculeScreenStats {
     num_atoms: usize,
     num_bonds: usize,

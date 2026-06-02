@@ -259,6 +259,10 @@ pub fn find_all_matches(target: &Molecule, pattern: &QueryGraph) -> Vec<Vec<u16>
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Implements FastPathKind.
+///
+/// Function context: `crates/ferrum_core/src/algo/iso.rs`.
+/// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
 enum FastPathKind {
     SingleAtom,
     SingleBond {
@@ -383,12 +387,20 @@ fn visit_fast_path_matches<F>(
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Implements MatchMode.
+///
+/// Function context: `crates/ferrum_core/src/algo/iso.rs`.
+/// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
 enum MatchMode {
     FirstMatch,
     Enumerate,
 }
 
 #[derive(Debug, Clone)]
+/// Implements SmallTargetGraphCache.
+///
+/// Function context: `crates/ferrum_core/src/algo/iso.rs`.
+/// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
 struct SmallTargetGraphCache {
     n_atoms: usize,
     bond_lookup: Vec<u16>,
@@ -435,6 +447,10 @@ impl SmallTargetGraphCache {
 }
 
 #[derive(Debug, Clone, Copy)]
+/// Implements TargetAtomStats.
+///
+/// Function context: `crates/ferrum_core/src/algo/iso.rs`.
+/// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
 struct TargetAtomStats {
     aromatic_atoms: u16,
     aliphatic_atoms: u16,
@@ -480,6 +496,10 @@ impl TargetAtomStats {
 }
 
 #[derive(Debug, Clone, Copy, Default)]
+/// Implements AtomFastFilter.
+///
+/// Function context: `crates/ferrum_core/src/algo/iso.rs`.
+/// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
 struct AtomFastFilter {
     required_element: Option<u8>,
     requires_aromatic: bool,

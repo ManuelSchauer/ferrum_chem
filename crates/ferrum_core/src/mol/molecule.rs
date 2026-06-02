@@ -46,6 +46,10 @@ use crate::types::{AtomIdx, BondIdx};
 use smallvec::SmallVec;
 
 #[derive(Debug, Default, Clone)]
+/// Implements MoleculeCache.
+///
+/// Function context: `crates/ferrum_core/src/mol/molecule.rs`.
+/// Mol-layer note: core graph data structure component.
 struct MoleculeCache {
     gasteiger_charges: Option<Vec<f64>>,
     labute_contribs: Option<CachedLabuteContribs>,
@@ -56,12 +60,16 @@ struct MoleculeCache {
     rotatable_bond_count: Option<u32>,
     tpsa: Option<f64>,
     balaban_bo_dist: Option<Vec<f64>>,
-    min_cycle_basis_bonds: Option<Vec<smallvec::SmallVec<[usize; 8]>>>,
-    symmetrized_sssr_bonds: Option<Vec<smallvec::SmallVec<[usize; 8]>>>,
+    min_cycle_basis_bonds: Option<Vec<smallvec::SmallVec<[u16; 8]>>>,
+    symmetrized_sssr_bonds: Option<Vec<smallvec::SmallVec<[u16; 8]>>>,
     unweighted_dist_matrix: Option<Vec<u8>>,
 }
 
 #[derive(Debug, Clone)]
+/// Implements CachedLabuteContribs.
+///
+/// Function context: `crates/ferrum_core/src/mol/molecule.rs`.
+/// Mol-layer note: core graph data structure component.
 struct CachedLabuteContribs {
     atom_vsa: Vec<f64>,
     h_contrib: f64,
@@ -80,6 +88,9 @@ pub struct Molecule {
     // Adjazenzliste: Für jedes Atom eine Liste von Bindungs-Indizes.
     // SmallVec optimiert: Keine Heap-Allocation bei < 4 Bindungen.
     pub adjacency: Vec<SmallVec<[BondIdx; 4]>>,
+
+    // 3D conformer data
+    pub conformers: Vec<crate::mol::conformer::Conformer>,
 
     // Lazy-initialized cache for expensive properties
     cache: Option<Box<MoleculeCache>>,
@@ -113,6 +124,7 @@ impl Molecule {
             atoms: Vec::with_capacity(n_atoms),
             bonds: Vec::with_capacity(n_atoms),
             adjacency: Vec::with_capacity(n_atoms),
+            conformers: Vec::new(),
             cache: None,
         }
     }
@@ -130,6 +142,7 @@ impl Molecule {
             atoms,
             bonds,
             adjacency,
+            conformers: Vec::new(),
             cache: None,
         }
     }
@@ -333,7 +346,7 @@ impl Molecule {
     /// Molecule-model note: preserve atom/bond index invariants and cached-property invalidation rules.
     pub(crate) fn cached_min_cycle_basis_bonds(
         &self,
-    ) -> Option<&Vec<smallvec::SmallVec<[usize; 8]>>> {
+    ) -> Option<&Vec<smallvec::SmallVec<[u16; 8]>>> {
         self.cache.as_deref()?.min_cycle_basis_bonds.as_ref()
     }
 
@@ -343,7 +356,7 @@ impl Molecule {
     /// Molecule-model note: preserve atom/bond index invariants and cached-property invalidation rules.
     pub(crate) fn store_min_cycle_basis_bonds(
         &mut self,
-        rings: Vec<smallvec::SmallVec<[usize; 8]>>,
+        rings: Vec<smallvec::SmallVec<[u16; 8]>>,
     ) {
         self.cache_mut().min_cycle_basis_bonds = Some(rings);
     }
@@ -354,7 +367,7 @@ impl Molecule {
     /// Molecule-model note: preserve atom/bond index invariants and cached-property invalidation rules.
     pub(crate) fn cached_symmetrized_sssr_bonds(
         &self,
-    ) -> Option<&Vec<smallvec::SmallVec<[usize; 8]>>> {
+    ) -> Option<&Vec<smallvec::SmallVec<[u16; 8]>>> {
         self.cache.as_deref()?.symmetrized_sssr_bonds.as_ref()
     }
 
@@ -364,7 +377,7 @@ impl Molecule {
     /// Molecule-model note: preserve atom/bond index invariants and cached-property invalidation rules.
     pub(crate) fn store_symmetrized_sssr_bonds(
         &mut self,
-        rings: Vec<smallvec::SmallVec<[usize; 8]>>,
+        rings: Vec<smallvec::SmallVec<[u16; 8]>>,
     ) {
         self.cache_mut().symmetrized_sssr_bonds = Some(rings);
     }

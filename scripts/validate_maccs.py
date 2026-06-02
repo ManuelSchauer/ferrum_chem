@@ -30,6 +30,9 @@ def test_molecule(smiles, name):
     return fp
 
 def main():
+    """
+    Implements main.
+    """
     print("RDKit MACCS Keys Validation")
     print("=" * 80)
     

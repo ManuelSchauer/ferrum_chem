@@ -41,7 +41,7 @@
 //! - FerrumChem regression tests that pin `Valency` behavior on representative molecules.
 //! - Code-local source of truth: symbols and tests declared in `crates/ferrum_core/src/algo/valency.rs`.
 
-use crate::error::{FerrumError, Result};
+use crate::error::Result;
 use crate::mol::elements::{get_aromatic_valences, get_valences};
 use crate::mol::molecule::Molecule;
 use crate::types::BondType;
@@ -91,7 +91,24 @@ pub fn assign_implicit_hydrogens(mol: &mut Molecule) -> Result<()> {
             let charge_adj = atom.formal_charge as i16;
 
             let mut best: Option<i16> = None;
+            let preserve_pyrrolic_h = atom.atomic_number == 7
+                && atom.formal_charge == 0
+                && atom.num_implicit_h > 0
+                && aromatic_valences.contains(&3);
+
+            // In pass 2 (after aromaticity), preserve a previously inferred pyrrolic
+            // implicit H when the atom was aromaticized from a Kekule form.
+            if preserve_pyrrolic_h {
+                let adjusted = 3 - charge_adj;
+                if adjusted >= degree {
+                    best = Some(adjusted);
+                }
+            }
+
             for &v in aromatic_valences {
+                if preserve_pyrrolic_h && v < 3 {
+                    continue;
+                }
                 let adjusted = (v as i16) - charge_adj;
                 if adjusted >= degree {
                     if best.is_none() || adjusted < best.unwrap() {

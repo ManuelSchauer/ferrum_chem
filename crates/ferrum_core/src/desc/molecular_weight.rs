@@ -122,7 +122,7 @@ impl Descriptor for MolecularWeight {
     fn calculate(
         &self,
         mol: &mut Molecule,
-        ctx: &mut crate::desc::context::CalculationContext,
+        _ctx: &mut crate::desc::context::CalculationContext,
     ) -> DescriptorValue {
         DescriptorValue::Float64(compute_molecular_weight_f64(mol))
     }

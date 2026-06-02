@@ -127,7 +127,7 @@ impl Descriptor for FunctionalGroupCounts {
     fn calculate(
         &self,
         mol: &mut Molecule,
-        ctx: &mut crate::desc::context::CalculationContext,
+        _ctx: &mut crate::desc::context::CalculationContext,
     ) -> DescriptorValue {
         let counts: Vec<u16> = FUNC_GROUP_PATTERNS
             .iter()
@@ -158,7 +158,7 @@ impl Descriptor for AcidicGroupCount {
     fn calculate(
         &self,
         mol: &mut Molecule,
-        ctx: &mut crate::desc::context::CalculationContext,
+        _ctx: &mut crate::desc::context::CalculationContext,
     ) -> DescriptorValue {
         let total: usize = ACIDIC_PATTERNS
             .iter()
@@ -189,7 +189,7 @@ impl Descriptor for BasicGroupCount {
     fn calculate(
         &self,
         mol: &mut Molecule,
-        ctx: &mut crate::desc::context::CalculationContext,
+        _ctx: &mut crate::desc::context::CalculationContext,
     ) -> DescriptorValue {
         let total: usize = BASIC_PATTERNS
             .iter()

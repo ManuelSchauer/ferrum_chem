@@ -65,7 +65,7 @@ pub struct Pca {
 
 impl Pca {
     /// Fit PCA, keeping `n_components` principal components.
-    pub fn fit(data: &Array2<f64>, n_components: usize) -> Self {
+    pub fn fit(data: &Array2<f64>, n_components: usize) -> Result<Self, String> {
         let n_samples = data.nrows();
         let n_features = data.ncols();
         let nc = n_components.min(n_features);
@@ -74,12 +74,7 @@ impl Pca {
             .unwrap_or_else(|| Array1::zeros(n_features));
 
         if n_samples == 0 || n_features == 0 || nc == 0 {
-            return Self {
-                mean,
-                components: Array2::<f64>::zeros((nc, n_features)),
-                explained_variance: Array1::<f64>::zeros(nc),
-                explained_variance_ratio: Array1::<f64>::zeros(nc),
-            };
+            return Err("Cannot fit PCA on empty dataset".to_string());
         }
 
         // Center data once and reuse in both covariance paths.
@@ -152,12 +147,12 @@ impl Pca {
             }
         }
 
-        Self {
+        Ok(Self {
             mean,
             components,
             explained_variance,
             explained_variance_ratio,
-        }
+        })
     }
 
     /// Transform data into PCA space.
@@ -190,10 +185,10 @@ impl Pca {
     }
 
     /// Fit and transform in one step.
-    pub fn fit_transform(data: &Array2<f64>, n_components: usize) -> (Self, Array2<f64>) {
-        let pca = Self::fit(data, n_components);
+    pub fn fit_transform(data: &Array2<f64>, n_components: usize) -> Result<(Self, Array2<f64>), String> {
+        let pca = Self::fit(data, n_components)?;
         let transformed = pca.transform(data);
-        (pca, transformed)
+        Ok((pca, transformed))
     }
 
     /// Inverse transform: project back to original space.
@@ -310,7 +305,7 @@ mod tests {
             vec![1.0, 1.0, 2.0, 2.0, 3.0, 3.0, 4.0, 4.0, 5.0, 5.0],
         )
         .unwrap();
-        let pca = Pca::fit(&data, 2);
+        let pca = Pca::fit(&data, 2).unwrap();
         assert_eq!(pca.n_components(), 2);
         // First component should explain nearly all variance
         assert!(pca.explained_variance_ratio[0] > 0.99);
@@ -327,7 +322,7 @@ mod tests {
             vec![1.0, 2.0, 3.0, 2.0, 4.0, 6.0, 3.0, 6.0, 9.0, 4.0, 8.0, 12.0],
         )
         .unwrap();
-        let (pca, transformed) = Pca::fit_transform(&data, 1);
+        let (pca, transformed) = Pca::fit_transform(&data, 1).unwrap();
         assert_eq!(transformed.ncols(), 1);
         // Reconstruction should be close to original for rank-1 data
         let reconstructed = pca.inverse_transform(&transformed);
@@ -357,7 +352,7 @@ mod tests {
             ],
         )
         .unwrap();
-        let (_, transformed) = Pca::fit_transform(&data, 2);
+        let (_, transformed) = Pca::fit_transform(&data, 2).unwrap();
         assert_eq!(transformed.nrows(), 6);
         assert_eq!(transformed.ncols(), 2);
     }
@@ -412,7 +407,7 @@ mod tests {
         }
 
         let data = Array2::from_shape_vec((rows, cols), data).unwrap();
-        let (pca, transformed) = Pca::fit_transform(&data, 2);
+        let (pca, transformed) = Pca::fit_transform(&data, 2).unwrap();
 
         assert_eq!(pca.n_components(), 2);
         assert_eq!(pca.components.ncols(), cols);
@@ -432,7 +427,7 @@ mod tests {
             vec![1.0, 2.0, 3.0, 2.0, 3.0, 5.0, 3.0, 5.0, 8.0, 4.0, 6.0, 10.0],
         )
         .unwrap();
-        let pca = Pca::fit(&data, 2);
+        let pca = Pca::fit(&data, 2).unwrap();
         let sample = vec![2.5, 4.0, 6.5];
         let one = pca.transform_one(&sample);
         let batch = pca
