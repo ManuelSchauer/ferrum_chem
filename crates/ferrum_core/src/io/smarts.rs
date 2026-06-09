@@ -54,6 +54,8 @@ pub struct QueryGraph {
     pub atoms: Vec<QueryAtom>,
     pub bonds: Vec<QueryGraphBond>,
     pub adjacency: Vec<SmallVec<[u16; 4]>>,
+    /// Cached flag: does this pattern use RingSize or RingMembership primitives?
+    pub(crate) needs_ring_context: bool,
 }
 
 /// Bond in query graph (stores connectivity).
@@ -322,8 +324,12 @@ impl SmartsRecursiveCache {
 /// Function context: `crates/ferrum_core/src/io/smarts.rs`.
 /// I/O-layer note: parsing/ingestion should surface explicit errors instead of silently repairing malformed input.
 pub(crate) fn query_graph_needs_ring_context(query: &QueryGraph) -> bool {
-    query
-        .atoms
+    query.needs_ring_context
+}
+
+/// Computes whether a query graph needs ring context by walking the pattern tree.
+fn compute_needs_ring_context(atoms: &[QueryAtom]) -> bool {
+    atoms
         .iter()
         .flat_map(|atom| atom.primitives.iter())
         .any(primitive_needs_ring_context)
@@ -640,6 +646,7 @@ impl SmartsParser {
                 atoms: vec![],
                 bonds: vec![],
                 adjacency: vec![],
+                needs_ring_context: false,
             });
         }
 
@@ -650,10 +657,12 @@ impl SmartsParser {
             return Err(format!("Unclosed ring closures"));
         }
 
+        let needs_ring_ctx = compute_needs_ring_context(&self.atoms);
         Ok(QueryGraph {
             atoms: self.atoms.clone(),
             bonds: self.bonds.clone(),
             adjacency: self.adjacency.clone(),
+            needs_ring_context: needs_ring_ctx,
         })
     }
 

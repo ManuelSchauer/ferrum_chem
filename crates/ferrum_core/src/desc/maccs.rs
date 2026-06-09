@@ -49,203 +49,9 @@ use bitvec::prelude::*;
 use once_cell::sync::Lazy;
 use smallvec::SmallVec;
 
-#[derive(Clone)]
-/// Implements QueryScreen.
-///
-/// Function context: `crates/ferrum_core/src/desc/maccs.rs`.
-/// Descriptor-layer note: computes molecular properties for ML pipelines.
-struct QueryScreen {
-    min_atoms: usize,
-    min_bonds: usize,
-    required_elements: SmallVec<[(u8, u16); 8]>,
-    requires_aromatic_atom: bool,
-}
-
-#[derive(Clone)]
-/// Implements ScreenedQuery.
-///
-/// Function context: `crates/ferrum_core/src/desc/maccs.rs`.
-/// Descriptor-layer note: computes molecular properties for ML pipelines.
-struct ScreenedQuery {
-    query: QueryGraph,
-    screen: QueryScreen,
-}
-
-#[derive(Clone, Copy)]
-/// Implements MoleculeScreenStats.
-///
-/// Function context: `crates/ferrum_core/src/desc/maccs.rs`.
-/// Descriptor-layer note: computes molecular properties for ML pipelines.
-struct MoleculeScreenStats {
-    num_atoms: usize,
-    num_bonds: usize,
-    element_counts: [u16; 119],
-    aromatic_atom_count: u16,
-}
-
-impl MoleculeScreenStats {
-    /// Constructs molecule between representations.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/maccs.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-    fn from_molecule(mol: &Molecule) -> Self {
-        let mut element_counts = [0u16; 119];
-        let mut aromatic_atom_count = 0u16;
-        for atom in &mol.atoms {
-            let idx = atom.atomic_number as usize;
-            if idx < element_counts.len() {
-                element_counts[idx] = element_counts[idx].saturating_add(1);
-            }
-            if atom.is_aromatic() {
-                aromatic_atom_count = aromatic_atom_count.saturating_add(1);
-            }
-        }
-        Self {
-            num_atoms: mol.num_atoms(),
-            num_bonds: mol.num_bonds(),
-            element_counts,
-            aromatic_atom_count,
-        }
-    }
-
-    /// Implements the behavior encoded by this function.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/maccs.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-    fn passes(&self, screen: &QueryScreen) -> bool {
-        if screen.min_atoms > self.num_atoms || screen.min_bonds > self.num_bonds {
-            return false;
-        }
-        if screen.requires_aromatic_atom && self.aromatic_atom_count == 0 {
-            return false;
-        }
-        screen
-            .required_elements
-            .iter()
-            .all(|&(element, count)| self.element_counts[element as usize] >= count)
-    }
-}
-
-/// Builds query screen.
-///
-/// Function context: `crates/ferrum_core/src/desc/maccs.rs`.
-/// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-fn build_query_screen(query: &QueryGraph) -> QueryScreen {
-    let mut required = [0u16; 119];
-    let mut requires_aromatic_atom = false;
-    for atom in &query.atoms {
-        if let Some(element) = fixed_atomic_number(atom) {
-            let idx = element as usize;
-            if idx < required.len() {
-                required[idx] = required[idx].saturating_add(1);
-            }
-        }
-        requires_aromatic_atom |= query_atom_requires_aromatic(atom);
-    }
-    let required_elements = required
-        .iter()
-        .enumerate()
-        .filter_map(|(idx, &count)| (count > 0).then_some((idx as u8, count)))
-        .collect();
-    QueryScreen {
-        min_atoms: query.atoms.len(),
-        min_bonds: query.bonds.len(),
-        required_elements,
-        requires_aromatic_atom,
-    }
-}
-
-/// Implements atomic number.
-///
-/// Function context: `crates/ferrum_core/src/desc/maccs.rs`.
-/// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-fn fixed_atomic_number(query_atom: &QueryAtom) -> Option<u8> {
-    let mut fixed = None;
-    for primitive in &query_atom.primitives {
-        let Some(element) = fixed_atomic_number_primitive(primitive) else {
-            continue;
-        };
-        if let Some(prev) = fixed {
-            if prev != element {
-                return None;
-            }
-        } else {
-            fixed = Some(element);
-        }
-    }
-    fixed
-}
-
-/// Implements atomic number primitive.
-///
-/// Function context: `crates/ferrum_core/src/desc/maccs.rs`.
-/// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-fn fixed_atomic_number_primitive(primitive: &AtomPrimitive) -> Option<u8> {
-    match primitive {
-        AtomPrimitive::Element(z) | AtomPrimitive::Aromatic(z) | AtomPrimitive::Aliphatic(z) => {
-            Some(*z)
-        }
-        AtomPrimitive::And(items) => {
-            let mut fixed = None;
-            for item in items {
-                let Some(element) = fixed_atomic_number_primitive(item) else {
-                    continue;
-                };
-                if let Some(prev) = fixed {
-                    if prev != element {
-                        return None;
-                    }
-                } else {
-                    fixed = Some(element);
-                }
-            }
-            fixed
-        }
-        AtomPrimitive::Or(options) => {
-            let mut elements = options.iter().filter_map(fixed_atomic_number_primitive);
-            let first = elements.next()?;
-            if elements.all(|element| element == first) {
-                Some(first)
-            } else {
-                None
-            }
-        }
-        _ => None,
-    }
-}
-
-/// Implements atom requires aromatic.
-///
-/// Function context: `crates/ferrum_core/src/desc/maccs.rs`.
-/// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-fn query_atom_requires_aromatic(query_atom: &QueryAtom) -> bool {
-    query_atom
-        .primitives
-        .iter()
-        .any(primitive_requires_aromatic_atom)
-}
-
-/// Implements requires aromatic atom.
-///
-/// Function context: `crates/ferrum_core/src/desc/maccs.rs`.
-/// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-fn primitive_requires_aromatic_atom(primitive: &AtomPrimitive) -> bool {
-    match primitive {
-        AtomPrimitive::AnyAromatic | AtomPrimitive::Aromatic(_) => true,
-        AtomPrimitive::Not(_) => false,
-        AtomPrimitive::And(options) => options.iter().any(primitive_requires_aromatic_atom),
-        AtomPrimitive::Or(options) => {
-            !options.is_empty() && options.iter().all(primitive_requires_aromatic_atom)
-        }
-        AtomPrimitive::Recursive(sub_pattern) => sub_pattern
-            .atoms
-            .first()
-            .is_some_and(query_atom_requires_aromatic),
-        _ => false,
-    }
-}
 
 /// Pre-parsed + screened MACCS keys patterns for fast fingerprint calculation.
+pub(crate) struct ScreenedQuery { pub query: QueryGraph, pub screen: crate::algo::iso::QueryScreen }
 static SCREENED_KEYS: Lazy<Vec<Option<ScreenedQuery>>> = Lazy::new(|| {
     MACCS_KEYS
         .iter()
@@ -254,7 +60,7 @@ static SCREENED_KEYS: Lazy<Vec<Option<ScreenedQuery>>> = Lazy::new(|| {
                 None // Special keys that need custom logic
             } else {
                 parse_smarts(key.smarts).ok().map(|query| {
-                    let screen = build_query_screen(&query);
+                    let screen = crate::algo::iso::QueryScreen::build(&query);
                     ScreenedQuery { query, screen }
                 })
             }
@@ -301,26 +107,32 @@ impl Descriptor for MaccsKeys {
     ///
     /// Function context: `crates/ferrum_core/src/desc/maccs.rs`.
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-    fn calculate(
+        fn calculate(
         &self,
         mol: &mut Molecule,
         ctx: &mut crate::desc::context::CalculationContext,
     ) -> DescriptorValue {
         let mut bits = bitvec![u8, Lsb0; 0; 166];
-        let stats = MoleculeScreenStats::from_molecule(mol);
+        let aromatic_rings = AromaticRingCount.calculate(mol, ctx).as_int();
+        let fragments = crate::algo::components::num_fragments(mol);
+        let iso_target = crate::algo::iso::IsoTarget::new(mol);
 
         for (i, key_def) in MACCS_KEYS.iter().enumerate() {
             let key_number = key_def.number;
             let key_present = if let Some(Some(screened)) = SCREENED_KEYS.get(i) {
-                if !stats.passes(&screened.screen) {
+                if !screened.screen.passes_target(&iso_target) {
                     false
                 } else if let Some(required_count) = required_match_count(key_number) {
-                    has_at_least_matches(mol, &screened.query, required_count + 1)
+                    crate::algo::iso::has_at_least_matches_target(&iso_target, &screened.query, required_count + 1)
                 } else {
-                    has_substruct_match(mol, &screened.query)
+                    crate::algo::iso::has_substruct_match_target(&iso_target, &screened.query)
                 }
             } else {
-                calculate_special_key(mol, key_number, ctx)
+                match key_number {
+                    125 => aromatic_rings > 1,
+                    166 => fragments > 1,
+                    _ => false,
+                }
             };
 
             if key_present {
@@ -332,25 +144,6 @@ impl Descriptor for MaccsKeys {
     }
 }
 
-/// Calculate special keys that don't use SMARTS patterns or need custom logic.
-fn calculate_special_key(
-    mol: &mut Molecule,
-    key_number: usize,
-    ctx: &mut crate::desc::context::CalculationContext,
-) -> bool {
-    match key_number {
-        // Key 1: ISOTOPE - Not implemented (requires isotope information in Atom struct)
-        1 => false,
-
-        // Key 125: Aromatic Ring > 1
-        125 => AromaticRingCount.calculate(mol, ctx).as_int() > 1,
-
-        // Key 166: Fragments > 1
-        166 => crate::algo::components::num_fragments(mol) > 1,
-
-        _ => false,
-    }
-}
 
 /// MACCS Keys definitions (all 166 keys from RDKit).
 ///

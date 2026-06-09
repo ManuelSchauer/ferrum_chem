@@ -112,7 +112,7 @@ struct CompResult {
 
 // ── CSV Loader ──────────────────────────────────────────────────────────────
 
-const DEFAULT_MAX_REFERENCE_ROWS: usize = 500;
+const DEFAULT_MAX_REFERENCE_ROWS: usize = 10000;
 
 /// Implements row limit.
 ///

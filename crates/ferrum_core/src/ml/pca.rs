@@ -209,7 +209,7 @@ impl Pca {
 /// Jacobi eigenvalue algorithm for symmetric matrices.
 ///
 /// Returns (eigenvalues, eigenvectors) where eigenvectors are column-wise.
-fn jacobi_eigen(a: &Array2<f64>) -> (Vec<f64>, Array2<f64>) {
+pub(crate) fn jacobi_eigen(a: &Array2<f64>) -> (Vec<f64>, Array2<f64>) {
     let n = a.nrows();
     if n == 0 {
         return (Vec::new(), Array2::<f64>::zeros((0, 0)));

@@ -112,7 +112,7 @@ pub fn num_spiro_atoms(mol: &mut Molecule) -> u32 {
         let mut is_spiro = true;
 
         // Get all rings containing this atom
-        let atom_rings: Vec<&Vec<u16>> = rings
+        let atom_rings: Vec<_> = rings
             .iter()
             .filter(|ring| ring.contains(&(atom_idx as u16)))
             .collect();

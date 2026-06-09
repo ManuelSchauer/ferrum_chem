@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! I/O module: Csv Reader.
 //!
 //! This module handles external data interchange (SMILES/SMARTS/CSV/SDF) and

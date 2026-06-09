@@ -45,7 +45,7 @@ use crate::error::{FerrumError, Result};
 use crate::mol::elements::{is_aromatic_symbol, symbol_to_atomic_number};
 use crate::mol::molecule::Molecule;
 use crate::mol::{atom::Atom, bond::Bond};
-use crate::types::BondType;
+use crate::types::{AtomIdx, BondType};
 use smallvec::SmallVec;
 
 /// Parses a SMILES string into a complete Molecule with implicit hydrogens calculated.
@@ -113,13 +113,6 @@ pub fn parse_smiles(smiles: &str) -> Result<Molecule> {
         crate::algo::valency::assign_dative_bonds(&mut mol);
     }
 
-    // Prime minimum cycle basis for ring-containing molecules so descriptors that
-    // rely on this cache (e.g. AromaticRingCount, QED aromatic ring term) avoid
-    // recomputing expensive cycle basis work in tight descriptor loops.
-    if saw_ring_closure {
-        crate::algo::rings::ensure_minimum_cycle_basis_bonds_cached(&mut mol);
-    }
-
     // ❌ Do NOT kekulize by default
     // RDKit keeps aromatic bonds as type AROMATIC (bond value = 1.5)
     // Kekulization is only needed for specific algorithms that require it
@@ -131,13 +124,12 @@ pub fn parse_smiles(smiles: &str) -> Result<Molecule> {
 /// SMILES parser state machine.
 struct SmilesParser<'a> {
     input: &'a str,
-    bytes: &'a [u8],
-    pos: usize,
+    cursor: &'a [u8],
     mol: Molecule,
     // Stack for branch points
-    stack: SmallVec<[u16; 16]>,
+    branch_stack: SmallVec<[usize; 16]>,
     // Ring closures: ring_number -> (atom_idx, explicit bond if provided at opening side)
-    rings: [Option<(u16, Option<BondType>)>; 100],
+    rings: [Option<(AtomIdx, Option<BondType>)>; 100],
     // Last atom added
     last_atom: Option<u16>,
     // Pending bond type (for next atom connection)
@@ -154,13 +146,12 @@ impl<'a> SmilesParser<'a> {
     /// Function context: `crates/ferrum_core/src/io/smiles.rs`.
     /// I/O-layer note: parsing/ingestion should surface explicit errors instead of silently repairing malformed input.
     fn new(input: &'a str) -> Self {
-        let capacity = input.len();
+        let capacity = input.len(); // Exact preallocation based on string length to guarantee NO reallocations
         Self {
             input,
-            bytes: input.as_bytes(),
-            pos: 0,
+            cursor: input.as_bytes(),
             mol: Molecule::with_capacity(capacity),
-            stack: SmallVec::new(),
+            branch_stack: SmallVec::new(),
             rings: [None; 100],
             last_atom: None,
             pending_bond: None,
@@ -173,8 +164,13 @@ impl<'a> SmilesParser<'a> {
     ///
     /// Function context: `crates/ferrum_core/src/io/smiles.rs`.
     /// I/O-layer note: parsing/ingestion should surface explicit errors instead of silently repairing malformed input.
+    #[inline(always)]
+    fn pos(&self) -> usize {
+        self.input.len() - self.cursor.len()
+    }
+
     fn parse(&mut self) -> Result<Molecule> {
-        while self.pos < self.bytes.len() {
+        while !self.cursor.is_empty() {
             self.parse_token()?;
         }
 
@@ -202,8 +198,8 @@ impl<'a> SmilesParser<'a> {
             // Branch opening
             b'(' => {
                 if let Some(atom) = self.last_atom {
-                    self.stack.push(atom);
-                    self.pos += 1;
+                    self.branch_stack.push(atom as usize);
+                    self.cursor = &self.cursor[1..];
                 } else {
                     return Err(FerrumError::ParseError(
                         "Branch without preceding atom".to_string(),
@@ -212,34 +208,34 @@ impl<'a> SmilesParser<'a> {
             }
             // Branch closing
             b')' => {
-                self.last_atom = self.stack.pop();
+                self.last_atom = self.branch_stack.pop().map(|idx| idx as u16);
                 if self.last_atom.is_none() {
                     return Err(FerrumError::ParseError(
                         "Unmatched closing parenthesis".to_string(),
                     ));
                 }
-                self.pos += 1;
+                self.cursor = &self.cursor[1..];
             }
             // Bond symbols
             b'-' => {
                 self.pending_bond = Some(BondType::Single);
-                self.pos += 1;
+                self.cursor = &self.cursor[1..];
             }
             b'=' => {
                 self.pending_bond = Some(BondType::Double);
-                self.pos += 1;
+                self.cursor = &self.cursor[1..];
             }
             b'#' => {
                 self.pending_bond = Some(BondType::Triple);
-                self.pos += 1;
+                self.cursor = &self.cursor[1..];
             }
             b':' => {
                 self.pending_bond = Some(BondType::Aromatic);
-                self.pos += 1;
+                self.cursor = &self.cursor[1..];
             }
             b'/' | b'\\' => {
                 // Stereochemistry - ignore for now
-                self.pos += 1;
+                self.cursor = &self.cursor[1..];
             }
             // Ring closures (digits)
             b'0'..=b'9' => {
@@ -249,7 +245,7 @@ impl<'a> SmilesParser<'a> {
             }
             b'%' => {
                 // Multi-digit ring number (10-99)
-                self.pos += 1;
+                self.cursor = &self.cursor[1..];
                 let ring_num = self.parse_multi_digit_ring()?;
                 self.handle_ring_closure(ring_num)?;
             }
@@ -271,21 +267,19 @@ impl<'a> SmilesParser<'a> {
                 } else {
                     return Err(FerrumError::ParseError(format!(
                         "Unknown element at position {}",
-                        self.pos
-                    )));
+                        self.pos())));
                 }
             }
             b'.' => {
                 // Disconnected fragment - reset connection
                 self.last_atom = None;
                 self.pending_bond = None;
-                self.pos += 1;
+                self.cursor = &self.cursor[1..];
             }
             _ => {
                 return Err(FerrumError::ParseError(format!(
                     "Unexpected character '{}' at position {}",
-                    c as char, self.pos
-                )));
+                    c as char, self.pos())));
             }
         }
 
@@ -319,34 +313,34 @@ impl<'a> SmilesParser<'a> {
         let first = self.current_byte()?;
         let is_aromatic = is_aromatic_symbol(first as char);
 
-        let atomic_num = if self.pos + 1 < self.bytes.len() {
-            match (first, self.bytes[self.pos + 1]) {
+        let atomic_num = if self.cursor.len() > 1 {
+            match (first, self.cursor[1]) {
                 (b'B', b'r') => {
-                    self.pos += 2;
+                    self.cursor = &self.cursor[2..];
                     35
                 }
                 (b'C', b'l') => {
-                    self.pos += 2;
+                    self.cursor = &self.cursor[2..];
                     17
                 }
                 _ => {
-                    self.pos += 1;
+                    self.cursor = &self.cursor[1..];
                     Self::organic_atomic_number(first).ok_or_else(|| {
                         FerrumError::ParseError(format!(
                             "Unknown element symbol '{}' at position {}",
                             first as char,
-                            self.pos - 1
+                            self.pos() - 1
                         ))
                     })?
                 }
             }
         } else {
-            self.pos += 1;
+            self.cursor = &self.cursor[1..];
             Self::organic_atomic_number(first).ok_or_else(|| {
                 FerrumError::ParseError(format!(
                     "Unknown element symbol '{}' at position {}",
                     first as char,
-                    self.pos - 1
+                    self.pos() - 1
                 ))
             })?
         };
@@ -360,7 +354,7 @@ impl<'a> SmilesParser<'a> {
     /// Function context: `crates/ferrum_core/src/io/smiles.rs`.
     /// I/O-layer note: parsing/ingestion should surface explicit errors instead of silently repairing malformed input.
     fn parse_bracket_atom(&mut self) -> Result<()> {
-        self.pos += 1; // skip '['
+        self.cursor = &self.cursor[1..]; // skip '['
 
         let mut isotope: u16 = 0;
         let mut charge: i8 = 0;
@@ -368,93 +362,92 @@ impl<'a> SmilesParser<'a> {
         let mut is_aromatic = false;
 
         // Parse isotope (optional digits)
-        while self.pos < self.bytes.len() && self.bytes[self.pos].is_ascii_digit() {
-            let digit = (self.bytes[self.pos] - b'0') as u16;
+        while !self.cursor.is_empty() && self.cursor[0].is_ascii_digit() {
+            let digit = (self.cursor[0] - b'0') as u16;
             isotope = isotope * 10 + digit;
-            self.pos += 1;
+            self.cursor = &self.cursor[1..];
         }
 
         // Parse element symbol
-        let start = self.pos;
+        let start = self.pos();
         let c = self.current_byte()?;
 
         if is_aromatic_symbol(c as char) {
             is_aromatic = true;
-            self.pos += 1;
+            self.cursor = &self.cursor[1..];
             // Aromatic two-letter bracket atoms supported by RDKit/OpenSMILES.
             // Examples: [se], [as], [te]
-            if self.pos < self.bytes.len() && self.bytes[self.pos].is_ascii_lowercase() {
-                let candidate = &self.input[start..self.pos + 1];
+            if !self.cursor.is_empty() && self.cursor[0].is_ascii_lowercase() {
+                let candidate = &self.input[start..self.pos() + 1];
                 if matches!(candidate, "se" | "as" | "te") {
-                    self.pos += 1;
+                    self.cursor = &self.cursor[1..];
                 }
             }
         } else if c.is_ascii_uppercase() {
-            self.pos += 1;
+            self.cursor = &self.cursor[1..];
             // Check for second lowercase letter
-            if self.pos < self.bytes.len() && self.bytes[self.pos].is_ascii_lowercase() {
-                self.pos += 1;
+            if !self.cursor.is_empty() && self.cursor[0].is_ascii_lowercase() {
+                self.cursor = &self.cursor[1..];
             }
         } else {
             return Err(FerrumError::ParseError(format!(
                 "Invalid atom symbol in bracket at position {}",
-                self.pos
-            )));
+                self.pos())));
         }
 
-        let symbol = &self.input[start..self.pos];
+        let symbol = &self.input[start..self.pos()];
         let atomic_num = symbol_to_atomic_number(symbol).ok_or_else(|| {
             FerrumError::ParseError(format!("Unknown element symbol: {}", symbol))
         })?;
 
         // Parse @/@@ for chirality (skip for now)
-        if self.pos < self.bytes.len() && self.current_byte()? == b'@' {
-            self.pos += 1;
-            if self.pos < self.bytes.len() && self.current_byte()? == b'@' {
-                self.pos += 1;
+        if !self.cursor.is_empty() && self.current_byte()? == b'@' {
+            self.cursor = &self.cursor[1..];
+            if !self.cursor.is_empty() && self.current_byte()? == b'@' {
+                self.cursor = &self.cursor[1..];
             }
         }
 
         // Parse explicit H count
-        if self.pos < self.bytes.len() && self.current_byte()? == b'H' {
-            self.pos += 1;
-            if self.pos < self.bytes.len() && self.bytes[self.pos].is_ascii_digit() {
-                h_count = (self.bytes[self.pos] - b'0') as u8;
-                self.pos += 1;
+        if !self.cursor.is_empty() && self.current_byte()? == b'H' {
+            self.cursor = &self.cursor[1..];
+            if !self.cursor.is_empty() && self.cursor[0].is_ascii_digit() {
+                h_count = (self.cursor[0] - b'0') as u8;
+                self.cursor = &self.cursor[1..];
             } else {
                 h_count = 1;
             }
         }
 
         // Parse charge
-        if self.pos < self.bytes.len() {
+        if !self.cursor.is_empty() {
             let c = self.current_byte()?;
             if c == b'+' || c == b'-' {
                 let sign = if c == b'+' { 1 } else { -1 };
-                self.pos += 1;
+                self.cursor = &self.cursor[1..];
 
                 // Count repeated +/- or parse digit
-                if self.pos < self.bytes.len() && self.bytes[self.pos].is_ascii_digit() {
-                    charge = ((self.bytes[self.pos] - b'0') as i8) * sign;
-                    self.pos += 1;
+                if !self.cursor.is_empty() && self.cursor[0].is_ascii_digit() {
+                    charge = ((self.cursor[0] - b'0') as i8) * sign;
+                    self.cursor = &self.cursor[1..];
                 } else {
                     charge = sign;
                     // Count additional +/- symbols
-                    while self.pos < self.bytes.len() && self.current_byte()? == c {
+                    while !self.cursor.is_empty() && self.current_byte()? == c {
                         charge += sign;
-                        self.pos += 1;
+                        self.cursor = &self.cursor[1..];
                     }
                 }
             }
         }
 
         // Expect closing bracket
-        if self.pos >= self.bytes.len() || self.current_byte()? != b']' {
+        if self.cursor.is_empty() || self.current_byte()? != b']' {
             return Err(FerrumError::ParseError(
                 "Missing closing bracket for atom".to_string(),
             ));
         }
-        self.pos += 1;
+        self.cursor = &self.cursor[1..];
 
         self.add_atom(atomic_num, is_aromatic, isotope, charge, h_count, true)?;
         Ok(())
@@ -536,7 +529,7 @@ impl<'a> SmilesParser<'a> {
             ));
         }
 
-        self.pos += 1;
+        self.cursor = &self.cursor[1..];
         Ok((c - b'0') as usize)
     }
 
@@ -547,12 +540,12 @@ impl<'a> SmilesParser<'a> {
     fn parse_multi_digit_ring(&mut self) -> Result<usize> {
         // SMILES spec: multi-digit ring closures use % prefix
         // After %, read exactly 2 digits for ring numbers 10-99
-        let start = self.pos;
+        let start = self.pos();
 
         // Read up to 2 digits
         let mut count = 0;
-        while count < 2 && self.pos < self.bytes.len() && self.bytes[self.pos].is_ascii_digit() {
-            self.pos += 1;
+        while count < 2 && !self.cursor.is_empty() && self.cursor[0].is_ascii_digit() {
+            self.cursor = &self.cursor[1..];
             count += 1;
         }
 
@@ -562,7 +555,7 @@ impl<'a> SmilesParser<'a> {
             ));
         }
 
-        let num_str = &self.input[start..self.pos];
+        let num_str = &self.input[start..self.pos()];
         num_str
             .parse::<usize>()
             .map_err(|_| FerrumError::ParseError(format!("Invalid ring number: {}", num_str)))
@@ -629,9 +622,7 @@ impl<'a> SmilesParser<'a> {
     /// Function context: `crates/ferrum_core/src/io/smiles.rs`.
     /// I/O-layer note: parsing/ingestion should surface explicit errors instead of silently repairing malformed input.
     fn current_byte(&self) -> Result<u8> {
-        self.bytes
-            .get(self.pos)
-            .copied()
+        self.cursor.first().copied()
             .ok_or_else(|| FerrumError::ParseError("Unexpected end of input".to_string()))
     }
 
@@ -640,9 +631,9 @@ impl<'a> SmilesParser<'a> {
     /// Function context: `crates/ferrum_core/src/io/smiles.rs`.
     /// I/O-layer note: parsing/ingestion should surface explicit errors instead of silently repairing malformed input.
     fn peek_two_letter_element(&self) -> bool {
-        self.pos + 1 < self.bytes.len()
-            && ((self.bytes[self.pos] == b'B' && self.bytes[self.pos + 1] == b'r')
-                || (self.bytes[self.pos] == b'C' && self.bytes[self.pos + 1] == b'l'))
+        self.cursor.len() > 1
+            && ((self.cursor[0] == b'B' && self.cursor[1] == b'r')
+                || (self.cursor[0] == b'C' && self.cursor[1] == b'l'))
     }
 }
 
@@ -792,4 +783,13 @@ mod tests {
         assert!(pyrrole.atoms[n_idx].is_aromatic());
         assert_eq!(pyrrole.atoms[n_idx].num_implicit_h, 1);
     }
+}
+
+/// Parses a batch of SMILES strings in parallel using Rayon.
+pub fn parse_smiles_batch<S: AsRef<str> + Sync>(smiles_list: &[S]) -> Vec<crate::error::Result<crate::mol::molecule::Molecule>> {
+    use rayon::prelude::*;
+    smiles_list
+        .par_iter()
+        .map(|s| parse_smiles(s.as_ref()))
+        .collect()
 }

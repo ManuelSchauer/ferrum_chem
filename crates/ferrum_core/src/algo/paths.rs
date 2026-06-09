@@ -274,43 +274,64 @@ pub fn compute_unweighted_distance_matrix_cached<'a>(
     ctx.dist_u8.resize(n * n, 255);
 
     if n > 0 {
-        ctx.bfs_queue.reserve(n);
-        ctx.bfs_dist.resize(n, 255);
+        ctx.bfs_visited_u64.resize(n, 0);
+        ctx.bfs_frontier_u64.resize(n, 0);
+        ctx.bfs_next_frontier_u64.resize(n, 0);
 
-        for start in 0..n {
-            ctx.bfs_queue.clear();
-            ctx.bfs_dist.fill(255);
-
-            ctx.bfs_dist[start] = 0;
-            ctx.bfs_queue.push(start);
-
-            let mut head = 0;
-            while head < ctx.bfs_queue.len() {
-                let current = ctx.bfs_queue[head];
-                head += 1;
-
-                let current_dist = ctx.bfs_dist[current];
-                let next_dist = current_dist + 1;
-
-                for &bond_idx in &mol.adjacency[current] {
-                    let bond = &mol.bonds[bond_idx as usize];
-                    let neighbor = if bond.source as usize == current {
-                        bond.target as usize
-                    } else {
-                        bond.source as usize
-                    };
-
-                    if ctx.bfs_dist[neighbor] == 255 {
-                        ctx.bfs_dist[neighbor] = next_dist;
-                        ctx.bfs_queue.push(neighbor);
+        let mut chunk_start = 0;
+        while chunk_start < n {
+            let chunk_size = (n - chunk_start).min(64);
+            
+            ctx.bfs_visited_u64.fill(0);
+            ctx.bfs_frontier_u64.fill(0);
+            
+            for i in 0..chunk_size {
+                ctx.bfs_visited_u64[chunk_start + i] = 1 << i;
+                ctx.bfs_frontier_u64[chunk_start + i] = 1 << i;
+                ctx.dist_u8[(chunk_start + i) * n + (chunk_start + i)] = 0;
+            }
+            
+            let mut d = 1u8;
+            let mut any_active = true;
+            
+            while any_active {
+                any_active = false;
+                ctx.bfs_next_frontier_u64.fill(0);
+                
+                for u in 0..n {
+                    let mut new_mask = 0u64;
+                    for &bond_idx in &mol.adjacency[u] {
+                        let bond = &mol.bonds[bond_idx as usize];
+                        let v = if bond.source as usize == u {
+                            bond.target as usize
+                        } else {
+                            bond.source as usize
+                        };
+                        new_mask |= ctx.bfs_frontier_u64[v];
+                    }
+                    new_mask &= !ctx.bfs_visited_u64[u];
+                    
+                    if new_mask != 0 {
+                        ctx.bfs_next_frontier_u64[u] = new_mask;
+                        ctx.bfs_visited_u64[u] |= new_mask;
+                        any_active = true;
+                        
+                        let mut mask = new_mask;
+                        while mask != 0 {
+                            let tz = mask.trailing_zeros();
+                            mask &= mask - 1; // clear lowest bit
+                            let s = chunk_start + tz as usize;
+                            ctx.dist_u8[s * n + u] = d;
+                        }
                     }
                 }
+                
+                std::mem::swap(&mut ctx.bfs_frontier_u64, &mut ctx.bfs_next_frontier_u64);
+                if d < 254 {
+                    d += 1;
+                }
             }
-
-            let start_offset = start * n;
-            for i in 0..n {
-                ctx.dist_u8[start_offset + i] = ctx.bfs_dist[i].min(255) as u8;
-            }
+            chunk_start += 64;
         }
     }
 

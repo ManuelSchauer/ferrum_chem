@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! Applicability Domain — k-NN distance AD, leverage AD.
 
 //! ## File guide: Ad

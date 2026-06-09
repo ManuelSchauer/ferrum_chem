@@ -66,6 +66,11 @@ pub struct CalculationContext {
     pub bfs_queue: Vec<usize>,
     pub bfs_dist: Vec<usize>,
 
+    // Bitset BFS workspace
+    pub bfs_visited_u64: Vec<u64>,
+    pub bfs_frontier_u64: Vec<u64>,
+    pub bfs_next_frontier_u64: Vec<u64>,
+
     // Reusable float workspaces for matrix operations (e.g. Ipc)
     pub mat_a: Vec<f64>,
     pub mat_b: Vec<f64>,
@@ -165,6 +170,9 @@ impl CalculationContext {
             morgan_neighbor_invariants: Vec::new(),
             morgan_features: Vec::new(),
             morgan_features_global_cache: FxHashMap::default(),
+            bfs_visited_u64: Vec::new(),
+            bfs_frontier_u64: Vec::new(),
+            bfs_next_frontier_u64: Vec::new(),
         }
     }
 
@@ -178,6 +186,9 @@ impl CalculationContext {
         self.has_dist_bo = false;
         self.bfs_queue.clear();
         self.bfs_dist.clear();
+        self.bfs_visited_u64.clear();
+        self.bfs_frontier_u64.clear();
+        self.bfs_next_frontier_u64.clear();
 
         self.dist_f64.clear();
         self.row_f64.clear();

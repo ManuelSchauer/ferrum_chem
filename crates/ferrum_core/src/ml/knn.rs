@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! k-Nearest Neighbors — regression and classification.
 //!
 //! Supports Euclidean distance (for descriptors) and Tanimoto distance (for fingerprints).

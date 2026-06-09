@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! I/O module: Builder.
 //!
 //! This module handles external data interchange (SMILES/SMARTS/CSV/SDF) and
@@ -164,3 +165,84 @@ impl MoleculeBuilder for Molecule {
         self
     }
 }
+
+impl Molecule {
+    /// Creates a fluent builder for ergonomic programmatic molecule construction.
+    pub fn builder() -> FluentMoleculeBuilder {
+        FluentMoleculeBuilder::new()
+    }
+}
+
+/// A fluent builder for programmatic molecule construction that supports method chaining.
+/// Atom indices are implicitly sequential (0 for the first added atom, 1 for the second, etc.).
+pub struct FluentMoleculeBuilder {
+    mol: Molecule,
+}
+
+impl Default for FluentMoleculeBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl FluentMoleculeBuilder {
+    pub fn new() -> Self {
+        Self { mol: Molecule::default() }
+    }
+
+    pub fn add_atom(mut self, atomic_number: u8) -> Self {
+        self.mol.add_atom(atomic_number);
+        self
+    }
+
+    pub fn add_bond(mut self, u: AtomIdx, v: AtomIdx, order: BondType) -> Self {
+        self.mol.add_bond(u, v, order);
+        self
+    }
+
+    pub fn set_charge(mut self, atom: AtomIdx, charge: i8) -> Self {
+        self.mol.set_charge(atom, charge);
+        self
+    }
+
+    pub fn set_isotope(mut self, atom: AtomIdx, iso: u16) -> Self {
+        self.mol.set_isotope(atom, iso);
+        self
+    }
+
+    pub fn set_explicit_h(mut self, atom: AtomIdx, count: u8) -> Self {
+        self.mol.set_explicit_h(atom, count);
+        self
+    }
+
+    pub fn set_aromatic(mut self, atom: AtomIdx, aromatic: bool) -> Self {
+        self.mol.set_aromatic(atom, aromatic);
+        self
+    }
+
+    pub fn build(self) -> Molecule {
+        self.mol
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_fluent_builder() {
+        let mol = Molecule::builder()
+            .add_atom(6) // 0: Carbon
+            .add_atom(8) // 1: Oxygen
+            .add_bond(0, 1, BondType::Double)
+            .set_charge(1, -1)
+            .build();
+
+        assert_eq!(mol.atoms.len(), 2);
+        assert_eq!(mol.bonds.len(), 1);
+        assert_eq!(mol.atoms[0].atomic_number, 6);
+        assert_eq!(mol.atoms[1].atomic_number, 8);
+        assert_eq!(mol.atoms[1].formal_charge, -1);
+    }
+}
+

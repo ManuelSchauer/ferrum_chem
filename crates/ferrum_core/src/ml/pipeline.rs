@@ -358,7 +358,7 @@ where
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 /// Implements RegressionCandidate.
 ///
 /// Function context: `crates/ferrum_core/src/ml/pipeline.rs`.
@@ -366,19 +366,22 @@ where
 enum RegressionCandidate {
     Knn {
         k: usize,
-        label: &'static str,
+        label: String,
     },
     RandomForest {
         n_trees: usize,
-        label: &'static str,
+        max_depth: usize,
+        min_samples_split: usize,
+        max_features_ratio: f64,
+        label: String,
     },
     Pls {
         n_components: usize,
-        label: &'static str,
+        label: String,
     },
     ElasticNet {
         alpha: f64,
-        label: &'static str,
+        label: String,
     },
 }
 
@@ -387,12 +390,12 @@ impl RegressionCandidate {
     ///
     /// Function context: `crates/ferrum_core/src/ml/pipeline.rs`.
     /// ML-layer note: optimized for batch computation and zero-allocation passes.
-    fn label(self) -> &'static str {
+    fn label(&self) -> &str {
         match self {
             Self::Knn { label, .. }
             | Self::RandomForest { label, .. }
             | Self::Pls { label, .. }
-            | Self::ElasticNet { label, .. } => label,
+            | Self::ElasticNet { label, .. } => label.as_str(),
         }
     }
 
@@ -400,10 +403,10 @@ impl RegressionCandidate {
     ///
     /// Function context: `crates/ferrum_core/src/ml/pipeline.rs`.
     /// ML-layer note: optimized for batch computation and zero-allocation passes.
-    fn pipeline_name(self) -> String {
+    fn pipeline_name(&self) -> String {
         match self {
             Self::Knn { k, .. } => format!("kNN-{k}"),
-            Self::RandomForest { n_trees, .. } => format!("RF-{n_trees}"),
+            Self::RandomForest { n_trees, max_depth, .. } => format!("RF-{n_trees}-d{max_depth}"),
             Self::Pls { n_components, .. } => format!("PLS-{n_components}"),
             Self::ElasticNet { alpha, .. } => format!("EN-a{alpha}"),
         }
@@ -414,7 +417,7 @@ impl RegressionCandidate {
     /// Function context: `crates/ferrum_core/src/ml/pipeline.rs`.
     /// ML-layer note: optimized for batch computation and zero-allocation passes.
     fn evaluate_q2(
-        self,
+        &self,
         scaled: &Array2<f64>,
         targets: &Array1<f64>,
         n_cv_folds: usize,
@@ -432,13 +435,13 @@ impl RegressionCandidate {
                     let model = KnnRegressor::fit(
                         train_x,
                         train_y,
-                        k,
+                        *k,
                         DistanceMetric::Euclidean,
                     );
                     ModelType::KnnRegressor(model)
                 },
             ),
-            Self::RandomForest { n_trees, .. } => cv_regression_q2_with_mode(
+            Self::RandomForest { n_trees, max_depth, min_samples_split, max_features_ratio, .. } => cv_regression_q2_with_mode(
                 scaled,
                 targets,
                 n_cv_folds,
@@ -446,7 +449,7 @@ impl RegressionCandidate {
                 parallel_folds,
                 |train_x, train_y| {
                     let model =
-                        RandomForestRegressor::fit(train_x, train_y, n_trees, 10, 2, 0.33, seed);
+                        RandomForestRegressor::fit(train_x, train_y, *n_trees, *max_depth, *min_samples_split, *max_features_ratio, seed);
                     ModelType::RandomForestRegressor(model)
                 },
             ),
@@ -457,7 +460,7 @@ impl RegressionCandidate {
                 seed,
                 parallel_folds,
                 |train_x, train_y| {
-                    let model = PlsRegression::fit(train_x, train_y, n_components);
+                    let model = PlsRegression::fit(train_x, train_y, *n_components);
                     ModelType::PlsRegression(model)
                 },
             ),
@@ -468,7 +471,7 @@ impl RegressionCandidate {
                 seed,
                 parallel_folds,
                 |train_x, train_y| {
-                    let model = ElasticNet::fit(train_x, train_y, alpha, 0.5, 1000, 1e-6);
+                    let model = ElasticNet::fit(train_x, train_y, *alpha, 0.5, 1000, 1e-6);
                     ModelType::ElasticNet(model)
                 },
             ),
@@ -479,28 +482,28 @@ impl RegressionCandidate {
     ///
     /// Function context: `crates/ferrum_core/src/ml/pipeline.rs`.
     /// ML-layer note: optimized for batch computation and zero-allocation passes.
-    fn fit_model(self, scaled: &Array2<f64>, targets: &Array1<f64>, seed: u64) -> ModelType {
+    fn fit_model(&self, scaled: &Array2<f64>, targets: &Array1<f64>, seed: u64) -> ModelType {
         match self {
             Self::Knn { k, .. } => ModelType::KnnRegressor(KnnRegressor::fit(
                 scaled.view(),
                 targets.view(),
-                k,
+                *k,
                 DistanceMetric::Euclidean,
             )),
-            Self::RandomForest { n_trees, .. } => ModelType::RandomForestRegressor(
-                RandomForestRegressor::fit(scaled.view(), targets.view(), n_trees, 10, 2, 0.33, seed),
+            Self::RandomForest { n_trees, max_depth, min_samples_split, max_features_ratio, .. } => ModelType::RandomForestRegressor(
+                RandomForestRegressor::fit(scaled.view(), targets.view(), *n_trees, *max_depth, *min_samples_split, *max_features_ratio, seed),
             ),
             Self::Pls { n_components, .. } => {
-                ModelType::PlsRegression(PlsRegression::fit(scaled.view(), targets.view(), n_components))
+                ModelType::PlsRegression(PlsRegression::fit(scaled.view(), targets.view(), *n_components))
             }
             Self::ElasticNet { alpha, .. } => {
-                ModelType::ElasticNet(ElasticNet::fit(scaled.view(), targets.view(), alpha, 0.5, 1000, 1e-6))
+                ModelType::ElasticNet(ElasticNet::fit(scaled.view(), targets.view(), *alpha, 0.5, 1000, 1e-6))
             }
         }
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 /// Implements CandidateEvaluation.
 ///
 /// Function context: `crates/ferrum_core/src/ml/pipeline.rs`.
@@ -511,7 +514,7 @@ struct CandidateEvaluation {
     q2: f64,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 /// Implements CandidateProgressEvent.
 ///
 /// Function context: `crates/ferrum_core/src/ml/pipeline.rs`.
@@ -525,54 +528,52 @@ enum CandidateProgressEvent {
 /// Function context: `crates/ferrum_core/src/ml/pipeline.rs`.
 /// ML-layer note: optimized for batch computation and zero-allocation passes.
 fn build_regression_candidates(n_features: usize) -> Vec<RegressionCandidate> {
-    let mut candidates = vec![
-        RegressionCandidate::Knn {
-            k: 3,
-            label: "kNN-3",
-        },
-        RegressionCandidate::Knn {
-            k: 5,
-            label: "kNN-5",
-        },
-        RegressionCandidate::Knn {
-            k: 7,
-            label: "kNN-7",
-        },
-        RegressionCandidate::RandomForest {
-            n_trees: 50,
-            label: "RF-50",
-        },
-        RegressionCandidate::RandomForest {
-            n_trees: 100,
-            label: "RF-100",
-        },
-    ];
+    let mut candidates = Vec::new();
 
-    for nc in [2usize, 3usize, 5usize] {
-        if nc < n_features {
-            candidates.push(RegressionCandidate::Pls {
-                n_components: nc,
-                label: match nc {
-                    2 => "PLS-2",
-                    3 => "PLS-3",
-                    _ => "PLS-5",
-                },
+    // kNN sweep
+    for &k in &[3, 5, 7, 9] {
+        candidates.push(RegressionCandidate::Knn {
+            k,
+            label: format!("kNN-{}", k),
+        });
+    }
+
+    // Random Forest sweep
+    for &n_trees in &[50, 100] {
+        for &max_depth in &[10, 20] {
+            candidates.push(RegressionCandidate::RandomForest {
+                n_trees,
+                max_depth,
+                min_samples_split: 2,
+                max_features_ratio: 0.33,
+                label: format!("RF-{}-d{}", n_trees, max_depth),
             });
         }
     }
 
+    // PLS sweep
+    for nc in [2usize, 3usize, 5usize] {
+        if nc < n_features {
+            candidates.push(RegressionCandidate::Pls {
+                n_components: nc,
+                label: format!("PLS-{}", nc),
+            });
+        }
+    }
+
+    // ElasticNet sweep
     candidates.extend([
         RegressionCandidate::ElasticNet {
             alpha: 0.01,
-            label: "EN-0.01",
+            label: "EN-0.01".to_string(),
         },
         RegressionCandidate::ElasticNet {
             alpha: 0.1,
-            label: "EN-0.1",
+            label: "EN-0.1".to_string(),
         },
         RegressionCandidate::ElasticNet {
             alpha: 1.0,
-            label: "EN-1.0",
+            label: "EN-1.0".to_string(),
         },
     ]);
 
@@ -596,14 +597,14 @@ fn top_k_candidates(
 }
 
 /// Progress stage emitted by AutoQsar model selection.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub enum AutoQsarProgressStage {
     Scaling,
     CandidateStart {
-        label: &'static str,
+        label: String,
     },
     CandidateDone {
-        label: &'static str,
+        label: String,
         q2: f64,
         best_q2: f64,
     },
@@ -612,7 +613,7 @@ pub enum AutoQsarProgressStage {
 }
 
 /// Progress payload emitted by AutoQsar model selection.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct AutoQsarProgress {
     pub stage: AutoQsarProgressStage,
     pub completed_candidates: usize,
@@ -688,8 +689,9 @@ impl AutoQsar {
         let scaler = StandardScaler::fit(&data.features).expect("Dataset features must not be empty");
         let scaled = scaler.transform(&data.features);
         let candidates = build_regression_candidates(data.n_features());
-        let total_candidates = candidates.len();
+        let mut current_candidates: Vec<_> = candidates.into_iter().enumerate().collect();
         let thread_pool = build_optional_thread_pool(runtime_cfg.max_threads);
+        let total_candidates = current_candidates.len();
         let effective_prune_keep = effective_prune_keep(
             total_candidates,
             n_cv_folds,
@@ -711,10 +713,10 @@ impl AutoQsar {
          -> Vec<CandidateEvaluation> {
             if mode == AutoQsarParallelMode::Candidate {
                 if emit_progress {
-                    for (_, candidate) in active.iter().copied() {
+                    for (_, candidate) in active.iter() {
                         on_progress(AutoQsarProgress {
                             stage: AutoQsarProgressStage::CandidateStart {
-                                label: candidate.label(),
+                                label: candidate.label().to_string(),
                             },
                             completed_candidates,
                             total_candidates: progress_total_candidates,
@@ -724,12 +726,14 @@ impl AutoQsar {
                 let (tx, rx) = mpsc::channel::<CandidateProgressEvent>();
                 install_in_pool(thread_pool.as_ref(), || {
                     rayon::scope(|scope| {
-                        for (order, candidate) in active.iter().copied() {
+                        for (order, candidate) in active.iter() {
                             let tx = tx.clone();
                             let scaled_ref = &scaled;
                             let targets_ref = &data.targets;
+                            let candidate_clone = candidate.clone();
+                            let order = *order;
                             scope.spawn(move |_| {
-                                let q2_raw = candidate.evaluate_q2(
+                                let q2_raw = candidate_clone.evaluate_q2(
                                     scaled_ref,
                                     targets_ref,
                                     folds,
@@ -744,7 +748,7 @@ impl AutoQsar {
                                 let _ =
                                     tx.send(CandidateProgressEvent::Done(CandidateEvaluation {
                                         order,
-                                        candidate,
+                                        candidate: candidate_clone,
                                         q2,
                                     }));
                             });
@@ -761,7 +765,7 @@ impl AutoQsar {
                         running_best = running_best.max(eval.q2);
                         on_progress(AutoQsarProgress {
                             stage: AutoQsarProgressStage::CandidateDone {
-                                label: eval.candidate.label(),
+                                label: eval.candidate.label().to_string(),
                                 q2: eval.q2,
                                 best_q2: running_best,
                             },
@@ -775,11 +779,11 @@ impl AutoQsar {
             } else {
                 let mut out = Vec::with_capacity(active.len());
                 let mut running_best = f64::NEG_INFINITY;
-                for (order, candidate) in active.iter().copied() {
+                for (order, candidate) in active.iter() {
                     if emit_progress {
                         on_progress(AutoQsarProgress {
                             stage: AutoQsarProgressStage::CandidateStart {
-                                label: candidate.label(),
+                                label: candidate.label().to_string(),
                             },
                             completed_candidates,
                             total_candidates: progress_total_candidates,
@@ -798,7 +802,7 @@ impl AutoQsar {
                         running_best = running_best.max(q2);
                         on_progress(AutoQsarProgress {
                             stage: AutoQsarProgressStage::CandidateDone {
-                                label: candidate.label(),
+                                label: candidate.label().to_string(),
                                 q2,
                                 best_q2: running_best,
                             },
@@ -807,8 +811,8 @@ impl AutoQsar {
                         });
                     }
                     out.push(CandidateEvaluation {
-                        order,
-                        candidate,
+                        order: *order,
+                        candidate: candidate.clone(),
                         q2,
                     });
                 }
@@ -816,15 +820,9 @@ impl AutoQsar {
             }
         };
 
-        let all_candidates = candidates
-            .iter()
-            .copied()
-            .enumerate()
-            .collect::<Vec<(usize, RegressionCandidate)>>();
-
         let candidates_for_full = if let Some(keep) = effective_prune_keep {
             let quick_pass = evaluate_candidates(
-                &all_candidates,
+                &current_candidates,
                 runtime_cfg.prune_folds,
                 false,
                 AutoQsarParallelMode::Candidate,
@@ -836,7 +834,7 @@ impl AutoQsar {
                 .map(|eval| (eval.order, eval.candidate))
                 .collect::<Vec<_>>()
         } else {
-            all_candidates.clone()
+            current_candidates
         };
 
         let full_pass = evaluate_candidates(
@@ -846,9 +844,9 @@ impl AutoQsar {
             runtime_cfg.parallel_mode,
         );
 
-        let mut best_eval: Option<CandidateEvaluation> = None;
+        let mut best_evaluation: Option<CandidateEvaluation> = None;
         for eval in full_pass {
-            let is_better = match best_eval {
+            let is_better = match &best_evaluation {
                 Some(current) => {
                     eval.q2.total_cmp(&current.q2).is_gt()
                         || (eval.q2.total_cmp(&current.q2).is_eq() && eval.order < current.order)
@@ -856,15 +854,15 @@ impl AutoQsar {
                 None => true,
             };
             if is_better {
-                best_eval = Some(eval);
+                best_evaluation = Some(eval);
             }
         }
 
         // Add AD to best pipeline
-        let best_eval = best_eval.expect("No model trained");
-        let best_candidate = best_eval.candidate;
-        let model = best_candidate.fit_model(&scaled, &data.targets, seed);
-        let train_preds = match &model {
+        let best_evaluation = best_evaluation.expect("No model trained");
+        let best_candidate = best_evaluation.candidate;
+        let best_model = best_candidate.fit_model(&scaled, &data.targets, seed);
+        let train_preds = match &best_model {
             ModelType::KnnRegressor(m) => m.predict(scaled.view()),
             ModelType::RandomForestRegressor(m) => m.predict(scaled.view()),
             ModelType::PlsRegression(m) => m.predict(scaled.view()),
@@ -875,22 +873,24 @@ impl AutoQsar {
             data.targets.as_slice().unwrap(),
             train_preds.as_slice().unwrap(),
         );
+
+        on_progress(AutoQsarProgress {
+            stage: AutoQsarProgressStage::AdFit,
+            completed_candidates: progress_total_candidates,
+            total_candidates: progress_total_candidates,
+        });
+
         let mut pipeline = QsarPipeline {
             name: best_candidate.pipeline_name(),
             task: TaskType::Regression,
-            scaler: ScalerType::Standard(scaler.clone()),
+            scaler: ScalerType::Standard(scaler),
             pca: None,
-            model,
+            model: best_model,
             ad: None,
             feature_names: data.feature_names.clone(),
             train_r2,
-            cv_q2: best_eval.q2,
+            cv_q2: best_evaluation.q2,
         };
-        on_progress(AutoQsarProgress {
-            stage: AutoQsarProgressStage::AdFit,
-            completed_candidates,
-            total_candidates: progress_total_candidates,
-        });
         let ad = KnnDistanceAD::fit(&scaled, 5, 2.0);
         pipeline.ad = Some(ad);
         on_progress(AutoQsarProgress {

@@ -52,6 +52,7 @@
 pub mod aromaticity;
 pub mod canon;
 pub mod components;
+pub mod distance_matrix;
 pub mod electronic;
 pub mod iso;
 pub mod kekulize;

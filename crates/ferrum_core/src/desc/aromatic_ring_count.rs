@@ -65,7 +65,7 @@ pub fn compute_aromatic_ring_count(mol: &Molecule) -> u32 {
 ///
 /// Function context: `crates/ferrum_core/src/desc/aromatic_ring_count.rs`.
 /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-fn compute_aromatic_ring_count_cached(mol: &mut Molecule) -> u32 {
+pub fn compute_aromatic_ring_count_cached(mol: &mut Molecule) -> u32 {
     ensure_minimum_cycle_basis_bonds_cached(mol);
     let cycles = mol
         .cached_min_cycle_basis_bonds()

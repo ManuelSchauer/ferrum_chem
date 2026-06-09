@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! VSA (Van der Waals Surface Area) descriptors.
 //!
 //! Property-weighted surface area bins — among the most predictive 2D QSAR descriptors.

@@ -6282,17 +6282,17 @@ fn train_pipeline_with_progress(
         let mut bridge = |progress: AutoQsarProgress| {
             let stage_text = match progress.stage {
                 AutoQsarProgressStage::Scaling => "AutoQsar: scaling",
-                AutoQsarProgressStage::CandidateStart { label } => {
+                AutoQsarProgressStage::CandidateStart { ref label } => {
                     label_buf.clear();
                     label_buf.push_str("AutoQsar: ");
-                    label_buf.push_str(label);
+                    label_buf.push_str(&label);
                     label_buf.push_str(" CV start");
                     &label_buf
                 }
-                AutoQsarProgressStage::CandidateDone { label, q2, best_q2 } => {
+                AutoQsarProgressStage::CandidateDone { ref label, q2, best_q2 } => {
                     label_buf.clear();
                     label_buf.push_str("AutoQsar: ");
-                    label_buf.push_str(label);
+                    label_buf.push_str(&label);
                     label_buf.push_str(" done (q2=");
                     label_buf.push_str(&format!("{q2:.4}"));
                     label_buf.push_str(", best=");

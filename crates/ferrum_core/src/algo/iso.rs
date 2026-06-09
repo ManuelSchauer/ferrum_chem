@@ -20,7 +20,6 @@
 //! Key symbols in this file:
 //! - `fn has_substruct_match`
 //! - `fn find_first_match`
-//! - `fn find_first_match_with_ring_ctx`
 //! - `fn count_matches`
 //! - `fn has_at_least_matches`
 //!
@@ -47,6 +46,218 @@ use crate::mol::molecule::Molecule;
 use smallvec::SmallVec;
 use std::borrow::Cow;
 
+pub(crate) struct SmallTargetGraphCache {
+    pub(crate) n_atoms: usize,
+    pub(crate) bond_lookup: Vec<u16>,
+}
+
+impl SmallTargetGraphCache {
+    pub(crate) fn for_target(target: &Molecule) -> Option<Self> {
+        let n_atoms = target.num_atoms();
+        if n_atoms > 64 {
+            return None;
+        }
+        let mut bond_lookup = vec![u16::MAX; n_atoms * n_atoms];
+        for (bond_idx, bond) in target.bonds.iter().enumerate() {
+            let bond_idx = bond_idx as u16;
+            let src = bond.source as usize;
+            let dst = bond.target as usize;
+            bond_lookup[src * n_atoms + dst] = bond_idx;
+            bond_lookup[dst * n_atoms + src] = bond_idx;
+        }
+        Some(Self {
+            n_atoms,
+            bond_lookup,
+        })
+    }
+
+    #[inline]
+    pub(crate) fn lookup_bond(&self, a: u16, b: u16) -> Option<u16> {
+        let a = a as usize;
+        let b = b as usize;
+        if a >= self.n_atoms || b >= self.n_atoms {
+            return None;
+        }
+        let idx = self.bond_lookup[a * self.n_atoms + b];
+        (idx != u16::MAX).then_some(idx)
+    }
+}
+
+pub(crate) struct TargetAtomStats {
+    pub(crate) aromatic_atoms: u16,
+    pub(crate) aliphatic_atoms: u16,
+    pub(crate) aromatic_bonds: u16,
+    pub(crate) ring_bonds: u16,
+}
+
+impl TargetAtomStats {
+    pub(crate) fn from_molecule(target: &Molecule) -> Self {
+        let mut aromatic_atoms = 0u16;
+        let mut aromatic_bonds = 0u16;
+        let mut ring_bonds = 0u16;
+
+        for atom in &target.atoms {
+            if atom.is_aromatic() {
+                aromatic_atoms = aromatic_atoms.saturating_add(1);
+            }
+        }
+
+        for bond in &target.bonds {
+            if bond.is_aromatic() {
+                aromatic_bonds = aromatic_bonds.saturating_add(1);
+            }
+            if bond.is_in_ring() {
+                ring_bonds = ring_bonds.saturating_add(1);
+            }
+        }
+
+        let total_atoms = target.atoms.len().min(u16::MAX as usize) as u16;
+        let aliphatic_atoms = total_atoms.saturating_sub(aromatic_atoms);
+
+        Self {
+            aromatic_atoms,
+            aliphatic_atoms,
+            aromatic_bonds,
+            ring_bonds,
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct QueryScreen {
+    pub min_atoms: usize,
+    pub min_bonds: usize,
+    pub required_elements: smallvec::SmallVec<[(u8, u16); 8]>,
+    pub requires_aromatic_atom: bool,
+}
+
+impl QueryScreen {
+    pub fn build(query: &crate::io::smarts::QueryGraph) -> Self {
+        use crate::io::smarts::{QueryAtom, AtomPrimitive};
+
+        fn query_primitive_requires_aromatic(p: &AtomPrimitive) -> bool {
+            match p {
+                AtomPrimitive::AnyAromatic | AtomPrimitive::Aromatic(_) => true,
+                AtomPrimitive::Not(_) => false,
+                AtomPrimitive::And(reqs) => reqs.iter().any(query_primitive_requires_aromatic),
+                AtomPrimitive::Or(opts) => !opts.is_empty() && opts.iter().all(query_primitive_requires_aromatic),
+                AtomPrimitive::Recursive(sub_pattern) => sub_pattern.atoms.first().is_some_and(query_atom_requires_aromatic),
+                _ => false,
+            }
+        }
+
+        fn query_atom_requires_aromatic(query_atom: &QueryAtom) -> bool {
+            query_atom.primitives.iter().any(query_primitive_requires_aromatic)
+        }
+
+        fn fixed_atomic_number_primitive(primitive: &AtomPrimitive) -> Option<u8> {
+            match primitive {
+                AtomPrimitive::Element(z) | AtomPrimitive::Aromatic(z) | AtomPrimitive::Aliphatic(z) => Some(*z),
+                AtomPrimitive::And(items) => {
+                    let mut fixed = None;
+                    for item in items {
+                        let Some(element) = fixed_atomic_number_primitive(item) else { continue; };
+                        if let Some(prev) = fixed {
+                            if prev != element { return None; }
+                        } else {
+                            fixed = Some(element);
+                        }
+                    }
+                    fixed
+                }
+                AtomPrimitive::Or(options) => {
+                    let mut elements = options.iter().filter_map(fixed_atomic_number_primitive);
+                    let first = elements.next()?;
+                    if elements.all(|element| element == first) { Some(first) } else { None }
+                }
+                _ => None,
+            }
+        }
+
+        fn fixed_atomic_number(query_atom: &QueryAtom) -> Option<u8> {
+            let mut fixed = None;
+            for primitive in &query_atom.primitives {
+                let Some(element) = fixed_atomic_number_primitive(primitive) else { continue; };
+                if let Some(prev) = fixed {
+                    if prev != element { return None; }
+                } else {
+                    fixed = Some(element);
+                }
+            }
+            fixed
+        }
+
+        let mut required = [0u16; 119];
+        let mut requires_aromatic_atom = false;
+        for atom in &query.atoms {
+            if let Some(element) = fixed_atomic_number(atom) {
+                let idx = element as usize;
+                if idx < required.len() {
+                    required[idx] = required[idx].saturating_add(1);
+                }
+            }
+            requires_aromatic_atom |= query_atom_requires_aromatic(atom);
+        }
+        let required_elements = required
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, &count)| (count > 0).then_some((idx as u8, count)))
+            .collect();
+        Self {
+            min_atoms: query.atoms.len(),
+            min_bonds: query.bonds.len(),
+            required_elements,
+            requires_aromatic_atom,
+        }
+    }
+
+    pub fn passes(&self, target_stats: &TargetAtomStats, target_counts: &[u16; 119], target_num_atoms: usize, target_num_bonds: usize) -> bool {
+        if self.min_atoms > target_num_atoms || self.min_bonds > target_num_bonds {
+            return false;
+        }
+        if self.requires_aromatic_atom && target_stats.aromatic_atoms == 0 {
+            return false;
+        }
+        self.required_elements
+            .iter()
+            .all(|&(element, count)| target_counts[element as usize] >= count)
+    }
+    
+    pub fn passes_target(&self, iso_target: &IsoTarget) -> bool {
+        self.passes(&iso_target.target_stats, &iso_target.target_counts, iso_target.target.num_atoms(), iso_target.target.num_bonds())
+    }
+}
+
+pub struct IsoTarget<'a> {
+    pub target: &'a Molecule,
+    pub(crate) target_counts: [u16; 119],
+    pub(crate) target_stats: TargetAtomStats,
+    pub(crate) small_target_cache: std::cell::OnceCell<Option<SmallTargetGraphCache>>,
+    pub(crate) ring_ctx: std::cell::OnceCell<SmartsRingContext>,
+}
+
+impl<'a> IsoTarget<'a> {
+    pub fn new(target: &'a Molecule) -> Self {
+        Self {
+            target,
+            target_counts: target_element_counts(target),
+            target_stats: TargetAtomStats::from_molecule(target),
+            small_target_cache: std::cell::OnceCell::new(),
+            ring_ctx: std::cell::OnceCell::new(),
+        }
+    }
+
+    pub(crate) fn get_small_graph_cache(&self) -> Option<&SmallTargetGraphCache> {
+        self.small_target_cache.get_or_init(|| {
+            SmallTargetGraphCache::for_target(self.target)
+        }).as_ref()
+    }
+
+    pub(crate) fn get_ring_ctx(&self) -> &SmartsRingContext {
+        self.ring_ctx.get_or_init(|| SmartsRingContext::for_molecule(self.target))
+    }
+}
+
 /// Substructure matching using VF2 algorithm.
 ///
 /// Finds if the query pattern exists as a subgraph in the target molecule.
@@ -59,19 +270,11 @@ use std::borrow::Cow;
 /// assert!(has_substruct_match(&molecule, &pattern));
 /// ```
 pub fn has_substruct_match(target: &Molecule, pattern: &QueryGraph) -> bool {
-    has_substruct_match_with_ring_ctx(target, pattern, None)
+    has_substruct_match_target(&IsoTarget::new(target), pattern)
 }
 
-/// Checks whether substruct match with ring ctx.
-///
-/// Function context: `crates/ferrum_core/src/algo/iso.rs`.
-/// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
-pub(crate) fn has_substruct_match_with_ring_ctx(
-    target: &Molecule,
-    pattern: &QueryGraph,
-    ring_ctx: Option<&SmartsRingContext>,
-) -> bool {
-    find_first_match_with_ring_ctx(target, pattern, ring_ctx).is_some()
+pub fn has_substruct_match_target(iso_target: &IsoTarget, pattern: &QueryGraph) -> bool {
+    find_first_match_target(iso_target, pattern).is_some()
 }
 
 /// Finds the first substructure match and returns the atom mapping.
@@ -79,18 +282,14 @@ pub(crate) fn has_substruct_match_with_ring_ctx(
 /// Returns a vector where index i is the pattern atom index,
 /// and the value is the corresponding target atom index.
 pub fn find_first_match(target: &Molecule, pattern: &QueryGraph) -> Option<Vec<u16>> {
-    find_first_match_with_ring_ctx(target, pattern, None)
+    find_first_match_target(&IsoTarget::new(target), pattern)
 }
 
-/// Finds first match with ring ctx.
-///
-/// Function context: `crates/ferrum_core/src/algo/iso.rs`.
-/// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
-fn find_first_match_with_ring_ctx(
-    target: &Molecule,
+pub fn find_first_match_target(
+    iso_target: &IsoTarget,
     pattern: &QueryGraph,
-    ring_ctx: Option<&SmartsRingContext>,
 ) -> Option<Vec<u16>> {
+    let target = iso_target.target;
     // Empty pattern matches everything
     if pattern.atoms.is_empty() {
         return Some(vec![]);
@@ -106,21 +305,21 @@ fn find_first_match_with_ring_ctx(
 
     if let Some(fast_path) = detect_fast_path(pattern) {
         let mut first = None;
-        visit_fast_path_matches(target, pattern, fast_path, ring_ctx, |mapping| {
+        visit_fast_path_matches_target(iso_target, pattern, fast_path, |mapping| {
             first = Some(mapping.to_vec());
             false
         });
         return first;
     }
 
-    let mut state = MatchState::new(target, pattern, MatchMode::FirstMatch, ring_ctx);
+    let mut state = MatchState::new(iso_target, pattern, MatchMode::FirstMatch);
     if !state.overall_possible {
         return None;
     }
 
     // Try matching starting from each atom in the target
     if backtrack(&mut state, 0) {
-        Some(state.mapping.clone())
+        Some(state.mapping.to_vec())
     } else {
         None
     }
@@ -128,6 +327,11 @@ fn find_first_match_with_ring_ctx(
 
 /// Counts the number of substructure matches.
 pub fn count_matches(target: &Molecule, pattern: &QueryGraph) -> usize {
+    count_matches_target(&IsoTarget::new(target), pattern)
+}
+
+pub fn count_matches_target(iso_target: &IsoTarget, pattern: &QueryGraph) -> usize {
+    let target = iso_target.target;
     if pattern.atoms.is_empty() {
         return 1;
     }
@@ -140,14 +344,14 @@ pub fn count_matches(target: &Molecule, pattern: &QueryGraph) -> usize {
 
     if let Some(fast_path) = detect_fast_path(pattern) {
         let mut count = 0usize;
-        visit_fast_path_matches(target, pattern, fast_path, None, |_| {
+        visit_fast_path_matches_target(iso_target, pattern, fast_path, |_| {
             count += 1;
             true
         });
         return count;
     }
 
-    let mut state = MatchState::new(target, pattern, MatchMode::Enumerate, None);
+    let mut state = MatchState::new(iso_target, pattern, MatchMode::Enumerate);
     if !state.overall_possible {
         return 0;
     }
@@ -162,14 +366,18 @@ pub fn count_matches(target: &Molecule, pattern: &QueryGraph) -> usize {
 /// Uses early-stop enumeration, so it avoids counting all matches when only
 /// a threshold decision is needed.
 pub fn has_at_least_matches(target: &Molecule, pattern: &QueryGraph, min_matches: usize) -> bool {
+    has_at_least_matches_target(&IsoTarget::new(target), pattern, min_matches)
+}
+
+pub fn has_at_least_matches_target(iso_target: &IsoTarget, pattern: &QueryGraph, min_matches: usize) -> bool {
     if min_matches == 0 {
         return true;
     }
     if min_matches == 1 {
-        return has_substruct_match(target, pattern);
+        return has_substruct_match_target(iso_target, pattern);
     }
     let mut matched = 0usize;
-    visit_matches(target, pattern, |_| {
+    visit_matches_target(iso_target, pattern, |_| {
         matched += 1;
         matched < min_matches
     });
@@ -179,25 +387,22 @@ pub fn has_at_least_matches(target: &Molecule, pattern: &QueryGraph, min_matches
 /// Visits all substructure matches without materializing them.
 ///
 /// The visitor returns `true` to continue enumeration or `false` to stop early.
-pub fn visit_matches<F>(target: &Molecule, pattern: &QueryGraph, mut visit: F)
+pub fn visit_matches<F>(target: &Molecule, pattern: &QueryGraph, visit: F)
 where
     F: FnMut(&[u16]) -> bool,
 {
-    visit_matches_with_ring_ctx(target, pattern, None, &mut visit);
+    visit_matches_target(&IsoTarget::new(target), pattern, visit);
 }
 
-/// Implements matches with ring ctx.
-///
-/// Function context: `crates/ferrum_core/src/algo/iso.rs`.
-/// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
-pub(crate) fn visit_matches_with_ring_ctx<F>(
-    target: &Molecule,
+
+pub fn visit_matches_target<F>(
+    iso_target: &IsoTarget,
     pattern: &QueryGraph,
-    ring_ctx: Option<&SmartsRingContext>,
     mut visit: F,
 ) where
     F: FnMut(&[u16]) -> bool,
 {
+    let target = iso_target.target;
     if pattern.atoms.is_empty() {
         let _ = visit(&[]);
         return;
@@ -211,11 +416,11 @@ pub(crate) fn visit_matches_with_ring_ctx<F>(
     }
 
     if let Some(fast_path) = detect_fast_path(pattern) {
-        visit_fast_path_matches(target, pattern, fast_path, ring_ctx, visit);
+        visit_fast_path_matches_target(iso_target, pattern, fast_path, visit);
         return;
     }
 
-    let mut state = MatchState::new(target, pattern, MatchMode::FirstMatch, ring_ctx);
+    let mut state = MatchState::new(iso_target, pattern, MatchMode::FirstMatch);
     if !state.overall_possible {
         return;
     }
@@ -227,6 +432,11 @@ pub(crate) fn visit_matches_with_ring_ctx<F>(
 /// Returns a vector of mappings, where each mapping is a vector
 /// of target atom indices corresponding to pattern atoms.
 pub fn find_all_matches(target: &Molecule, pattern: &QueryGraph) -> Vec<Vec<u16>> {
+    find_all_matches_target(&IsoTarget::new(target), pattern)
+}
+
+pub fn find_all_matches_target(iso_target: &IsoTarget, pattern: &QueryGraph) -> Vec<Vec<u16>> {
+    let target = iso_target.target;
     if pattern.atoms.is_empty() {
         return vec![vec![]];
     }
@@ -240,7 +450,7 @@ pub fn find_all_matches(target: &Molecule, pattern: &QueryGraph) -> Vec<Vec<u16>
 
     if let Some(fast_path) = detect_fast_path(pattern) {
         let mut matches = Vec::new();
-        visit_fast_path_matches(target, pattern, fast_path, None, |mapping| {
+        visit_fast_path_matches_target(iso_target, pattern, fast_path, |mapping| {
             matches.push(mapping.to_vec());
             true
         });
@@ -248,7 +458,7 @@ pub fn find_all_matches(target: &Molecule, pattern: &QueryGraph) -> Vec<Vec<u16>
     }
 
     let mut matches = Vec::new();
-    let mut state = MatchState::new(target, pattern, MatchMode::Enumerate, None);
+    let mut state = MatchState::new(iso_target, pattern, MatchMode::Enumerate);
     if !state.overall_possible {
         return matches;
     }
@@ -297,24 +507,22 @@ fn detect_fast_path(pattern: &QueryGraph) -> Option<FastPathKind> {
 ///
 /// Function context: `crates/ferrum_core/src/algo/iso.rs`.
 /// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
-fn visit_fast_path_matches<F>(
-    target: &Molecule,
+
+fn visit_fast_path_matches_target<F>(
+    iso_target: &IsoTarget,
     pattern: &QueryGraph,
     fast_path: FastPathKind,
-    ring_ctx: Option<&SmartsRingContext>,
     mut visit: F,
 ) where
     F: FnMut(&[u16]) -> bool,
 {
+    let target = iso_target.target;
     let ring_ctx_owned = if query_graph_needs_ring_context(pattern) {
-        if let Some(ctx) = ring_ctx {
-            Some(Cow::Borrowed(ctx))
-        } else {
-            Some(Cow::Owned(SmartsRingContext::for_molecule(target)))
-        }
+        Some(Cow::Borrowed(iso_target.get_ring_ctx()))
     } else {
         None
     };
+
     let recursive_cache = SmartsRecursiveCache::default();
 
     match fast_path {
@@ -396,105 +604,6 @@ enum MatchMode {
     Enumerate,
 }
 
-#[derive(Debug, Clone)]
-/// Implements SmallTargetGraphCache.
-///
-/// Function context: `crates/ferrum_core/src/algo/iso.rs`.
-/// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
-struct SmallTargetGraphCache {
-    n_atoms: usize,
-    bond_lookup: Vec<u16>,
-}
-
-impl SmallTargetGraphCache {
-    /// Implements target.
-    ///
-    /// Function context: `crates/ferrum_core/src/algo/iso.rs`.
-    /// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
-    fn for_target(target: &Molecule) -> Option<Self> {
-        let n_atoms = target.num_atoms();
-        if n_atoms > 64 {
-            return None;
-        }
-        let mut bond_lookup = vec![u16::MAX; n_atoms * n_atoms];
-        for (bond_idx, bond) in target.bonds.iter().enumerate() {
-            let bond_idx = bond_idx as u16;
-            let src = bond.source as usize;
-            let dst = bond.target as usize;
-            bond_lookup[src * n_atoms + dst] = bond_idx;
-            bond_lookup[dst * n_atoms + src] = bond_idx;
-        }
-        Some(Self {
-            n_atoms,
-            bond_lookup,
-        })
-    }
-
-    #[inline]
-    /// Implements bond.
-    ///
-    /// Function context: `crates/ferrum_core/src/algo/iso.rs`.
-    /// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
-    fn lookup_bond(&self, a: u16, b: u16) -> Option<u16> {
-        let a = a as usize;
-        let b = b as usize;
-        if a >= self.n_atoms || b >= self.n_atoms {
-            return None;
-        }
-        let idx = self.bond_lookup[a * self.n_atoms + b];
-        (idx != u16::MAX).then_some(idx)
-    }
-}
-
-#[derive(Debug, Clone, Copy)]
-/// Implements TargetAtomStats.
-///
-/// Function context: `crates/ferrum_core/src/algo/iso.rs`.
-/// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
-struct TargetAtomStats {
-    aromatic_atoms: u16,
-    aliphatic_atoms: u16,
-    aromatic_bonds: u16,
-    ring_bonds: u16,
-}
-
-impl TargetAtomStats {
-    /// Constructs molecule between representations.
-    ///
-    /// Function context: `crates/ferrum_core/src/algo/iso.rs`.
-    /// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
-    fn from_molecule(target: &Molecule) -> Self {
-        let mut aromatic_atoms = 0u16;
-        let mut aromatic_bonds = 0u16;
-        let mut ring_bonds = 0u16;
-
-        for atom in &target.atoms {
-            if atom.is_aromatic() {
-                aromatic_atoms = aromatic_atoms.saturating_add(1);
-            }
-        }
-
-        for bond in &target.bonds {
-            if bond.is_aromatic() {
-                aromatic_bonds = aromatic_bonds.saturating_add(1);
-            }
-            if bond.is_in_ring() {
-                ring_bonds = ring_bonds.saturating_add(1);
-            }
-        }
-
-        let total_atoms = target.atoms.len().min(u16::MAX as usize) as u16;
-        let aliphatic_atoms = total_atoms.saturating_sub(aromatic_atoms);
-
-        Self {
-            aromatic_atoms,
-            aliphatic_atoms,
-            aromatic_bonds,
-            ring_bonds,
-        }
-    }
-}
-
 #[derive(Debug, Clone, Copy, Default)]
 /// Implements AtomFastFilter.
 ///
@@ -538,16 +647,16 @@ impl AtomFastFilter {
 struct MatchState<'a> {
     target: &'a Molecule,
     pattern: &'a QueryGraph,
-    mapping: Vec<u16>,                 // pattern_idx -> target_idx
-    reverse_mapping: Vec<Option<u16>>, // target_idx -> Some(pattern_idx) or None
+    mapping: SmallVec<[u16; 32]>,                 // pattern_idx -> target_idx
+    reverse_mapping: SmallVec<[Option<u16>; 64]>, // target_idx -> Some(pattern_idx) or None
     ring_ctx: Option<Cow<'a, SmartsRingContext>>,
     recursive_cache: SmartsRecursiveCache,
-    candidate_targets: Vec<Vec<u16>>, // pattern_idx -> candidate target atom idx
-    estimated_candidate_sizes: Vec<usize>,
-    search_order: Vec<usize>,       // search depth -> pattern_idx
-    atom_match_cache: Vec<Vec<u8>>, // 0=unknown, 1=false, 2=true
-    atom_fast_filters: Vec<AtomFastFilter>,
-    small_target_cache: Option<SmallTargetGraphCache>,
+    candidate_targets: SmallVec<[SmallVec<[u16; 16]>; 32]>, // pattern_idx -> candidate target atom idx
+    estimated_candidate_sizes: SmallVec<[usize; 32]>,
+    search_order: SmallVec<[usize; 32]>,       // search depth -> pattern_idx
+    atom_match_cache: SmallVec<[SmallVec<[u8; 64]>; 32]>, // 0=unknown, 1=false, 2=true
+    atom_fast_filters: SmallVec<[AtomFastFilter; 32]>,
+    small_target_cache: Option<&'a SmallTargetGraphCache>,
     precomputed_atom_matches: bool,
     overall_possible: bool,
 }
@@ -558,26 +667,22 @@ impl<'a> MatchState<'a> {
     /// Function context: `crates/ferrum_core/src/algo/iso.rs`.
     /// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
     fn new(
-        target: &'a Molecule,
+        iso_target: &'a IsoTarget<'a>,
         pattern: &'a QueryGraph,
         mode: MatchMode,
-        ring_ctx: Option<&'a SmartsRingContext>,
     ) -> Self {
+        let target = iso_target.target;
         let ring_ctx = if query_graph_needs_ring_context(pattern) {
-            if let Some(ctx) = ring_ctx {
-                Some(Cow::Borrowed(ctx))
-            } else {
-                Some(Cow::Owned(SmartsRingContext::for_molecule(target)))
-            }
+            Some(Cow::Borrowed(iso_target.get_ring_ctx()))
         } else {
             None
         };
 
-        let target_counts = target_element_counts(target);
-        let target_stats = TargetAtomStats::from_molecule(target);
+        let target_counts = &iso_target.target_counts;
+        let target_stats = &iso_target.target_stats;
         let mut overall_possible = pattern.bonds.len() <= target.bonds.len();
         if overall_possible {
-            overall_possible = passes_element_screen(pattern, &target_counts, &target_stats);
+            overall_possible = passes_element_screen(pattern, target_counts, target_stats);
         }
 
         let atom_fast_filters: Vec<AtomFastFilter> = pattern
@@ -599,12 +704,12 @@ impl<'a> MatchState<'a> {
 
         let precomputed_atom_matches = overall_possible && mode == MatchMode::Enumerate;
 
-        let mut candidate_targets = Vec::with_capacity(pattern.atoms.len());
-        let mut estimated_candidate_sizes = Vec::with_capacity(pattern.atoms.len());
+        let mut candidate_targets = SmallVec::with_capacity(pattern.atoms.len());
+        let mut estimated_candidate_sizes = SmallVec::with_capacity(pattern.atoms.len());
         if precomputed_atom_matches {
             for (pattern_idx, query_atom) in pattern.atoms.iter().enumerate() {
                 let filter = atom_fast_filters[pattern_idx];
-                let mut candidates = Vec::new();
+                let mut candidates = SmallVec::new();
                 for target_idx in 0..target.atoms.len() {
                     let target_idx = target_idx as u16;
                     if !filter.matches_atom(&target.atoms[target_idx as usize]) {
@@ -626,7 +731,7 @@ impl<'a> MatchState<'a> {
                 candidate_targets.push(candidates);
             }
         } else {
-            candidate_targets.resize(pattern.atoms.len(), Vec::new());
+            candidate_targets.resize(pattern.atoms.len(), SmallVec::new());
             estimated_candidate_sizes.extend(pattern.atoms.iter().map(|query_atom| {
                 fixed_atomic_number(query_atom)
                     .map(|z| target_counts[z as usize] as usize)
@@ -634,7 +739,7 @@ impl<'a> MatchState<'a> {
             }));
         }
 
-        let mut search_order: Vec<usize> = (0..pattern.atoms.len()).collect();
+        let mut search_order: SmallVec<[usize; 32]> = (0..pattern.atoms.len()).collect();
         search_order.sort_by_key(|&pattern_idx| {
             (
                 estimated_candidate_sizes[pattern_idx],
@@ -644,23 +749,24 @@ impl<'a> MatchState<'a> {
         });
 
         let atom_match_cache = if precomputed_atom_matches {
-            Vec::new()
+            SmallVec::new()
         } else {
-            vec![vec![0u8; target.atoms.len()]; pattern.atoms.len()]
-        };
+            smallvec::smallvec![smallvec::smallvec![0u8; target.atoms.len()]; pattern.atoms.len()]
+        };        let small_target_cache = iso_target.get_small_graph_cache();
+
         Self {
             target,
             pattern,
-            mapping: vec![u16::MAX; pattern.atoms.len()],
-            reverse_mapping: vec![None; target.atoms.len()],
+            mapping: smallvec::smallvec![u16::MAX; pattern.atoms.len()],
+            reverse_mapping: smallvec::smallvec![None; target.atoms.len()],
             ring_ctx,
             recursive_cache: SmartsRecursiveCache::default(),
             candidate_targets,
             estimated_candidate_sizes,
             search_order,
             atom_match_cache,
-            atom_fast_filters,
-            small_target_cache: SmallTargetGraphCache::for_target(target),
+            atom_fast_filters: atom_fast_filters.into_iter().collect(),
+            small_target_cache,
             precomputed_atom_matches,
             overall_possible,
         }
@@ -1243,7 +1349,7 @@ fn backtrack(state: &mut MatchState, depth: usize) -> bool {
 fn backtrack_all(state: &mut MatchState, depth: usize, matches: &mut Vec<Vec<u16>>) {
     // All pattern atoms mapped - record this match
     if depth >= state.pattern.atoms.len() {
-        matches.push(state.mapping.clone());
+        matches.push(state.mapping.to_vec());
         return;
     }
 
@@ -1316,6 +1422,7 @@ impl QueryGraph {
             atoms: vec![QueryAtom::element(element)],
             bonds: vec![],
             adjacency: vec![smallvec::SmallVec::new()],
+            needs_ring_context: false,
         }
     }
 
@@ -1331,6 +1438,7 @@ impl QueryGraph {
                 query: bond,
             }],
             adjacency: vec![smallvec::smallvec![0], smallvec::smallvec![0]],
+            needs_ring_context: false,
         }
     }
 }
@@ -1458,6 +1566,7 @@ mod tests {
             atoms: vec![],
             bonds: vec![],
             adjacency: vec![],
+            needs_ring_context: false,
         };
 
         let mut visited = 0usize;
@@ -1502,6 +1611,7 @@ mod tests {
             atoms: vec![QueryAtom::aromatic()],
             bonds: vec![],
             adjacency: vec![smallvec::SmallVec::new()],
+            needs_ring_context: false,
         };
 
         assert!(has_substruct_match(&mol, &pattern));

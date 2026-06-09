@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! Rings algorithms.
 //!
 //! This module contains core cheminformatics graph logic used by parsers and
@@ -43,6 +44,7 @@ use crate::mol::molecule::Molecule;
 use crate::types::AtomIdx;
 use rustc_hash::FxHashSet;
 use std::collections::VecDeque;
+use bitvec::prelude::*;
 
 /// Detects rings using SSSR (Smallest Set of Smallest Rings) algorithm.
 ///
@@ -75,7 +77,7 @@ use std::collections::VecDeque;
 /// assert_eq!(rings.len(), 1);
 /// assert_eq!(rings[0].len(), 6);
 /// ```
-pub fn find_sssr(mol: &mut Molecule) -> Vec<Vec<AtomIdx>> {
+pub fn find_sssr(mol: &mut Molecule) -> Vec<smallvec::SmallVec<[AtomIdx; 8]>> {
     mol.invalidate_cached_properties();
     if mol.num_atoms() == 0 {
         return Vec::new();
@@ -103,14 +105,14 @@ pub fn find_sssr(mol: &mut Molecule) -> Vec<Vec<AtomIdx>> {
 /// ring flags untouched. It is used by read-only query contexts (SMARTS ring
 /// primitives) to avoid cloning whole molecules just to run mutable ring
 /// perception.
-pub(crate) fn find_sssr_cycles(mol: &Molecule) -> Vec<Vec<AtomIdx>> {
+pub(crate) fn find_sssr_cycles(mol: &Molecule) -> Vec<smallvec::SmallVec<[AtomIdx; 8]>> {
     if mol.num_atoms() == 0 {
         return Vec::new();
     }
 
     let n_atoms = mol.num_atoms();
     let mut all_rings = Vec::new();
-    let mut visited = vec![false; n_atoms];
+    let mut visited = bitvec![0; n_atoms];
 
     for start_idx in 0..n_atoms {
         if visited[start_idx] {
@@ -134,7 +136,7 @@ pub fn find_minimum_cycle_basis_bonds(mol: &Molecule) -> Vec<smallvec::SmallVec<
         return Vec::new();
     }
 
-    let mut visited = vec![false; n_atoms];
+    let mut visited = bitvec![0; n_atoms];
     let mut basis = Vec::new();
 
     for start in 0..n_atoms {
@@ -195,7 +197,7 @@ fn cycle_rank_count(mol: &Molecule) -> usize {
         return 0;
     }
 
-    let mut visited = vec![false; n_atoms];
+    let mut visited = bitvec![0; n_atoms];
     let mut components = 0usize;
     let mut queue = VecDeque::new();
 
@@ -204,7 +206,7 @@ fn cycle_rank_count(mol: &Molecule) -> usize {
             continue;
         }
         components += 1;
-        visited[start] = true;
+        visited.set(start, true);
         queue.push_back(start);
 
         while let Some(atom_idx) = queue.pop_front() {
@@ -216,7 +218,7 @@ fn cycle_rank_count(mol: &Molecule) -> usize {
                     bond.source as usize
                 };
                 if !visited[neighbor] {
-                    visited[neighbor] = true;
+                    visited.set(neighbor, true);
                     queue.push_back(neighbor);
                 }
             }
@@ -481,7 +483,7 @@ fn collect_shortest_bond_paths(
 fn collect_component(
     mol: &Molecule,
     start: usize,
-    visited: &mut [bool],
+    visited: &mut BitSlice,
 ) -> (Vec<usize>, Vec<usize>) {
     let mut atoms = Vec::new();
     let mut bonds = Vec::new();
@@ -489,7 +491,7 @@ fn collect_component(
     let mut queue = Vec::new();
     let mut head = 0usize;
 
-    visited[start] = true;
+    visited.set(start, true);
     queue.push(start);
 
     while head < queue.len() {
@@ -512,7 +514,7 @@ fn collect_component(
             };
 
             if !visited[neighbor] {
-                visited[neighbor] = true;
+                visited.set(neighbor, true);
                 queue.push(neighbor);
             }
         }
@@ -777,18 +779,18 @@ fn minimum_orthogonal_cycle(
 fn detect_rings_in_component(
     mol: &Molecule,
     start: AtomIdx,
-    visited: &mut [bool],
-) -> Vec<Vec<AtomIdx>> {
+    visited: &mut BitSlice,
+) -> Vec<smallvec::SmallVec<[AtomIdx; 8]>> {
     let n_atoms = mol.num_atoms();
 
     // Build spanning tree using BFS
     let mut parent = vec![None; n_atoms];
-    let mut in_tree = vec![false; n_atoms];
+    let mut in_tree = bitvec![0; n_atoms];
     let mut queue = VecDeque::new();
 
     queue.push_back(start);
-    visited[start as usize] = true;
-    in_tree[start as usize] = true;
+    visited.set(start as usize, true);
+    in_tree.set(start as usize, true);
 
     while let Some(current) = queue.pop_front() {
         // Explore neighbors
@@ -801,9 +803,9 @@ fn detect_rings_in_component(
             };
 
             if !visited[neighbor as usize] {
-                visited[neighbor as usize] = true;
+                visited.set(neighbor as usize, true);
                 parent[neighbor as usize] = Some(current);
-                in_tree[neighbor as usize] = true;
+                in_tree.set(neighbor as usize, true);
                 queue.push_back(neighbor);
             }
         }
@@ -814,7 +816,7 @@ fn detect_rings_in_component(
     let mut seen_cycle_keys: FxHashSet<Vec<AtomIdx>> = FxHashSet::default();
     let mut path_start = Vec::new();
     let mut path_end = Vec::new();
-    let mut membership = vec![false; n_atoms];
+    let mut membership = bitvec![0; n_atoms];
 
     for atom_idx in 0..n_atoms {
         if !in_tree[atom_idx] {
@@ -852,7 +854,7 @@ fn detect_rings_in_component(
                     key.sort_unstable();
                     key.dedup();
                     if seen_cycle_keys.insert(key) {
-                        all_cycles.push(cycle);
+                        all_cycles.push(smallvec::SmallVec::from_vec(cycle));
                     }
                 }
             }
@@ -880,7 +882,7 @@ fn rings_are_same(ring1: &[AtomIdx], ring2: &[AtomIdx]) -> bool {
 fn find_cycle_path(start: AtomIdx, end: AtomIdx, parent: &[Option<AtomIdx>]) -> Vec<AtomIdx> {
     let mut path_start = Vec::new();
     let mut path_end = Vec::new();
-    let mut membership = vec![false; parent.len()];
+    let mut membership = bitvec![0; parent.len()];
     find_cycle_path_reuse(
         start,
         end,
@@ -901,7 +903,7 @@ fn find_cycle_path_reuse(
     parent: &[Option<AtomIdx>],
     path_start: &mut Vec<AtomIdx>,
     path_end: &mut Vec<AtomIdx>,
-    membership: &mut [bool],
+    membership: &mut BitSlice,
 ) -> Vec<AtomIdx> {
     // Trace paths from both endpoints to root
     path_start.clear();
@@ -911,11 +913,11 @@ fn find_cycle_path_reuse(
     let mut current = start;
     while let Some(p) = parent[current as usize] {
         path_start.push(current);
-        membership[current as usize] = true;
+        membership.set(current as usize, true);
         current = p;
     }
     path_start.push(current); // Add root
-    membership[current as usize] = true;
+    membership.set(current as usize, true);
 
     current = end;
     while let Some(p) = parent[current as usize] {

@@ -45,6 +45,7 @@ use once_cell::sync::Lazy;
 struct FuncGroupPattern {
     name: &'static str,
     query: QueryGraph,
+    screen: crate::algo::iso::QueryScreen,
 }
 
 macro_rules! fg_patterns {
@@ -54,7 +55,7 @@ macro_rules! fg_patterns {
                 $(
                     {
                         let q = parse_smarts($smarts).expect(concat!("Bad SMARTS: ", $smarts));
-                        FuncGroupPattern { name: $label, query: q }
+                        FuncGroupPattern { name: $label, screen: crate::algo::iso::QueryScreen::build(&q), query: q }
                     },
                 )+
             ]
@@ -129,9 +130,16 @@ impl Descriptor for FunctionalGroupCounts {
         mol: &mut Molecule,
         _ctx: &mut crate::desc::context::CalculationContext,
     ) -> DescriptorValue {
+        let iso_target = crate::algo::iso::IsoTarget::new(mol);
         let counts: Vec<u16> = FUNC_GROUP_PATTERNS
             .iter()
-            .map(|p| smarts_count_matches(mol, &p.query) as u16)
+            .map(|p| {
+                if !p.screen.passes_target(&iso_target) {
+                    0
+                } else {
+                    crate::algo::iso::count_matches_target(&iso_target, &p.query) as u16
+                }
+            })
             .collect();
         DescriptorValue::IntU16Vec(counts)
     }
@@ -160,9 +168,16 @@ impl Descriptor for AcidicGroupCount {
         mol: &mut Molecule,
         _ctx: &mut crate::desc::context::CalculationContext,
     ) -> DescriptorValue {
+        let iso_target = crate::algo::iso::IsoTarget::new(mol);
         let total: usize = ACIDIC_PATTERNS
             .iter()
-            .map(|p| smarts_count_matches(mol, &p.query))
+            .map(|p| {
+                if !p.screen.passes_target(&iso_target) {
+                    0
+                } else {
+                    crate::algo::iso::count_matches_target(&iso_target, &p.query)
+                }
+            })
             .sum();
         DescriptorValue::Int(total as u32)
     }
@@ -191,9 +206,16 @@ impl Descriptor for BasicGroupCount {
         mol: &mut Molecule,
         _ctx: &mut crate::desc::context::CalculationContext,
     ) -> DescriptorValue {
+        let iso_target = crate::algo::iso::IsoTarget::new(mol);
         let total: usize = BASIC_PATTERNS
             .iter()
-            .map(|p| smarts_count_matches(mol, &p.query))
+            .map(|p| {
+                if !p.screen.passes_target(&iso_target) {
+                    0
+                } else {
+                    crate::algo::iso::count_matches_target(&iso_target, &p.query)
+                }
+            })
             .sum();
         DescriptorValue::Int(total as u32)
     }

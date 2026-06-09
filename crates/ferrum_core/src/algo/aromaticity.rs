@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! Aromaticity algorithms.
 //!
 //! This module contains core cheminformatics graph logic used by parsers and
@@ -45,6 +46,7 @@ use crate::algo::rings::find_sssr;
 use crate::mol::molecule::Molecule;
 use crate::types::{AtomIdx, BondType};
 use rustc_hash::FxHashSet;
+use smallvec::{smallvec, SmallVec};
 use std::collections::VecDeque;
 
 #[derive(Clone, PartialEq, Eq, Hash)]
@@ -138,12 +140,12 @@ pub fn perceive_aromaticity(mol: &mut Molecule) {
     // next ring in the same conjugated system.
     let n = mol.num_atoms();
     let n_bonds = mol.num_bonds();
-    let mut prev_atoms = vec![false; n];
-    let mut next_atoms = vec![false; n];
-    let mut prev_bonds = vec![(BondType::Single, false); n_bonds];
-    let mut next_bonds = vec![(BondType::Single, false); n_bonds];
-    let mut in_aromatic_ring = vec![false; n];
-    let mut bond_in_aromatic_ring = vec![false; n_bonds];
+    let mut prev_atoms: SmallVec<[bool; 32]> = smallvec![false; n];
+    let mut next_atoms: SmallVec<[bool; 32]> = smallvec![false; n];
+    let mut prev_bonds: SmallVec<[(BondType, bool); 32]> = smallvec![(BondType::Single, false); n_bonds];
+    let mut next_bonds: SmallVec<[(BondType, bool); 32]> = smallvec![(BondType::Single, false); n_bonds];
+    let mut in_aromatic_ring: SmallVec<[bool; 32]> = smallvec![false; n];
+    let mut bond_in_aromatic_ring: SmallVec<[bool; 32]> = smallvec![false; n_bonds];
     let mut seen_perimeters: FxHashSet<RingDedupKey> = FxHashSet::default();
 
     for _ in 0..6 {
@@ -319,7 +321,13 @@ fn collect_aromaticity_ring_candidates(mol: &mut Molecule) -> Vec<Vec<AtomIdx>> 
 
     let mut rings = Vec::new();
     let mut seen: FxHashSet<RingDedupKey> = FxHashSet::default();
-    for ring in sssr_rings.iter().chain(local_cycles.iter()) {
+    for ring in &sssr_rings {
+        let key = ring_dedup_key(ring);
+        if seen.insert(key) {
+            rings.push(ring.to_vec());
+        }
+    }
+    for ring in &local_cycles {
         let key = ring_dedup_key(ring);
         if seen.insert(key) {
             rings.push(ring.clone());
@@ -3109,7 +3117,7 @@ mod tests {
             parse_smiles("CC(C)(C)C1=CC=C(C2=CC(=O)C3=CC=C(NC(=O)C4=CC=CC=C4Cl)C=C3O2)C=C1")
                 .unwrap();
         let target = ring_set_key(&[12, 10, 9, 8, 28, 27]);
-        let sssr = find_sssr(&mut mol);
+        let sssr: Vec<Vec<u16>> = find_sssr(&mut mol).into_iter().map(|r| r.to_vec()).collect();
         let local = find_local_cycles(&mol, 5, 24);
         let dfs = find_dfs_cycles(&mol, 5, 8, 2000);
         let found = sssr
@@ -3143,7 +3151,7 @@ mod tests {
         )
         .unwrap();
         let target = ring_set_key(&[28, 4, 2, 1, 35, 30]);
-        let sssr = find_sssr(&mut mol);
+        let sssr: Vec<Vec<u16>> = find_sssr(&mut mol).into_iter().map(|r| r.to_vec()).collect();
         let local = find_local_cycles(&mol, 5, 24);
         let dfs = find_dfs_cycles(&mol, 5, 8, 2000);
         let found = sssr
@@ -3213,7 +3221,7 @@ mod tests {
             parse_smiles("CC(C)(C)C1=CC=C(C2=CC(=O)C3=CC=C(NC(=O)C4=CC=CC=C4Cl)C=C3O2)C=C1")
                 .unwrap();
         let target = ring_set_key(&[12, 10, 9, 8, 28, 27]);
-        let sssr = find_sssr(&mut mol);
+        let sssr: Vec<Vec<u16>> = find_sssr(&mut mol).into_iter().map(|r| r.to_vec()).collect();
         let local = find_local_cycles(&mol, 5, 24);
         let dfs = find_dfs_cycles(&mol, 5, 8, 2000);
         let mut rings = Vec::new();
@@ -3246,7 +3254,7 @@ mod tests {
         )
         .unwrap();
 
-        let sssr = find_sssr(&mut mol);
+        let sssr: Vec<Vec<u16>> = find_sssr(&mut mol).into_iter().map(|r| r.to_vec()).collect();
         let local = find_local_cycles(&mol, 5, 24);
         let dfs = find_dfs_cycles(&mol, 5, 8, 2000);
         let mut rings = Vec::new();
@@ -3306,7 +3314,7 @@ mod tests {
         )
         .unwrap();
 
-        let sssr = find_sssr(&mut mol);
+        let sssr: Vec<Vec<u16>> = find_sssr(&mut mol).into_iter().map(|r| r.to_vec()).collect();
         let local = find_local_cycles(&mol, 5, 24);
         let dfs = find_dfs_cycles(&mol, 5, 8, 2000);
         let mut rings = Vec::new();
@@ -3365,7 +3373,7 @@ mod tests {
         )
         .unwrap();
 
-        let sssr = find_sssr(&mut mol);
+        let sssr: Vec<Vec<u16>> = find_sssr(&mut mol).into_iter().map(|r| r.to_vec()).collect();
         let local = find_local_cycles(&mol, 5, 24);
         let dfs = find_dfs_cycles(&mol, 5, 8, 2000);
         let target = ring_set_key(&[33u16, 34, 35, 36, 37, 38]);
@@ -3395,7 +3403,7 @@ mod tests {
         )
         .unwrap();
 
-        let sssr = find_sssr(&mut mol);
+        let sssr: Vec<Vec<u16>> = find_sssr(&mut mol).into_iter().map(|r| r.to_vec()).collect();
         let local = find_local_cycles(&mol, 5, 24);
         let dfs = find_dfs_cycles(&mol, 5, 8, 2000);
         let target = ring_set_key(&[33u16, 34, 35, 36, 37, 38]);
@@ -3425,7 +3433,7 @@ mod tests {
         )
         .unwrap();
 
-        let sssr = find_sssr(&mut mol);
+        let sssr: Vec<Vec<u16>> = find_sssr(&mut mol).into_iter().map(|r| r.to_vec()).collect();
         let local = find_local_cycles(&mol, 5, 24);
         let dfs = find_dfs_cycles(&mol, 5, 8, 2000);
         let target = ring_set_key(&[33u16, 32, 6, 5, 4, 41, 40, 39, 38]);

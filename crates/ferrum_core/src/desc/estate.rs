@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! Electrotopological State (E-State) indices.
 //!
 //! Kier & Hall E-State encodes both electronic and topological

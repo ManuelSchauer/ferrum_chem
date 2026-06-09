@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! Additional fraction and count descriptors commonly used in QSAR.
 //!
 //! Includes:
@@ -54,9 +55,10 @@ use crate::types::BondType;
 use ndarray::ArrayViewMut2;
 #[cfg(not(target_os = "macos"))]
 use ndarray::linalg::general_mat_mul;
+use crate::ml::pca::jacobi_eigen;
+use ndarray::Array2;
 use smallvec::SmallVec;
 use std::hash::{BuildHasherDefault, Hasher};
-use std::sync::OnceLock;
 
 /// Minimal hasher for `u64` keys used in Bertz connection counting.
 ///
@@ -527,6 +529,7 @@ fn pack_bertz_triple_key(class_a: usize, class_b: usize, class_c: usize, hinge_z
 /// Function context: `crates/ferrum_core/src/desc/extra_counts.rs`.
 /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
 fn compute_bertz_ct(mol: &mut Molecule, ctx: &mut crate::desc::context::CalculationContext) -> f32 {
+    use crate::algo::distance_matrix::compute_distance_matrix;
     let n = mol.num_atoms();
     if n < 2 {
         return 0.0;
@@ -556,7 +559,7 @@ fn compute_bertz_ct(mol: &mut Molecule, ctx: &mut crate::desc::context::Calculat
     }
 
     // Step 2: Symmetry classes from unweighted distance matrix (matching RDKit).
-    let unweighted_dist = super::balaban::compute_distance_matrix(mol, false);
+    let unweighted_dist = compute_distance_matrix(mol, false);
     let bo_dist = unweighted_dist.as_slice();
 
     ctx.bfs_dist.clear();
@@ -751,190 +754,7 @@ fn shannon_entropy(counts: &[u32]) -> f64 {
 /// Reference: D. Bonchev & N. Trinajstic, J. Chem. Phys. 67, 4517-4533 (1977)
 pub struct Ipc;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-/// Implements IpcMode.
-///
-/// Function context: `crates/ferrum_core/src/desc/extra_counts.rs`.
-/// Descriptor-layer note: computes molecular properties for ML pipelines.
-enum IpcMode {
-    Fast,
-    Avg,
-}
 
-// On macOS, use dense BLAS for larger IPC matrices by default.
-// Elsewhere keep sparse multiply as the default (dense remains opt-in via env).
-#[cfg(target_os = "macos")]
-const IPC_DENSE_MATMUL_THRESHOLD_DEFAULT: usize = 64;
-#[cfg(not(target_os = "macos"))]
-const IPC_DENSE_MATMUL_THRESHOLD_DEFAULT: usize = usize::MAX;
-
-/// Implements ipc mode.
-///
-/// Function context: `crates/ferrum_core/src/desc/extra_counts.rs`.
-/// Descriptor-layer note: computes molecular properties for ML pipelines.
-fn ipc_mode() -> IpcMode {
-    static MODE: OnceLock<IpcMode> = OnceLock::new();
-    *MODE.get_or_init(|| {
-        match std::env::var("FERRUM_IPC_MODE")
-            .ok()
-            .as_deref()
-            .map(|s| s.trim().to_ascii_lowercase())
-        {
-            Some(mode) if mode == "avg" => IpcMode::Avg,
-            _ => IpcMode::Fast,
-        }
-    })
-}
-
-/// Implements ipc dense matmul threshold.
-///
-/// Function context: `crates/ferrum_core/src/desc/extra_counts.rs`.
-/// Descriptor-layer note: computes molecular properties for ML pipelines.
-fn ipc_dense_matmul_threshold() -> usize {
-    static THRESHOLD: OnceLock<usize> = OnceLock::new();
-    *THRESHOLD.get_or_init(|| {
-        std::env::var("FERRUM_IPC_DENSE_THRESHOLD")
-            .ok()
-            .and_then(|s| s.trim().parse::<usize>().ok())
-            .filter(|&v| v > 0)
-            .unwrap_or(IPC_DENSE_MATMUL_THRESHOLD_DEFAULT)
-    })
-}
-
-const IPC_TRACE_PW_BLOCKSIZE: usize = 128;
-
-#[inline]
-/// Implements ipc pairwise diag sum recursive.
-///
-/// Function context: `crates/ferrum_core/src/desc/extra_counts.rs`.
-/// Descriptor-layer note: computes molecular properties for ML pipelines.
-fn ipc_pairwise_diag_sum_recursive(mat: &[f64], n: usize, start: usize, len: usize) -> f64 {
-    let stride = n + 1;
-    if len < 8 {
-        // Match NumPy scalar fallback start value to preserve signed-zero behavior.
-        let mut res = -0.0f64;
-        for offset in 0..len {
-            res += mat[(start + offset) * stride];
-        }
-        return res;
-    }
-    if len <= IPC_TRACE_PW_BLOCKSIZE {
-        let base = start * stride;
-        let mut r0 = mat[base];
-        let mut r1 = mat[base + stride];
-        let mut r2 = mat[base + 2 * stride];
-        let mut r3 = mat[base + 3 * stride];
-        let mut r4 = mat[base + 4 * stride];
-        let mut r5 = mat[base + 5 * stride];
-        let mut r6 = mat[base + 6 * stride];
-        let mut r7 = mat[base + 7 * stride];
-
-        let mut offset = 8usize;
-        while offset + 7 < len {
-            let idx = (start + offset) * stride;
-            r0 += mat[idx];
-            r1 += mat[idx + stride];
-            r2 += mat[idx + 2 * stride];
-            r3 += mat[idx + 3 * stride];
-            r4 += mat[idx + 4 * stride];
-            r5 += mat[idx + 5 * stride];
-            r6 += mat[idx + 6 * stride];
-            r7 += mat[idx + 7 * stride];
-            offset += 8;
-        }
-
-        let mut res = ((r0 + r1) + (r2 + r3)) + ((r4 + r5) + (r6 + r7));
-        while offset < len {
-            res += mat[(start + offset) * stride];
-            offset += 1;
-        }
-        return res;
-    }
-
-    let mut split = len / 2;
-    split -= split % 8;
-    ipc_pairwise_diag_sum_recursive(mat, n, start, split)
-        + ipc_pairwise_diag_sum_recursive(mat, n, start + split, len - split)
-}
-
-#[inline]
-/// Implements ipc trace.
-///
-/// Function context: `crates/ferrum_core/src/desc/extra_counts.rs`.
-/// Descriptor-layer note: computes molecular properties for ML pipelines.
-fn ipc_trace(mat: &[f64], n: usize) -> f64 {
-    ipc_pairwise_diag_sum_recursive(mat, n, 0, n)
-}
-
-/// Implements compute ipc fast.
-///
-/// Function context: `crates/ferrum_core/src/desc/extra_counts.rs`.
-/// Descriptor-layer note: computes molecular properties for ML pipelines.
-fn compute_ipc_fast(mol: &Molecule, ctx: &mut crate::desc::context::CalculationContext) -> f64 {
-    compute_ipc_recurrence(mol, ctx, false)
-}
-
-/// Implements compute ipc avg.
-///
-/// Function context: `crates/ferrum_core/src/desc/extra_counts.rs`.
-/// Descriptor-layer note: computes molecular properties for ML pipelines.
-fn compute_ipc_avg(mol: &Molecule, ctx: &mut crate::desc::context::CalculationContext) -> f64 {
-    compute_ipc_recurrence(mol, ctx, true)
-}
-
-#[inline]
-/// Implements ipc matmul sparse.
-///
-/// Function context: `crates/ferrum_core/src/desc/extra_counts.rs`.
-/// Descriptor-layer note: computes molecular properties for ML pipelines.
-fn ipc_matmul_sparse(
-    sorted_neighbors: &[SmallVec<[usize; 8]>],
-    bn: &[f64],
-    next: &mut [f64],
-    n: usize,
-) {
-    next.fill(0.0);
-    for i in 0..n {
-        let row = i * n;
-        for &neighbor in &sorted_neighbors[i] {
-            let bn_row = neighbor * n;
-            for j in 0..n {
-                next[row + j] += bn[bn_row + j];
-            }
-        }
-    }
-}
-
-#[inline]
-/// Implements ipc matmul dense.
-///
-/// Function context: `crates/ferrum_core/src/desc/extra_counts.rs`.
-/// Descriptor-layer note: computes molecular properties for ML pipelines.
-fn ipc_matmul_dense(adj: &[f64], bn: &[f64], next: &mut [f64], n: usize) {
-    #[cfg(target_os = "macos")]
-    {
-        next.fill(0.0);
-        for i in 0..n {
-            let out_row = i * n;
-            for kk in 0..n {
-                let a_ik = adj[out_row + kk];
-                let bn_row = kk * n;
-                for j in 0..n {
-                    next[out_row + j] += a_ik * bn[bn_row + j];
-                }
-            }
-        }
-        return;
-    }
-
-    #[cfg(not(target_os = "macos"))]
-    {
-        let a = ArrayView2::from_shape((n, n), adj).expect("ipc adj matrix shape");
-        let b = ArrayView2::from_shape((n, n), bn).expect("ipc bn matrix shape");
-        let mut c = ArrayViewMut2::from_shape((n, n), next).expect("ipc next matrix shape");
-        general_mat_mul(1.0, &a, &b, 0.0, &mut c);
-    }
-}
 
 /// Computes ipc.
 ///
@@ -950,93 +770,34 @@ fn compute_ipc_recurrence(
         return 0.0;
     }
 
-    let n2 = n * n;
-
-    // Borrow context buffers
-    ctx.mat_a.clear();
-    ctx.mat_a.resize(n2, 0.0);
-    ctx.mat_b.clear();
-    ctx.mat_b.resize(n2, 0.0);
-    ctx.mat_c.clear();
-    ctx.mat_c.resize(n2, 0.0);
-    ctx.mat_d.clear();
-    ctx.mat_d.resize(n2, 0.0);
-    ctx.vec_a.clear();
-    ctx.vec_a.resize(n + 1, 0.0);
-
-    let adj = &mut ctx.mat_a;
-    let mut an = &mut ctx.mat_b;
-    let bn = &mut ctx.mat_c;
-    let mut next = &mut ctx.mat_d;
-    let cpoly = &mut ctx.vec_a;
-    let use_dense_matmul = n >= ipc_dense_matmul_threshold();
-    let sparse_neighbors = if use_dense_matmul {
-        None
-    } else {
-        let mut rows = Vec::with_capacity(n);
-        for atom_idx in 0..n {
-            let mut neighbors = SmallVec::<[usize; 8]>::new();
-            for &bond_idx in &mol.adjacency[atom_idx] {
-                let bond = &mol.bonds[bond_idx as usize];
-                let neighbor = if bond.source as usize == atom_idx {
-                    bond.target as usize
-                } else {
-                    bond.source as usize
-                };
-                neighbors.push(neighbor);
-            }
-            neighbors.sort_unstable();
-            rows.push(neighbors);
-        }
-        Some(rows)
-    };
-
-    // Build simple adjacency matrix
+    // Build the dense adjacency matrix
+    let mut adj = Array2::<f64>::zeros((n, n));
     for bond in &mol.bonds {
         let i = bond.source as usize;
         let j = bond.target as usize;
-        adj[i * n + j] = 1.0;
-        adj[j * n + i] = 1.0;
+        adj[[i, j]] = 1.0;
+        adj[[j, i]] = 1.0;
     }
 
+    // Compute eigenvalues using Jacobi eigendecomposition
+    let (eigenvalues, _) = jacobi_eigen(&adj);
+
+    // Compute the characteristic polynomial coefficients using an O(N^2) convolution.
+    // Let P(x) = \prod_{i=1}^n (x - \lambda_i).
+    // The coefficients are expanded exactly via dynamic programming.
+    // cpoly[k] will store the coefficient of x^{n-k}.
+    ctx.vec_a.clear();
+    ctx.vec_a.resize(n + 1, 0.0);
+    let cpoly = &mut ctx.vec_a;
     cpoly[0] = 1.0;
-    an.copy_from_slice(adj);
 
     for k in 1..=n {
-        let trace = ipc_trace(an, n);
-        // Match RDKit/NumPy operation ordering exactly (`(1.0/k) * trace`).
-        // The mathematically equivalent `trace / k` can diverge for very large
-        // intermediate values due to floating-point rounding in this recurrence.
-        let ck = (1.0 / k as f64) * trace;
-        cpoly[k] = ck;
-
-        bn.copy_from_slice(an);
-        let mut diag = 0usize;
-        for _ in 0..n {
-            bn[diag] -= ck;
-            diag += n + 1;
+        let lambda = eigenvalues[k - 1];
+        // cpoly[i] = cpoly[i] - lambda * cpoly[i-1]
+        // Iterate backwards to update in-place safely.
+        for i in (1..=k).rev() {
+            cpoly[i] -= lambda * cpoly[i - 1];
         }
-
-        if k < n {
-            if use_dense_matmul {
-                ipc_matmul_dense(adj, bn, next, n);
-            } else {
-                ipc_matmul_sparse(
-                    sparse_neighbors
-                        .as_ref()
-                        .expect("sparse neighbors initialized for sparse IPC path"),
-                    bn,
-                    next,
-                    n,
-                );
-            }
-            std::mem::swap(&mut an, &mut next);
-        }
-    }
-
-    // Negate coefficients 1..n
-    for i in 1..=n {
-        cpoly[i] = -cpoly[i];
     }
 
     let mut total = 0.0f64;
@@ -1063,10 +824,12 @@ fn compute_ipc_recurrence(
 /// Function context: `crates/ferrum_core/src/desc/extra_counts.rs`.
 /// Descriptor-layer note: computes molecular properties for ML pipelines.
 fn compute_ipc(mol: &Molecule, ctx: &mut crate::desc::context::CalculationContext) -> f64 {
-    match ipc_mode() {
-        IpcMode::Fast => compute_ipc_fast(mol, ctx),
-        IpcMode::Avg => compute_ipc_avg(mol, ctx),
-    }
+    let average = std::env::var("FERRUM_IPC_MODE")
+        .ok()
+        .as_deref()
+        .map(|s| s.trim().to_ascii_lowercase())
+        == Some("avg".to_string());
+    compute_ipc_recurrence(mol, ctx, average)
 }
 
 impl Descriptor for Ipc {

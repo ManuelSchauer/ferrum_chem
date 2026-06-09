@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! LogP (partition coefficient) calculation using Wildman-Crippen method with SMARTS patterns.
 //!
 //! This implementation matches RDKit's Crippen descriptor by using SMARTS pattern matching
@@ -43,7 +44,7 @@
 use super::typed::Descriptor;
 #[cfg(test)]
 use crate::algo::iso::find_all_matches;
-use crate::algo::iso::visit_matches;
+use crate::algo::iso::{visit_matches_target, IsoTarget};
 use crate::io::smarts::{QueryGraph, parse_smarts};
 use crate::mol::molecule::Molecule;
 use crate::types::BondType;
@@ -57,6 +58,7 @@ static PARSED_PATTERNS: Lazy<Vec<ParsedPattern>> = Lazy::new(|| {
         .filter_map(|p| {
             parse_smarts(p.smarts).ok().map(|query| ParsedPattern {
                 label: p.label,
+                screen: crate::algo::iso::QueryScreen::build(&query),
                 query,
                 logp: p.logp,
                 mr: p.mr,
@@ -90,6 +92,7 @@ static PARSED_HEAVY_PATTERNS: Lazy<Vec<&'static ParsedPattern>> = Lazy::new(|| {
 struct ParsedPattern {
     label: &'static str,
     query: QueryGraph,
+    screen: crate::algo::iso::QueryScreen,
     logp: f64,
     mr: f64,
 }
@@ -102,6 +105,7 @@ struct ParsedPattern {
 /// Returns pure heavy-atom contributions WITHOUT H contributions.
 /// Used by VSA bin descriptors for atom classification.
 pub fn crippen_atom_contributions(mol: &Molecule) -> (Vec<f64>, Vec<f64>) {
+    let target = IsoTarget::new(mol);
     let n = mol.atoms.len();
     let mut logp = vec![0.0f64; n];
     let mut mr = vec![0.0f64; n];
@@ -109,7 +113,10 @@ pub fn crippen_atom_contributions(mol: &Molecule) -> (Vec<f64>, Vec<f64>) {
     let mut remaining_heavy = mol.atoms.iter().filter(|a| a.atomic_number > 1).count();
 
     for pattern in PARSED_HEAVY_PATTERNS.iter() {
-        visit_matches(mol, &pattern.query, |m: &[u16]| {
+        if !pattern.screen.passes_target(&target) {
+            continue;
+        }
+        visit_matches_target(&target, &pattern.query, |m: &[u16]| {
             if m.is_empty() {
                 return true;
             }
@@ -135,13 +142,17 @@ pub fn crippen_atom_contributions(mol: &Molecule) -> (Vec<f64>, Vec<f64>) {
 /// This avoids allocating/filling an additional LogP vector when the caller
 /// only needs MR (e.g., `MolarRefractivity` in isolation benchmarks).
 fn crippen_mr_contributions(mol: &Molecule) -> Vec<f64> {
+    let target = IsoTarget::new(mol);
     let n = mol.atoms.len();
     let mut mr = vec![0.0f64; n];
     let mut assigned = vec![false; n];
     let mut remaining_heavy = mol.atoms.iter().filter(|a| a.atomic_number > 1).count();
 
     for pattern in PARSED_HEAVY_PATTERNS.iter() {
-        visit_matches(mol, &pattern.query, |m: &[u16]| {
+        if !pattern.screen.passes_target(&target) {
+            continue;
+        }
+        visit_matches_target(&target, &pattern.query, |m: &[u16]| {
             if m.is_empty() {
                 return true;
             }

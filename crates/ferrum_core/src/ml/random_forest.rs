@@ -121,8 +121,8 @@ enum TreeNode {
     Split {
         feature_idx: usize,
         threshold: f32,
-        left: Box<TreeNode>,
-        right: Box<TreeNode>,
+        left: u32,
+        right: u32,
     },
 }
 
@@ -131,19 +131,22 @@ impl TreeNode {
     ///
     /// Function context: `crates/ferrum_core/src/ml/random_forest.rs`.
     /// ML-layer note: numerical stability and reproducibility are important for comparable model evaluation.
-    fn predict(&self, sample: &[f64]) -> f64 {
-        match self {
-            TreeNode::Leaf { value } => f64::from(*value),
-            TreeNode::Split {
-                feature_idx,
-                threshold,
-                left,
-                right,
-            } => {
-                if sample[*feature_idx] <= f64::from(*threshold) {
-                    left.predict(sample)
-                } else {
-                    right.predict(sample)
+    fn predict(&self, sample: &[f64], nodes: &[TreeNode]) -> f64 {
+        let mut current = self;
+        loop {
+            match current {
+                TreeNode::Leaf { value } => return f64::from(*value),
+                TreeNode::Split {
+                    feature_idx,
+                    threshold,
+                    left,
+                    right,
+                } => {
+                    if sample[*feature_idx] <= f64::from(*threshold) {
+                        current = &nodes[*left as usize];
+                    } else {
+                        current = &nodes[*right as usize];
+                    }
                 }
             }
         }
@@ -342,23 +345,27 @@ impl DecisionTreeBuilder {
         rng: &mut StdRng,
         root_presort: Option<&FeaturePresort>,
         scratch: &mut Vec<(f64, usize)>,
-    ) -> TreeNode {
-        // Stop conditions
+        nodes: &mut Vec<TreeNode>,
+    ) -> u32 {
+        let node_idx = nodes.len() as u32;
+        // Push a dummy node to reserve the slot
+        nodes.push(TreeNode::Leaf { value: 0.0 });
         if depth >= self.max_depth || indices.len() < self.min_samples_split || indices.len() <= 1 {
-            return TreeNode::Leaf {
+            nodes[node_idx as usize] = TreeNode::Leaf {
                 value: self.leaf_value(targets, indices) as f32,
             };
+            return node_idx;
         }
 
-        // Check if all targets are the same
         let first_target = targets[indices[0]];
         if indices
             .iter()
             .all(|&i| (targets[i] - first_target).abs() < 1e-15)
         {
-            return TreeNode::Leaf {
+            nodes[node_idx as usize] = TreeNode::Leaf {
                 value: first_target as f32,
             };
+            return node_idx;
         }
 
         let n_features = features.ncols();
@@ -505,9 +512,10 @@ impl DecisionTreeBuilder {
         }
 
         if !found_split {
-            return TreeNode::Leaf {
+            nodes[node_idx as usize] = TreeNode::Leaf {
                 value: self.leaf_value(targets, indices) as f32,
             };
+            return node_idx;
         }
 
         let mut left = 0usize;
@@ -524,33 +532,41 @@ impl DecisionTreeBuilder {
         let (left_indices, right_indices) = indices.split_at_mut(left);
 
         if left_indices.is_empty() || right_indices.is_empty() {
-            return TreeNode::Leaf {
+            nodes[node_idx as usize] = TreeNode::Leaf {
                 value: self.leaf_value(targets, indices) as f32,
             };
+            return node_idx;
         }
 
-        TreeNode::Split {
+        let left_idx = self.build(
+            features,
+            targets,
+            left_indices,
+            depth + 1,
+            rng,
+            root_presort,
+            scratch,
+            nodes,
+        );
+        let right_idx = self.build(
+            features,
+            targets,
+            right_indices,
+            depth + 1,
+            rng,
+            root_presort,
+            scratch,
+            nodes,
+        );
+
+        nodes[node_idx as usize] = TreeNode::Split {
             feature_idx: best_feature,
             threshold: best_threshold as f32,
-            left: Box::new(self.build(
-                features,
-                targets,
-                left_indices,
-                depth + 1,
-                rng,
-                root_presort,
-                scratch,
-            )),
-            right: Box::new(self.build(
-                features,
-                targets,
-                right_indices,
-                depth + 1,
-                rng,
-                root_presort,
-                scratch,
-            )),
-        }
+            left: left_idx,
+            right: right_idx,
+        };
+
+        node_idx
     }
 
     /// Implements value.
@@ -580,7 +596,7 @@ impl DecisionTreeBuilder {
 /// Random Forest Regressor.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RandomForestRegressor {
-    trees: Vec<TreeNode>,
+    trees: Vec<Vec<TreeNode>>,
     pub n_estimators: usize,
     pub max_depth: usize,
     pub min_samples_split: usize,
@@ -620,8 +636,8 @@ impl RandomForestRegressor {
                     let mut rng = StdRng::seed_from_u64(derive_tree_seed(seed, tree_idx));
                     indices.clear();
                     indices.extend((0..n).map(|_| rng.gen_range(0..n)));
-                    scratch.clear();
-                    builder.build(
+                    let mut nodes = Vec::new();
+                    let _ = builder.build(
                         features,
                         &target_slice,
                         indices,
@@ -629,13 +645,17 @@ impl RandomForestRegressor {
                         &mut rng,
                         feature_presort.as_deref(),
                         scratch,
-                    )
+                        &mut nodes,
+                    );
+                    nodes
                 },
             )
             .collect::<Vec<_>>();
         let mut feature_counts = vec![0u64; n_features];
         for tree in &trees {
-            count_feature_usage(tree, &mut feature_counts);
+            if !tree.is_empty() {
+                count_feature_usage(0, tree, &mut feature_counts);
+            }
         }
 
         // Normalize feature importances
@@ -658,7 +678,7 @@ impl RandomForestRegressor {
 
     /// Predict for a single sample (mean of all trees).
     pub fn predict_one(&self, sample: &[f64]) -> f64 {
-        let sum: f64 = self.trees.iter().map(|t| t.predict(sample)).sum();
+        let sum: f64 = self.trees.iter().map(|t| if t.is_empty() { 0.0 } else { t[0].predict(sample, t) }).sum();
         sum / self.trees.len() as f64
     }
 
@@ -687,7 +707,7 @@ impl RandomForestRegressor {
 /// Random Forest Classifier.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RandomForestClassifier {
-    trees: Vec<TreeNode>,
+    trees: Vec<Vec<TreeNode>>,
     pub n_estimators: usize,
     pub max_depth: usize,
     pub min_samples_split: usize,
@@ -727,8 +747,8 @@ impl RandomForestClassifier {
                     let mut rng = StdRng::seed_from_u64(derive_tree_seed(seed, tree_idx));
                     indices.clear();
                     indices.extend((0..n).map(|_| rng.gen_range(0..n)));
-                    scratch.clear();
-                    builder.build(
+                    let mut nodes = Vec::new();
+                    let _ = builder.build(
                         features,
                         &target_slice,
                         indices,
@@ -736,13 +756,17 @@ impl RandomForestClassifier {
                         &mut rng,
                         feature_presort.as_deref(),
                         scratch,
-                    )
+                        &mut nodes,
+                    );
+                    nodes
                 },
             )
             .collect::<Vec<_>>();
         let mut feature_counts = vec![0u64; n_features];
         for tree in &trees {
-            count_feature_usage(tree, &mut feature_counts);
+            if !tree.is_empty() {
+                count_feature_usage(0, tree, &mut feature_counts);
+            }
         }
 
         let total: f64 = feature_counts.iter().sum::<u64>() as f64;
@@ -764,7 +788,7 @@ impl RandomForestClassifier {
 
     /// Predict class probability (fraction of trees voting positive).
     pub fn predict_proba_one(&self, sample: &[f64]) -> f64 {
-        let votes: f64 = self.trees.iter().map(|t| t.predict(sample)).sum();
+        let votes: f64 = self.trees.iter().map(|t| if t.is_empty() { 0.0 } else { t[0].predict(sample, t) }).sum();
         votes / self.trees.len() as f64
     }
 
@@ -806,9 +830,8 @@ fn derive_tree_seed(base_seed: u64, tree_idx: usize) -> u64 {
     z ^ (z >> 31)
 }
 
-/// Count how many times each feature is used in splits (proxy for importance).
-fn count_feature_usage(node: &TreeNode, counts: &mut [u64]) {
-    match node {
+fn count_feature_usage(node_idx: u32, nodes: &[TreeNode], counts: &mut [u64]) {
+    match &nodes[node_idx as usize] {
         TreeNode::Leaf { .. } => {}
         TreeNode::Split {
             feature_idx,
@@ -817,8 +840,8 @@ fn count_feature_usage(node: &TreeNode, counts: &mut [u64]) {
             ..
         } => {
             counts[*feature_idx] += 1;
-            count_feature_usage(left, counts);
-            count_feature_usage(right, counts);
+            count_feature_usage(*left, nodes, counts);
+            count_feature_usage(*right, nodes, counts);
         }
     }
 }
@@ -991,8 +1014,8 @@ mod tests {
         let mut scratch_b = Vec::with_capacity(indices_b.len());
 
         let mut rng_a = StdRng::seed_from_u64(42);
-        let mut rng_b = StdRng::seed_from_u64(42);
-        let tree_a = builder.build(
+        let mut nodes_a = Vec::new();
+        let _ = builder.build(
             features.view(),
             &targets,
             &mut indices_a,
@@ -1000,14 +1023,19 @@ mod tests {
             &mut rng_a,
             Some(&presort),
             &mut scratch_a,
+            &mut nodes_a,
         );
-        let tree_b = builder.build(features.view(), &targets, &mut indices_b, 0, &mut rng_b, None, &mut scratch_b);
+        let tree_a = nodes_a;
+        let mut rng_b = StdRng::seed_from_u64(42);
+        let mut nodes_b = Vec::new();
+        let _ = builder.build(features.view(), &targets, &mut indices_b, 0, &mut rng_b, None, &mut scratch_b, &mut nodes_b);
+        let tree_b = nodes_b;
 
         for i in 0..features.nrows() {
             let row = features.row(i).to_vec();
-            let pa = tree_a.predict(&row);
-            let pb = tree_b.predict(&row);
-            assert!((pa - pb).abs() < 1e-12, "row={i} pa={pa} pb={pb}");
+            let pred_a = tree_a[0].predict(features.row(i).to_slice().unwrap(), &tree_a);
+            let pred_b = tree_b[0].predict(features.row(i).to_slice().unwrap(), &tree_b);
+            assert!((pred_a - pred_b).abs() < 1e-12, "row={i} pa={pred_a} pb={pred_b}");
         }
     }
 }
