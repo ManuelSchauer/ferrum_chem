@@ -39,14 +39,16 @@ pub fn compute_bond_count(mol: &Molecule) -> u32 {
 ///   N-based conjugated bonds are handled by the strict conjugation rules above.
 pub fn compute_rotatable_bond_count(mol: &Molecule) -> u32 {
     // RDKit `CalcNumRotatableBonds` with the Strict definition (the default of
-    // the reference RDKit build), counted with uniquified matches.
+    // the reference RDKit build; version 3.2.0 of RDKit 2026.03, which added
+    // `!$([CH3])` so that methyl groups with explicit (isotopic) hydrogens,
+    // e.g. CD3, are terminal too), counted with uniquified matches.
     static STRICT: once_cell::sync::Lazy<crate::io::smarts::QueryGraph> = once_cell::sync::Lazy::new(|| {
         crate::io::smarts::parse_smarts(concat!(
             "[!$(*#*)&!D1&!$(C(F)(F)F)&!$(C(Cl)(Cl)Cl)&!$(C(Br)(Br)Br)&!$(C([CH3])(",
-            "[CH3])[CH3])&!$([CD3](=[N,O,S])-!@[#7,O,S!D1])&!$([#7,O,S!D1]-!@[CD3]=",
+            "[CH3])[CH3])&!$([CH3])&!$([CD3](=[N,O,S])-!@[#7,O,S!D1])&!$([#7,O,S!D1]-!@[CD3]=",
             "[N,O,S])&!$([CD3](=[N+])-!@[#7!D1])&!$([#7!D1]-!@[CD3]=[N+])]-,:;!@[!$",
             "(*#*)&!D1&!$(C(F)(F)F)&!$(C(Cl)(Cl)Cl)&!$(C(Br)(Br)Br)&!$(C([CH3])([",
-            "CH3])[CH3])]"
+            "CH3])[CH3])&!$([CH3])]"
         ))
         .expect("valid RDKit strict rotatable-bond SMARTS")
     });
