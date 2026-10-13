@@ -30,3 +30,5 @@ pub mod rings;
 pub mod sanitize;
 pub mod sssr;
 pub mod stereo;
+pub mod eigen_full;
+pub mod detour;

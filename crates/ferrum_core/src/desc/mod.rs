@@ -65,6 +65,8 @@ mod mordred_kekulize;
 pub mod mordred_molecular_id;
 pub mod mordred_paths;
 pub mod mordred_topological;
+pub mod mordred_eta;
+pub mod mordred_matrix;
 pub mod path_fingerprints;
 pub mod petitjean;
 pub mod pi_system;

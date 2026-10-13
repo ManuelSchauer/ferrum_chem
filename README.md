@@ -3,9 +3,9 @@
 **A molecular descriptor engine in Rust that reproduces RDKit, CDK, Mordred and
 Biosynfoni exactly, and computes them 10–900× faster.**
 
-FerrumChem calculates 1,850 scalar descriptors and 6 fingerprints (9,239 bits)
+FerrumChem calculates 2,037 scalar descriptors and 6 fingerprints (9,239 bits)
 per molecule: the complete RDKit descriptor catalogue, the CDK descriptors
-commonly used in QSAR, 1,426 of Mordred's 1,613 2D descriptors, the Biosynfoni natural-product
+commonly used in QSAR, all 1,613 Mordred 2D descriptors, the Biosynfoni natural-product
 fingerprint and a few extras. It is available as a Rust crate
 (`ferrum_core`), a command-line tool with an interactive terminal UI
 (`ferrum_cli`) and Python bindings (`ferrum_py`).
@@ -18,7 +18,7 @@ the same molecule always gives the same numbers as RDKit/CDK/Mordred would.
 
 ## Why FerrumChem
 
-- **Exact, not approximate.** 1,831 of the 1,850 scalar columns and all 6
+- **Exact, not approximate.** 2,018 of the 2,037 scalar columns and all 6
   fingerprints are compared molecule by molecule against the original
   implementation of RDKit 2026.03.2, CDK 2.13, Mordred (mordred-community 2.0.7) and Biosynfoni
   (`|a − b| ≤ 1e-9 + 1e-9·|b|`; fingerprints and atom perception bit-exact).
@@ -26,10 +26,10 @@ the same molecule always gives the same numbers as RDKit/CDK/Mordred would.
 - **Fast.** On one core: SMILES parsing 4× faster than RDKit, the complete
   RDKit descriptor catalogue 25–28× faster, the five RDKit fingerprints
   7–10× faster, all tested CDK descriptors ~900× faster than CDK. On all cores
-  the CLI processes about 10,000 molecules per second with the full bundle
-  (1,850 scalars + 6 fingerprints).
+  the CLI processes about 8,000–9,000 molecules per second with the full bundle
+  (2,037 scalars + 6 fingerprints).
 - **Constant memory.** Input is streamed in chunks; 100,000 molecules need
-  about 450 MB peak, the same order as 10,000.
+  about 650 MB peak, the same order as 10,000.
 - **One chemistry model.** A port of RDKit's `SanitizeMol` (valence model,
   Kekulé assignment, aromaticity, conjugation, hybridization, ring
   perception) is used everywhere. Where CDK descriptors depend on CDK's own
@@ -47,13 +47,13 @@ the same molecule always gives the same numbers as RDKit/CDK/Mordred would.
 
 | | |
 |---|---|
-| scalar descriptors | 1,850 (99 descriptor families) |
+| scalar descriptors | 2,037 (101 descriptor families) |
 | fingerprints | MACCS (166), PubChem (881), ECFP4, FCFP4, AtomPair, TopologicalTorsion (2,048 each) |
-| validated against a reference | 1,831 scalar columns + all 6 fingerprints + per-atom perception |
+| validated against a reference | 2,018 scalar columns + all 6 fingerprints + per-atom perception |
 | references | RDKit 2026.03.2 (2D + 3D), CDK 2.13, mordred-community 2.0.7, Biosynfoni `full_1103` |
 | input | SMILES (`.smi`), CSV with a SMILES column, SDF (V2000/V3000, incl. 3D conformers) |
 | output | CSV (exact round-trip `f64`, fingerprints as hex / on-bits / 0-1 columns), NumPy arrays, Rust `DescriptorTable` |
-| throughput (Apple M4 Pro, 14 cores) | ~10,000 molecules/s, full bundle, end to end |
+| throughput (Apple M4 Pro, 14 cores) | ~8,500 molecules/s, full bundle, end to end |
 
 ---
 
@@ -96,7 +96,7 @@ smiles = ["CC(=O)Oc1ccccc1C(=O)O", "CN1C=NC2=C1C(=O)N(C(=O)N2C)C", "not a smiles
 
 calc = ferrum_py.Calculator()                  # build once, reuse for every call
 names, X, fps, valid = calc.compute(smiles)
-# names: 1,850 column names; X: float64 (3, 1850), NaN rows where valid is False
+# names: 2,037 column names; X: float64 (3, 2037), NaN rows where valid is False
 # fps:   {"MACCS": uint8 (3, 21), "PubChem": (3, 111), "ECFP4": (3, 256), ...}
 
 bits = calc.fingerprint_bits                   # {"MACCS": 166, "ECFP4": 2048, ...}
@@ -138,7 +138,7 @@ by the CLI.
 
 ## Descriptor catalogue
 
-1,850 scalar columns in 99 families, plus 6 fingerprints. "Reference" is the
+2,037 scalar columns in 101 families, plus 6 fingerprints. "Reference" is the
 implementation each column is tested against; column names follow that
 reference.
 
@@ -181,7 +181,7 @@ This covers every entry of `rdkit.Chem.Descriptors._descList` (217 of 217).
 | Acid/base groups | `nAcidicGroups`, `nBasicGroups` |
 | Fingerprint | PubChem (881 bits, CDK `PubchemFingerprinter`) |
 
-### Mordred (1,344 own columns; 1,426 of 1,613 Mordred 2D descriptors)
+### Mordred (all 1,613 Mordred 2D descriptors; 1,531 own columns)
 
 Mordred descriptors use Mordred's names. A Mordred descriptor that is the same
 by definition as an existing column (e.g. `SLogP` = RDKit `MolLogP`) is not
@@ -199,12 +199,10 @@ definition (e.g. `apol`, `Kier1`, `MDEC-23`, `C1SP3`) is output as
 | BCUT | 12 properties, highest and lowest (24) |
 | PathCount, WalkCount, TopologicalCharge, MolecularId | `MPC*`, `piPC*`, `MWC*`, `SRW*`, `GGI*`, `JGI*`, `MID*` (75) |
 | MolecularDistanceEdge | `Mordred_MDEC-11` … `Mordred_MDEN-33` (19) |
+| Matrix descriptors | `SpAbs`, `SpMax`, `SpDiam`, `SpAD`, `SpMAD`, `LogEE`, `SM1`, `VE1–3`, `VR1–3` of the adjacency (`_A`), distance (`_D`), detour (`_Dt`, plus `DetourIndex`) and 8 Barysz matrices (`_DzZ` … `_Dzi`) (142) |
+| ExtendedTopochemicalAtom | `ETA_alpha` … `ETA_dPsi_B` (45) |
 | Constitutional | `SZ` … `Si`, `MZ` … `Mi` (16) |
 | small modules | atom/bond/carbon-type counts, `ABC`, `ABCGG`, `nAcid`, `nBase`, `RNCG`, `RPCG`, `ECIndex`, `fragCpx`, `fMF`, Kier, `Lipinski`, `GhoseFilter`, `FilterItLogS`, `VMcGowan`, `apol`/`bpol`, `RotRatio`, `TopoPSA`, `Vabc`, `AMW`, `WPath`, `WPol`, Zagreb, `Radius`, `Diameter`, … |
-
-Not yet implemented: the matrix descriptors (`SpAbs_A` …, Barysz, detour,
-distance and adjacency matrix spectra) and the extended topochemical atom
-(ETA) indices.
 
 ### Biosynfoni (39 columns)
 
@@ -234,7 +232,7 @@ everything with FerrumChem:
 | `rdkit_parity` | RDKit 2026.03.2 | 1,277 | 325 of 327 (321 scalars, 5 fingerprints, atom perception) |
 | `rdkit_3d_parity` | RDKit 2026.03.2, ETKDG conformers | 296 | 4 of 5 (PMI1–3, Asphericity; perception see below) |
 | `cdk_parity` | CDK 2.13 | 1,277 | 124 of 124 |
-| `mordred_parity` | mordred-community 2.0.7, all 1,613 2D descriptors | 1,277 | 1,426 of 1,426 implemented (187 not implemented yet) |
+| `mordred_parity` | mordred-community 2.0.7, all 1,613 2D descriptors | 1,277 | 1,611 of 1,613 (`VR1_A`, `VR2_A`: 1 molecule each, see below) |
 | `biosynfoni_parity` | Biosynfoni (original Python package) | 1,277 | 39 of 39 |
 
 Known deviations, tracked per column in `tests/data/*_baseline.tsv` (a column
@@ -245,6 +243,12 @@ may never get worse):
   flexible molecules; its result depends on BLAS rounding (e.g. 2.2e24 for a
   lipid whose exact value is 3.7e21). FerrumChem uses the same recurrence and
   matches wherever RDKit's value is stable.
+- **Mordred `VR1_A`, `VR2_A` (1 of 1,277 molecules; `VR3_A` on larger sets):**
+  these sum `(v_i·v_j)^-1/2` over the leading eigenvector of the adjacency
+  matrix, whose smallest entries are ~1e-11 in long chains (lipids,
+  peptides). numpy's `eigh` gets them only to ~1e-17 absolute, which moves
+  Mordred's value by up to 2e-7 relative; against a 40-digit reference,
+  FerrumChem is as close or closer.
 - **3D perception of `N[Pt](N)(Cl)Cl`:** RDKit's mol-block reader marks Pt as
   chiral from the 3D coordinates and then reports SP3 instead of unspecified
   hybridization. The 3D descriptors themselves match.
@@ -256,7 +260,7 @@ Beyond the test set:
 - **Stereo descriptors:** identical on all of COCONUT except 3 SPS values.
 - **Biosynfoni:** identical on 20,000 COCONUT molecules.
 - **RDKit, 5,000 mixed molecules:** identical except Ipc/AvgIpc (as above).
-- **Mordred, 5,000 mixed molecules:** all 1,426 implemented columns identical.
+- **Mordred, 5,000 mixed molecules:** 1,610 of 1,613 columns identical; `VR1_A`/`VR2_A` (16 molecules) and `VR3_A` (8) as above.
 
 All descriptors that the CDK computes on its own perception (atom typing,
 Kekulé structure from its SMILES parser, cdkLegacy or Daylight aromaticity,
@@ -276,19 +280,20 @@ more tables).
 | parse SMILES + sanitize | 52–79 | 13–18 | 4× |
 | full RDKit catalogue (217 descriptors) | 3,874–6,605 | 152–240 | 25–28× |
 | 5 fingerprints | 658–1,119 | 89–114 | 7–10× |
-| FerrumChem full bundle (1,850 scalars + 6 fingerprints) | – | 562–932 | – |
+| FerrumChem full bundle (2,037 scalars + 6 fingerprints) | – | 616–1,058 | – |
 
 | | reference | FerrumChem |
 |---|---|---|
 | all CDK descriptors, 1,273 molecules, 1 thread | CDK 147.5 s | 0.165 s |
-| all cores, catalogue + fingerprints, 5,000 molecules | RDKit (multiprocessing) 744 mol/s | ~9,000 mol/s with the full bundle (1,850 scalars) |
-| CLI, 100,000 molecules, all cores | – | 10.0 s, ~10,000 mol/s, 430–540 MB peak RSS |
-| CLI, 10,000 molecules, 1 thread | – | 9.1 s, 135 MB peak RSS |
+| all cores, catalogue + fingerprints, 5,000 molecules | RDKit (multiprocessing) 744 mol/s | ~8,900 mol/s with the full bundle (2,037 scalars) |
+| CLI, 100,000 molecules, all cores | – | 12.0 s, 8,350 mol/s, 650 MB peak RSS |
+| CLI, 10,000 molecules, 1 thread | – | 11.1 s, 133 MB peak RSS |
 
 Peak memory depends on the largest molecules and the number of threads, not
-on the input size. The most expensive families on a mixed set are BCUT (101 µs/mol; 30
-eigenvalue problems), PubChem (71), MACCS (67), Mordred MolecularId (65) and
-Mordred InformationContent (58); the CDK weighted-path descriptor,
+on the input size. The most expensive families on a mixed set are the Mordred matrix
+descriptors (207 µs/mol: 11 full eigen-decompositions and the detour matrix,
+i.e. longest paths), BCUT (77; 30 eigenvalue problems), PubChem (72), MACCS
+(68) and the CDK Chi indices (55); the CDK weighted-path descriptor,
 whose cost grows exponentially with fused rings in CDK, is computed exactly
 with a memoised search (a 30-ring ladder polyether: 40 s → < 10 ms).
 

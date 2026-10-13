@@ -1,5 +1,5 @@
-//! Two-lane `f64` vector used to run two independent eigenvalue problems of
-//! the same size in lock step (one problem per lane). NEON on aarch64, plain
+//! Two-lane `f64` vector, the building block of the lane-parallel
+//! eigenvalue kernels (one problem per lane). NEON on aarch64, plain
 //! arrays elsewhere. Every lane operation is the IEEE operation of the scalar
 //! code (FMA where the target has it).
 
@@ -27,20 +27,6 @@ mod imp {
         #[inline(always)]
         pub fn lane1(self) -> f64 {
             unsafe { vgetq_lane_f64::<1>(self.0) }
-        }
-        /// Loads `s[0..2]`.
-        #[inline(always)]
-        pub fn load(s: &[f64]) -> Self {
-            assert!(s.len() >= 2);
-            // SAFETY: two elements in bounds (checked above)
-            F2(unsafe { vld1q_f64(s.as_ptr()) })
-        }
-        /// Stores into `s[0..2]`.
-        #[inline(always)]
-        pub fn store(self, s: &mut [f64]) {
-            assert!(s.len() >= 2);
-            // SAFETY: two elements in bounds (checked above)
-            unsafe { vst1q_f64(s.as_mut_ptr(), self.0) }
         }
         /// # Safety
         /// `p` must be valid for reading two `f64`.
@@ -161,15 +147,6 @@ mod imp {
         #[inline(always)]
         pub fn lane1(self) -> f64 {
             self.0[1]
-        }
-        #[inline(always)]
-        pub fn load(s: &[f64]) -> Self {
-            F2([s[0], s[1]])
-        }
-        #[inline(always)]
-        pub fn store(self, s: &mut [f64]) {
-            s[0] = self.0[0];
-            s[1] = self.0[1];
         }
         /// # Safety
         /// `p` must be valid for reading two `f64`.

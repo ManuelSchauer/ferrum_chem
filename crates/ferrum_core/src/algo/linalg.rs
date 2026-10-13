@@ -4,17 +4,21 @@
 //!   the reference implementation.
 //! - [`extreme_eigenvalues`] / [`extreme_eigenvalues_pair`] /
 //!   [`burden_extremes`]: only the smallest and largest eigenvalue, as needed
-//!   by the BCUT descriptors. Householder tridiagonalization with the rank-2
-//!   update of each step deferred and fused into the next step's
-//!   matrix-vector product, then a Laguerre iteration on the tridiagonal
-//!   matrix whose result is certified by Sturm counts (bisection fallback).
-//!   Every step is backward stable, so the extremes agree with full dense
-//!   solvers (LAPACK, JAMA, Eigen, numpy) to `O(n * eps * ||A||)`.
-//!   `_pair` / `burden_extremes` run two same-size problems in lock step, one
-//!   per SIMD lane (`f2`, NEON on aarch64), see `pair`.
+//!   by the BCUT descriptors. Reduction to tridiagonal form, then a Laguerre
+//!   iteration on the tridiagonal matrix whose result is certified by Sturm
+//!   counts (bisection fallback). The reduction is Householder's, with the
+//!   rank-2 update of each step deferred and fused into the next step's
+//!   matrix-vector product, or for large Burden matrices (sparse molecular
+//!   graph plus a constant fill) a band reduction by plane rotations
+//!   (`lanes::band`). Every step is backward stable, so the extremes agree
+//!   with full dense solvers (LAPACK, JAMA, Eigen, numpy) to
+//!   `O(n * eps * ||A||)`. Several same-size problems run in lock step, one
+//!   per SIMD lane (`lanes`: two to eight problems on `f2`, NEON on aarch64).
 
 mod f2;
-mod pair;
+pub(crate) mod lanes;
+
+use lanes::tri;
 
 /// Eigenvalues of a real symmetric `n x n` matrix (row-major), ascending.
 ///
@@ -34,16 +38,15 @@ pub fn symmetric_eigenvalues(n: usize, a: &mut [f64]) -> Vec<f64> {
 }
 
 /// Reusable scratch buffers for [`extreme_eigenvalues`] /
-/// [`extreme_eigenvalues_pair`].
+/// [`extreme_eigenvalues_pair`] / [`burden_extremes`].
 #[derive(Default)]
 pub struct EigenWorkspace {
     d: Vec<f64>,
     e: Vec<f64>,
     u: Vec<f64>,
     p: Vec<f64>,
-    pu: Vec<f64>,
     pq: Vec<f64>,
-    /// matrix storage: one `n x n` matrix, or two lane-interleaved ones
+    /// matrix storage: lane-interleaved packed lower triangles
     a: Vec<f64>,
 }
 
@@ -58,7 +61,6 @@ impl EigenWorkspace {
             &mut self.e,
             &mut self.u,
             &mut self.p,
-            &mut self.pu,
             &mut self.pq,
         ] {
             v.clear();
@@ -76,7 +78,7 @@ impl EigenWorkspace {
 
 /// Smallest and largest eigenvalue `(min, max)` of a real symmetric `n x n`
 /// matrix (row-major). Only the lower triangle (`a[i * n + j]`, `j <= i`) is
-/// read; `a` is used as workspace and overwritten.
+/// read; `a` is left untouched.
 ///
 /// Householder reduction to tridiagonal form (same reflectors as EISPACK
 /// `tred1`, vectorised over contiguous rows of the lower triangle) followed by
@@ -84,14 +86,41 @@ impl EigenWorkspace {
 /// by Sturm counts (bisection fallback, LAPACK `dstebz` style). Both steps are
 /// backward stable, so the result agrees with a full dense solver (QL,
 /// LAPACK, JAMA, Eigen) to `O(eps * ||A||)`.
-pub fn extreme_eigenvalues(ws: &mut EigenWorkspace, n: usize, a: &mut [f64]) -> (f64, f64) {
+pub fn extreme_eigenvalues(ws: &mut EigenWorkspace, n: usize, a: &[f64]) -> (f64, f64) {
     assert_eq!(a.len(), n * n);
-    let bounds = if n > 1 {
-        gershgorin_bounds(n, a, 1, 0, &mut ws.d)
-    } else {
-        SpectrumBounds::NONE
-    };
-    solve_single(ws, n, a, bounds)
+    let mut out = [(f64::NAN, f64::NAN)];
+    solve_dense::<1>(ws, n, &[a], &mut out);
+    out[0]
+}
+
+/// [`extreme_eigenvalues`] for two symmetric matrices of the same size,
+/// solved in lock step (one per SIMD lane); `[(min_a, max_a), (min_b, max_b)]`.
+/// Only the lower triangles are read; `a` and `b` are left untouched.
+pub fn extreme_eigenvalues_pair(
+    ws: &mut EigenWorkspace,
+    n: usize,
+    a: &[f64],
+    b: &[f64],
+) -> [(f64, f64); 2] {
+    assert!(a.len() == n * n && b.len() == n * n);
+    let mut out = [(f64::NAN, f64::NAN); 2];
+    solve_dense::<1>(ws, n, &[a, b], &mut out);
+    out
+}
+
+/// Extremes of up to `2 * V` dense matrices (lower triangles read) into `out`.
+fn solve_dense<const V: usize>(ws: &mut EigenWorkspace, n: usize, mats: &[&[f64]], out: &mut [(f64, f64)]) {
+    if n == 0 {
+        out.fill((f64::NAN, f64::NAN));
+        return;
+    }
+    let mut buf = std::mem::take(&mut ws.a);
+    buf.resize(2 * V * tri(n), 0.0);
+    lanes::assemble_dense::<V>(n, mats, &mut buf);
+    let bounds: [SpectrumBounds; lanes::MAX_LANES] =
+        std::array::from_fn(|m| gershgorin_bounds(n, mats[m.min(mats.len() - 1)], &mut ws.d));
+    solve_lanes::<V>(ws, n, &mut buf, &bounds, out);
+    ws.a = buf;
 }
 
 /// Known bounds on the spectrum of a symmetric matrix: all eigenvalues lie
@@ -106,110 +135,92 @@ struct SpectrumBounds {
 }
 
 impl SpectrumBounds {
-    const NONE: Self = Self {
-        lo: f64::NEG_INFINITY,
-        hi: f64::INFINITY,
-        min_ub: f64::INFINITY,
-        max_lb: f64::NEG_INFINITY,
-    };
-}
-
-/// [`extreme_eigenvalues`] with known `bounds` on the spectrum.
-fn solve_single(
-    ws: &mut EigenWorkspace,
-    n: usize,
-    a: &mut [f64],
-    bounds: SpectrumBounds,
-) -> (f64, f64) {
-    match n {
-        0 => return (f64::NAN, f64::NAN),
-        1 => return (a[0], a[0]),
-        _ => {}
-    }
-    ws.reset_vectors(n);
-    tridiagonalize_lower(
-        n,
-        a,
-        &mut ws.d,
-        &mut ws.e,
-        [&mut ws.u, &mut ws.p, &mut ws.pu, &mut ws.pq],
-    );
-    // reuse `u` for the squared off-diagonal
-    tridiagonal_extremes(n, &ws.d, &ws.e, &mut ws.u, bounds)
-}
-
-/// [`extreme_eigenvalues`] for two symmetric matrices of the same size,
-/// solved in lock step (one per SIMD lane); `[(min_a, max_a), (min_b, max_b)]`.
-/// Only the lower triangles are read; `a` and `b` are left untouched. The
-/// per-matrix arithmetic is that of the single-matrix path (up to summation
-/// order).
-pub fn extreme_eigenvalues_pair(
-    ws: &mut EigenWorkspace,
-    n: usize,
-    a: &[f64],
-    b: &[f64],
-) -> [(f64, f64); 2] {
-    assert!(a.len() == n * n && b.len() == n * n);
-    let mut buf = std::mem::take(&mut ws.a);
-    buf.clear();
-    buf.resize(2 * n * n, 0.0);
-    for i in 0..n {
-        let row = &mut buf[2 * i * n..2 * i * n + 2 * (i + 1)];
-        for ((dst, &x), &y) in row
-            .as_chunks_mut::<2>().0.iter_mut()
-            .zip(&a[i * n..i * n + i + 1])
-            .zip(&b[i * n..i * n + i + 1])
-        {
-            dst[0] = x;
-            dst[1] = y;
-        }
-    }
-    let bounds = if n > 1 {
-        [
-            gershgorin_bounds(n, &buf, 2, 0, &mut ws.d),
-            gershgorin_bounds(n, &buf, 2, 1, &mut ws.d),
-        ]
-    } else {
-        [SpectrumBounds::NONE; 2]
-    };
-    let r = solve_pair(ws, n, &mut buf, bounds);
-    ws.a = buf;
-    r
-}
-
-/// Extremes of the two lane-interleaved matrices in `a2` (overwritten);
-/// `bounds`: bounds on the two spectra.
-fn solve_pair(
-    ws: &mut EigenWorkspace,
-    n: usize,
-    a2: &mut [f64],
-    bounds: [SpectrumBounds; 2],
-) -> [(f64, f64); 2] {
-    match n {
-        0 => return [(f64::NAN, f64::NAN); 2],
-        1 => return [(a2[0], a2[0]), (a2[1], a2[1])],
-        _ => {}
-    }
-    ws.reset_vectors(2 * n);
-    pair::tridiagonalize_pair(
-        n, a2, &mut ws.d, &mut ws.e, &mut ws.u, &mut ws.p, &mut ws.pu, &mut ws.pq,
-    );
-    pair::tridiagonal_extremes_pair(n, &ws.d, &ws.e, &mut ws.u, bounds)
-}
-
-/// Spectrum bounds of a Burden matrix from its description (O(n + entries)).
-/// Gershgorin: each row sum is bounded by `|fill| * (n - 1) + sum |w|` over
-/// the listed entries of that row (valid even for repeated pairs). Inner
-/// bounds (Cauchy interlacing): the extreme eigenvalues of the 1 x 1 and the
-/// bonded 2 x 2 principal submatrices.
-fn burden_bounds(n: usize, m: &BurdenMatrix) -> SpectrumBounds {
-    let mut r = vec![m.fill.abs() * (n as f64 - 1.0); n];
-    let mut b = SpectrumBounds {
+    const EMPTY: Self = Self {
         lo: f64::INFINITY,
         hi: f64::NEG_INFINITY,
         min_ub: f64::INFINITY,
         max_lb: f64::NEG_INFINITY,
     };
+}
+
+/// Extremes of the `2 * V` lane-interleaved packed matrices in `a`
+/// (overwritten) into `out[..min(out.len(), 2 * V)]`; `bounds`: bounds on
+/// the spectra (per lane).
+fn solve_lanes<const V: usize>(
+    ws: &mut EigenWorkspace,
+    n: usize,
+    a: &mut [f64],
+    bounds: &[SpectrumBounds],
+    out: &mut [(f64, f64)],
+) {
+    let w = 2 * V;
+    let k = out.len().min(w);
+    if n == 1 {
+        for (m, o) in out[..k].iter_mut().enumerate() {
+            *o = (a[m], a[m]);
+        }
+        return;
+    }
+    ws.reset_vectors(w * n);
+    lanes::tridiagonalize::<V>(n, a, &mut ws.d, &mut ws.e, &mut ws.u, &mut ws.p, &mut ws.pq);
+    let mut res = [(f64::NAN, f64::NAN); lanes::MAX_LANES];
+    lanes::tridiagonal_extremes::<V>(n, &ws.d, &ws.e, &mut ws.u, bounds, &mut res);
+    out[..k].copy_from_slice(&res[..k]);
+}
+
+/// Extremes of up to `2 * V` Burden matrices (`jobs`, all `n x n` with
+/// `n >= 3`) through band reduction (`lanes::band`; `inv[old] = new` atom
+/// order with half-bandwidth `b`) into `out`; `bounds`: bounds on the
+/// spectra (per lane), `buf` is scratch.
+#[allow(clippy::too_many_arguments)]
+fn solve_band<const V: usize>(
+    ws: &mut EigenWorkspace,
+    n: usize,
+    b: usize,
+    inv: &[u32],
+    jobs: &[BurdenMatrix],
+    buf: &mut Vec<f64>,
+    bounds: &[SpectrumBounds],
+    out: &mut [(f64, f64)],
+) {
+    let w = 2 * V;
+    buf.resize(n * (b + 2) * w, 0.0);
+    lanes::band::assemble::<V>(n, b, inv, jobs, buf);
+    ws.reset_vectors(w * n);
+    lanes::band::tridiagonalize::<V>(n, b, buf, &mut ws.u, &mut ws.d, &mut ws.e);
+    // Q^T A Q = T + f n e_0 e_0^T
+    for m in 0..w {
+        ws.d[m] += jobs[m.min(jobs.len() - 1)].fill * n as f64;
+    }
+    let mut res = [(f64::NAN, f64::NAN); MAX_GROUP];
+    if w <= lanes::MAX_LANES {
+        lanes::tridiagonal_extremes::<V>(n, &ws.d, &ws.e, &mut ws.u, bounds, &mut res);
+    } else {
+        // four lanes at a time (de-interleaved copies)
+        let l = lanes::MAX_LANES;
+        for part in 0..w / l {
+            for i in 0..n {
+                for m in 0..l {
+                    ws.p[l * i + m] = ws.d[w * i + l * part + m];
+                    ws.pq[l * i + m] = ws.e[w * i + l * part + m];
+                }
+            }
+            lanes::tridiagonal_extremes::<2>(n, &ws.p, &ws.pq, &mut ws.u, &bounds[l * part..], &mut res[l * part..]);
+        }
+    }
+    let k = out.len().min(w);
+    out[..k].copy_from_slice(&res[..k]);
+}
+
+/// Spectrum bounds of a Burden matrix from its description (O(n + entries);
+/// `r` is scratch). Gershgorin: each row sum is bounded by
+/// `|fill| * (n - 1) + sum |w|` over the listed entries of that row (valid
+/// even for repeated pairs). Inner bounds (Cauchy interlacing): the extreme
+/// eigenvalues of the 1 x 1 and the bonded 2 x 2 principal submatrices.
+fn burden_bounds(n: usize, m: &BurdenMatrix, r: &mut Vec<f64>) -> SpectrumBounds {
+    r.clear();
+    r.resize(n, m.fill.abs() * (n as f64 - 1.0));
+    let mut b = SpectrumBounds::EMPTY;
     let diag = &m.diag[..n];
     for &(i, j, w) in m.entries {
         if i != j {
@@ -231,38 +242,27 @@ fn burden_bounds(n: usize, m: &BurdenMatrix) -> SpectrumBounds {
     b
 }
 
-/// Gershgorin interval `(lo, hi)` of the symmetric matrix whose lower
-/// triangle element `(i, j)` is `a[lanes * (i * n + j) + lane]`. It encloses
-/// the spectrum and is usually much tighter than the Gershgorin interval of
-/// the tridiagonal form (Burden matrices are strongly diagonally dominant),
-/// which saves iterations in `tridiagonal_extremes`. Inner bounds: the
+/// Gershgorin interval `(lo, hi)` of the symmetric `n x n` row-major matrix
+/// whose lower triangle is `a` (`r` is scratch). It encloses the spectrum
+/// and is usually much tighter than the Gershgorin interval of the
+/// tridiagonal form (Burden matrices are strongly diagonally dominant),
+/// which saves iterations in the Laguerre iteration. Inner bounds: the
 /// extreme diagonal elements.
-fn gershgorin_bounds(
-    n: usize,
-    a: &[f64],
-    lanes: usize,
-    lane: usize,
-    r: &mut Vec<f64>,
-) -> SpectrumBounds {
+fn gershgorin_bounds(n: usize, a: &[f64], r: &mut Vec<f64>) -> SpectrumBounds {
     r.clear();
     r.resize(n, 0.0);
     for i in 0..n {
         let mut ri = 0.0;
         for j in 0..i {
-            let v = a[lanes * (i * n + j) + lane].abs();
+            let v = a[i * n + j].abs();
             ri += v;
             r[j] += v;
         }
         r[i] += ri;
     }
-    let mut b = SpectrumBounds {
-        lo: f64::INFINITY,
-        hi: f64::NEG_INFINITY,
-        min_ub: f64::INFINITY,
-        max_lb: f64::NEG_INFINITY,
-    };
+    let mut b = SpectrumBounds::EMPTY;
     for i in 0..n {
-        let d = a[lanes * (i * n + i) + lane];
+        let d = a[i * n + i];
         b.lo = b.lo.min(d - r[i]);
         b.hi = b.hi.max(d + r[i]);
         b.min_ub = b.min_ub.min(d);
@@ -285,63 +285,118 @@ thread_local! {
     static BURDEN_WS: std::cell::RefCell<EigenWorkspace> = std::cell::RefCell::new(EigenWorkspace::new());
 }
 
+/// Largest `n` for which the dense reduction runs four matrices per pass
+/// (beyond it two per pass are as fast: the fused kernel's working set
+/// outgrows the L1 cache).
+const DENSE_QUAD_MAX_N: usize = 56;
+
+/// Most matrices per band-reduction pass (`V = 4`).
+const MAX_GROUP: usize = 8;
+
+/// Smallest `n` worth a band reduction.
+const BAND_MIN_N: usize = 48;
+
+/// Band reduction beats the dense one for `n >= factor * (b + 2)`, with the
+/// factor depending on the matrices per pass (`1 << k` for `k` = 1, 2, 3):
+/// with eight lanes the rotations are throughput-bound, with fewer the
+/// latency of each rotation's dependency chain dominates.
+const BAND_FACTOR: [usize; 4] = [usize::MAX, 19, 12, 8];
+
+/// Atom order for the band reduction of `jobs` (`inv[old] = new`) and its
+/// half-bandwidth `b`, for `n` large enough that it may beat the dense
+/// reduction (see [`BAND_FACTOR`]).
+fn band_order(n: usize, jobs: &[BurdenMatrix]) -> Option<(Vec<u32>, usize)> {
+    if n < BAND_MIN_N {
+        return None;
+    }
+    let edges: Vec<(u32, u32)> = jobs.iter().flat_map(|j| j.entries.iter().map(|&(a, b, _)| (a, b))).collect();
+    let (order, b) = lanes::band::rcm_order(n, &edges);
+    if n < BAND_FACTOR[3] * (b + 2) {
+        return None;
+    }
+    let mut inv = vec![0u32; n];
+    for (k, &o) in order.iter().enumerate() {
+        inv[o as usize] = k as u32;
+    }
+    Some((inv, b))
+}
+
+/// How a group of matrices is reduced (the suffix is `V`: `2 * V` matrices
+/// per pass).
+#[derive(Clone, Copy)]
+enum Method {
+    /// dense Householder reduction ([`solve_lanes`])
+    Dense1,
+    Dense2,
+    /// band reduction ([`solve_band`])
+    Band1,
+    Band2,
+    Band4,
+}
+
 /// Extreme eigenvalues `(min, max)` of each Burden matrix (all `n x n`;
 /// `(NaN, NaN)` for a matrix with a non-finite element).
-/// Matrices are assembled straight into the solver's (thread-local)
-/// workspace and solved two at a time in lock step
-/// ([`extreme_eigenvalues_pair`]), an odd one alone ([`extreme_eigenvalues`]).
+///
+/// Small or densely connected molecules: the matrices are assembled
+/// straight into the solver's (thread-local) workspace and reduced by
+/// Householder transformations, four at a time in lock step (`lanes`,
+/// `V = 2`; two for large `n` or a remainder of one or two). Large
+/// molecules with a narrow band after reordering: band reduction
+/// (`lanes::band`), up to eight matrices per pass. Unused lanes repeat the
+/// last matrix.
 pub fn burden_extremes(n: usize, jobs: &[BurdenMatrix]) -> Vec<(f64, f64)> {
+    if n == 0 {
+        return vec![(f64::NAN, f64::NAN); jobs.len()];
+    }
     BURDEN_WS.with(|ws| {
         let mut ws = ws.borrow_mut();
         let ws = &mut *ws;
-        let mut out = Vec::with_capacity(jobs.len());
-        for chunk in jobs.chunks(2) {
-            let mut buf = std::mem::take(&mut ws.a);
-            // Every lower-triangle entry is written below and the upper part
-            // is never read, so stale contents need no clearing.
-            let len = if chunk.len() == 2 { 2 * n * n } else { n * n };
-            if buf.len() < len {
-                buf.resize(len, 0.0);
-            }
-            buf.truncate(len);
-            if let [m0, m1] = chunk {
-                for i in 0..n {
-                    let row = &mut buf[2 * i * n..2 * i * n + 2 * (i + 1)];
-                    for c in row.as_chunks_mut::<2>().0 {
-                        c[0] = m0.fill;
-                        c[1] = m1.fill;
-                    }
-                }
-                for (lane, m) in [m0, m1].into_iter().enumerate() {
-                    for &(i, j, w) in m.entries {
-                        let (i, j) = (i.max(j) as usize, i.min(j) as usize);
-                        buf[2 * (i * n + j) + lane] = w;
-                    }
-                    for (i, &v) in m.diag[..n].iter().enumerate() {
-                        buf[2 * (i * n + i) + lane] = v;
-                    }
-                }
-                out.extend(solve_pair(
-                    ws,
-                    n,
-                    &mut buf,
-                    [burden_bounds(n, m0), burden_bounds(n, m1)],
-                ));
+        let mut out = vec![(f64::NAN, f64::NAN); jobs.len()];
+        let band = if n >= 3 { band_order(n, jobs) } else { None };
+        let band_ok = |k: usize| band.as_ref().is_some_and(|(_, b)| n >= BAND_FACTOR[k] * (b + 2));
+        let mut start = 0;
+        while start < jobs.len() {
+            let rest = jobs.len() - start;
+            let (take, method) = if rest > 4 && band_ok(3) {
+                (rest.min(MAX_GROUP), Method::Band4)
+            } else if rest > 2 && band_ok(2) {
+                (rest.min(4), Method::Band2)
+            } else if rest > 2 && n <= DENSE_QUAD_MAX_N {
+                (rest.min(4), Method::Dense2)
+            } else if rest <= 2 && band_ok(1) {
+                (rest, Method::Band1)
             } else {
-                let m = &chunk[0];
-                for i in 0..n {
-                    buf[i * n..i * n + i].fill(m.fill);
+                (rest.min(2), Method::Dense1)
+            };
+            let group = &jobs[start..start + take];
+            let mut bounds = [SpectrumBounds::EMPTY; MAX_GROUP];
+            for (m, job) in group.iter().enumerate() {
+                bounds[m] = burden_bounds(n, job, &mut ws.d);
+            }
+            // unused lanes repeat the last matrix
+            let last = bounds[take - 1];
+            bounds[take..].fill(last);
+            let mut buf = std::mem::take(&mut ws.a);
+            let res = &mut out[start..start + take];
+            let (inv, b) = band.as_ref().map_or((&[][..], 0), |(inv, b)| (&inv[..], *b));
+            match method {
+                Method::Band1 => solve_band::<1>(ws, n, b, inv, group, &mut buf, &bounds, res),
+                Method::Band2 => solve_band::<2>(ws, n, b, inv, group, &mut buf, &bounds, res),
+                Method::Band4 => solve_band::<4>(ws, n, b, inv, group, &mut buf, &bounds, res),
+                // Every packed entry is written, so stale contents need no clearing.
+                Method::Dense2 => {
+                    buf.resize(4 * tri(n), 0.0);
+                    lanes::assemble_burden::<2>(n, group, &mut buf);
+                    solve_lanes::<2>(ws, n, &mut buf, &bounds, res);
                 }
-                for &(i, j, w) in m.entries {
-                    let (i, j) = (i.max(j) as usize, i.min(j) as usize);
-                    buf[i * n + j] = w;
+                Method::Dense1 => {
+                    buf.resize(2 * tri(n), 0.0);
+                    lanes::assemble_burden::<1>(n, group, &mut buf);
+                    solve_lanes::<1>(ws, n, &mut buf, &bounds, res);
                 }
-                for (i, &v) in m.diag[..n].iter().enumerate() {
-                    buf[i * n + i] = v;
-                }
-                out.push(solve_single(ws, n, &mut buf, burden_bounds(n, m)));
             }
             ws.a = buf;
+            start += take;
         }
         ws.trim();
         // a non-finite entry makes the whole spectrum undefined
@@ -370,393 +425,6 @@ fn fma(a: f64, b: f64, c: f64) -> f64 {
     {
         a * b + c
     }
-}
-
-/// Scalars of one row in the fused update/matrix-vector kernels:
-/// `pu[j]`, `pq[j]` (pending rank-2 update) and `u[j]` (current reflector).
-#[derive(Clone, Copy)]
-struct RowCoef {
-    puj: f64,
-    pqj: f64,
-    uj: f64,
-}
-
-/// Columns `0..len` of one or two rows of the lower triangle: apply the
-/// pending rank-2 update `r[k] -= puj * pq[k] + pqj * pu[k]`, accumulate
-/// `s = sum(r[k] * u[k])` per row and `p[k] += sum_rows(r[k] * uj)`.
-/// Returns the row dot products. Portable scalar version.
-#[cfg(not(target_arch = "aarch64"))]
-#[inline(always)]
-#[allow(clippy::too_many_arguments)]
-fn fused_rows<const R: usize>(
-    rows: [&mut [f64]; R],
-    c: [RowCoef; R],
-    len: usize,
-    pu: &[f64],
-    pq: &[f64],
-    u: &[f64],
-    p: &mut [f64],
-) -> [f64; R] {
-    let mut s = [0.0f64; R];
-    for k in 0..len {
-        let (a, b, uk) = (pu[k], pq[k], u[k]);
-        let mut pk = p[k];
-        for r in 0..R {
-            let v = fma(-c[r].pqj, a, fma(-c[r].puj, b, rows[r][k]));
-            rows[r][k] = v;
-            s[r] = fma(v, uk, s[r]);
-            pk = fma(v, c[r].uj, pk);
-        }
-        p[k] = pk;
-    }
-    s
-}
-
-/// NEON version of the fused kernel (two `f64` lanes, two-way unrolled).
-#[cfg(target_arch = "aarch64")]
-#[inline(always)]
-#[allow(clippy::too_many_arguments)]
-fn fused_rows<const R: usize>(
-    mut rows: [&mut [f64]; R],
-    c: [RowCoef; R],
-    len: usize,
-    pu: &[f64],
-    pq: &[f64],
-    u: &[f64],
-    p: &mut [f64],
-) -> [f64; R] {
-    use std::arch::aarch64::*;
-    assert!(pu.len() >= len && pq.len() >= len && u.len() >= len && p.len() >= len);
-    for r in rows.iter() {
-        assert!(r.len() >= len);
-    }
-    let mut s = [0.0f64; R];
-    let main = len & !3;
-    // SAFETY: all pointers are in bounds (`k + 3 < main <= len` checked above).
-    unsafe {
-        let rp: [*mut f64; R] = std::array::from_fn(|r| rows[r].as_mut_ptr());
-        let (pup, pqp, up, pp) = (pu.as_ptr(), pq.as_ptr(), u.as_ptr(), p.as_mut_ptr());
-        let mut acc0 = [vdupq_n_f64(0.0); R];
-        let mut acc1 = [vdupq_n_f64(0.0); R];
-        let npuj: [float64x2_t; R] = std::array::from_fn(|r| vdupq_n_f64(-c[r].puj));
-        let npqj: [float64x2_t; R] = std::array::from_fn(|r| vdupq_n_f64(-c[r].pqj));
-        let ujv: [float64x2_t; R] = std::array::from_fn(|r| vdupq_n_f64(c[r].uj));
-        let mut k = 0;
-        while k < main {
-            let a0 = vld1q_f64(pup.add(k));
-            let a1 = vld1q_f64(pup.add(k + 2));
-            let b0 = vld1q_f64(pqp.add(k));
-            let b1 = vld1q_f64(pqp.add(k + 2));
-            let u0 = vld1q_f64(up.add(k));
-            let u1 = vld1q_f64(up.add(k + 2));
-            let mut p0 = vld1q_f64(pp.add(k));
-            let mut p1 = vld1q_f64(pp.add(k + 2));
-            for r in 0..R {
-                let x0 = vld1q_f64(rp[r].add(k));
-                let x1 = vld1q_f64(rp[r].add(k + 2));
-                let v0 = vfmaq_f64(vfmaq_f64(x0, npuj[r], b0), npqj[r], a0);
-                let v1 = vfmaq_f64(vfmaq_f64(x1, npuj[r], b1), npqj[r], a1);
-                vst1q_f64(rp[r].add(k), v0);
-                vst1q_f64(rp[r].add(k + 2), v1);
-                acc0[r] = vfmaq_f64(acc0[r], v0, u0);
-                acc1[r] = vfmaq_f64(acc1[r], v1, u1);
-                p0 = vfmaq_f64(p0, v0, ujv[r]);
-                p1 = vfmaq_f64(p1, v1, ujv[r]);
-            }
-            vst1q_f64(pp.add(k), p0);
-            vst1q_f64(pp.add(k + 2), p1);
-            k += 4;
-        }
-        for r in 0..R {
-            s[r] = vaddvq_f64(vaddq_f64(acc0[r], acc1[r]));
-        }
-    }
-    for k in main..len {
-        let (a, b, uk) = (pu[k], pq[k], u[k]);
-        let mut pk = p[k];
-        for r in 0..R {
-            let v = fma(-c[r].pqj, a, fma(-c[r].puj, b, rows[r][k]));
-            rows[r][k] = v;
-            s[r] = fma(v, uk, s[r]);
-            pk = fma(v, c[r].uj, pk);
-        }
-        p[k] = pk;
-    }
-    s
-}
-
-/// `row[k] -= uj * q[k] + qj * u[k]`.
-#[inline(always)]
-fn rank2_row(row: &mut [f64], u: &[f64], q: &[f64], uj: f64, qj: f64) {
-    let len = row.len();
-    for ((r, a), b) in row.iter_mut().zip(&u[..len]).zip(&q[..len]) {
-        *r = fma(-qj, *a, fma(-uj, *b, *r));
-    }
-}
-
-/// Householder tridiagonalization working on contiguous rows of the lower
-/// triangle (EISPACK `tred1` reflectors, last row first). The rank-2 update of
-/// each step is deferred and fused with the matrix-vector product of the next
-/// step, so the trailing matrix is streamed once per step. On return `d` holds
-/// the diagonal and `e[1..]` the sub-diagonal.
-#[inline(never)]
-fn tridiagonalize_lower(
-    n: usize,
-    a: &mut [f64],
-    d: &mut [f64],
-    e: &mut [f64],
-    bufs: [&mut Vec<f64>; 4],
-) {
-    let [u, p, pu, pq] = bufs;
-    // Rows 0..i of the remaining block still need `A -= pu pq^T + pq pu^T`
-    // (initially zero).
-    pu.fill(0.0);
-    pq.fill(0.0);
-    for i in (1..n).rev() {
-        let l = i - 1;
-        let (head, tail) = a.split_at_mut(i * n);
-        let x = &tail[..i];
-        let scale: f64 = if l == 0 {
-            0.0
-        } else {
-            x.iter().map(|v| v.abs()).sum()
-        };
-        if scale == 0.0 {
-            e[i] = x[l];
-            for j in 0..i {
-                let (puj, pqj) = (pu[j], pq[j]);
-                rank2_row(&mut head[j * n..j * n + j + 1], pu, pq, puj, pqj);
-            }
-            pu[..i].fill(0.0);
-            pq[..i].fill(0.0);
-            continue;
-        }
-        let inv_scale = 1.0 / scale;
-        let mut h = 0.0;
-        for (uk, &xk) in u[..i].iter_mut().zip(x) {
-            let v = xk * inv_scale;
-            *uk = v;
-            h = fma(v, v, h);
-        }
-        let f = u[l];
-        let g = if f >= 0.0 { -h.sqrt() } else { h.sqrt() };
-        e[i] = scale * g;
-        h -= f * g;
-        u[l] = f - g;
-
-        // p = A u over the leading i x i block (symmetric, lower triangle),
-        // applying the previous step's deferred update on the way.
-        p[..i].fill(0.0);
-        let coef = |j: usize| RowCoef {
-            puj: pu[j],
-            pqj: pq[j],
-            uj: u[j],
-        };
-        let upd = |x: f64, j: usize, k: usize| fma(-pq[j], pu[k], fma(-pu[j], pq[k], x));
-        let mut j = 0;
-        while j + 1 < i {
-            // rows j and j + 1 share columns 0..j
-            let (r0, r1) = head[j * n..].split_at_mut(n);
-            let (r0, r1) = (&mut r0[..j + 1], &mut r1[..j + 2]);
-            let (c0, c1) = (coef(j), coef(j + 1));
-            let [s0, mut s1] = {
-                let (a0, _) = r0.split_at_mut(j);
-                let (a1, _) = r1.split_at_mut(j);
-                fused_rows([a0, a1], [c0, c1], j, pu, pq, u, p)
-            };
-            let d0 = upd(r0[j], j, j);
-            r0[j] = d0;
-            let o1 = upd(r1[j], j + 1, j);
-            r1[j] = o1;
-            let d1 = upd(r1[j + 1], j + 1, j + 1);
-            r1[j + 1] = d1;
-            s1 = fma(o1, u[j], s1);
-            p[j] += fma(o1, c1.uj, fma(d0, c0.uj, s0));
-            p[j + 1] += fma(d1, c1.uj, s1);
-            j += 2;
-        }
-        if j < i {
-            let r0 = &mut head[j * n..j * n + j + 1];
-            let c0 = coef(j);
-            let [s0] = fused_rows([&mut r0[..j]], [c0], j, pu, pq, u, p);
-            let d0 = upd(r0[j], j, j);
-            r0[j] = d0;
-            p[j] += fma(d0, c0.uj, s0);
-        }
-        let inv_h = 1.0 / h;
-        let mut f_acc = 0.0;
-        for (pk, &uk) in p[..i].iter_mut().zip(&u[..i]) {
-            *pk *= inv_h;
-            f_acc = fma(*pk, uk, f_acc);
-        }
-        let hh = f_acc / (h + h);
-        for (pk, &uk) in p[..i].iter_mut().zip(&u[..i]) {
-            *pk = fma(-hh, uk, *pk);
-        }
-        // Row l is the next step's Householder source: update it now; rows
-        // 0..l are updated lazily in the next step.
-        let (ul, ql) = (u[l], p[l]);
-        rank2_row(&mut head[l * n..l * n + l + 1], u, p, ul, ql);
-        std::mem::swap(u, pu);
-        std::mem::swap(p, pq);
-    }
-    for i in 0..n {
-        d[i] = a[i * n + i];
-    }
-}
-
-/// Smallest and largest eigenvalue of the symmetric tridiagonal matrix with
-/// diagonal `d` and sub-diagonal `e[1..]`. `e2` is scratch; `bounds` is an
-/// enclosure of the spectrum (e.g. Gershgorin of the original matrix).
-///
-/// Laguerre's method on the characteristic polynomial, started at the
-/// Gershgorin bounds: for a polynomial with only real roots it converges
-/// monotonically from outside the spectrum (cubically for a simple root), so
-/// every iterate stays a strict bound and all LDL^T pivots keep one sign (no
-/// zero-pivot hazards). If an iterate ever crosses the extreme eigenvalue
-/// (rounding) or convergence is slow (multiple root), Sturm-count
-/// multisection finishes from the bracket established so far.
-#[inline(never)]
-fn tridiagonal_extremes(
-    n: usize,
-    d: &[f64],
-    e: &[f64],
-    e2: &mut [f64],
-    bounds: SpectrumBounds,
-) -> (f64, f64) {
-    let mut gl = f64::INFINITY;
-    let mut gu = f64::NEG_INFINITY;
-    let mut max_e2: f64 = 0.0;
-    e2[0] = 0.0;
-    for i in 0..n {
-        let mut r = 0.0;
-        if i > 0 {
-            r += e[i].abs();
-            e2[i] = e[i] * e[i];
-            max_e2 = max_e2.max(e2[i]);
-        }
-        if i + 1 < n {
-            r += e[i + 1].abs();
-        }
-        gl = gl.min(d[i] - r);
-        gu = gu.max(d[i] + r);
-    }
-    let pivmin = f64::MIN_POSITIVE * max_e2.max(1.0);
-    let tnorm = gl.abs().max(gu.abs());
-    let eps = f64::EPSILON;
-    let fudge = 2.1 * tnorm * eps * n as f64 + 4.2 * pivmin;
-    // tighter enclosure from the original matrix (same spectrum up to rounding)
-    gl = gl.max(bounds.lo) - fudge;
-    gu = gu.min(bounds.hi) + fudge;
-    let (min_ub, max_lb) = (bounds.min_ub + fudge, bounds.max_lb - fudge);
-
-    let mut ext = [
-        Extreme::new(0, n, gl, min_ub, tnorm),
-        Extreme::new(1, n, max_lb, gu, tnorm),
-    ];
-    for _ in 0..MAX_IT {
-        // Laguerre lanes: LDL^T pivots q of T - x with derivative recurrences,
-        // G = p'/p and H = (p'/p)^2 - p''/p of p(x) = det(T - x).
-        // Probe lanes: Sturm counts at x -/+ probe (bracket certification).
-        let x = [ext[0].x, ext[1].x];
-        let sig = [
-            ext[0].probes[0],
-            ext[0].probes[1],
-            ext[1].probes[0],
-            ext[1].probes[1],
-        ];
-        let (cnt, g, h, pc) = sweep(n, d, e2, x, sig, pivmin);
-        for l in 0..2 {
-            ext[l].update(
-                cnt[l] as f64,
-                [pc[2 * l] as f64, pc[2 * l + 1] as f64],
-                g[l],
-                h[l],
-            );
-        }
-        if ext[0].done && ext[1].done {
-            break;
-        }
-    }
-    if !(ext[0].done && ext[1].done) {
-        let need = [!ext[0].done, !ext[1].done];
-        let ms = multisection(
-            n,
-            d,
-            e2,
-            pivmin,
-            [(ext[0].lo, ext[0].hi), (ext[1].lo, ext[1].hi)],
-            need,
-        );
-        for l in 0..2 {
-            if need[l] {
-                ext[l].result = ms[l];
-            }
-        }
-    }
-    (ext[0].result, ext[1].result)
-}
-
-/// One pass over the tridiagonal matrix: at the Laguerre points `x` the
-/// Sturm counts and `G = p'/p`, `H = (p'/p)^2 - p''/p` of `p(x) = det(T - x)`
-/// (LDL^T pivots with derivative recurrences), and the Sturm counts at the
-/// four probe points `sig`.
-#[inline(always)]
-#[allow(clippy::type_complexity)]
-fn sweep(
-    n: usize,
-    d: &[f64],
-    e2: &[f64],
-    x: [f64; 2],
-    sig: [f64; 4],
-    pivmin: f64,
-) -> ([usize; 2], [f64; 2], [f64; 2], [usize; 4]) {
-    let mut cnt = [0usize; 2];
-    let mut pc = [0usize; 4];
-    let mut pq = [0.0f64; 4];
-    for k in 0..4 {
-        let v = d[0] - sig[k];
-        let v = if v.abs() < pivmin { -pivmin } else { v };
-        pq[k] = v;
-        pc[k] = (v < 0.0) as usize;
-    }
-    let mut qpp = [0.0f64; 2];
-    let mut t = [0.0f64; 2];
-    let mut r = [0.0f64; 2];
-    let mut g = [0.0f64; 2];
-    let mut h = [0.0f64; 2];
-    for l in 0..2 {
-        let v = d[0] - x[l];
-        let v = if v.abs() < pivmin { -pivmin } else { v };
-        cnt[l] = (v < 0.0) as usize;
-        t[l] = 1.0 / v;
-        r[l] = -t[l];
-        g[l] = r[l];
-        h[l] = r[l] * r[l];
-    }
-    for i in 1..n {
-        let (di, ei2) = (d[i], e2[i]);
-        for l in 0..2 {
-            let et = ei2 * t[l];
-            let qn = (di - x[l]) - et;
-            let qn = if qn.abs() < pivmin { -pivmin } else { qn };
-            let qpn = fma(et, r[l], -1.0);
-            let qppn = et * fma(qpp[l], t[l], -2.0 * r[l] * r[l]);
-            cnt[l] += (qn < 0.0) as usize;
-            qpp[l] = qppn;
-            t[l] = 1.0 / qn;
-            r[l] = qpn * t[l];
-            g[l] += r[l];
-            h[l] = fma(r[l], r[l], fma(-qppn, t[l], h[l]));
-        }
-        for k in 0..4 {
-            let v = (di - sig[k]) - ei2 / pq[k];
-            let v = if v.abs() < pivmin { -pivmin } else { v };
-            pq[k] = v;
-            pc[k] += (v < 0.0) as usize;
-        }
-    }
-    (cnt, g, h, pc)
 }
 
 /// Laguerre iterations per extreme eigenvalue before the multisection fallback.
@@ -1117,8 +785,7 @@ mod tests {
     fn check(n: usize, a: &[f64], ws: &mut EigenWorkspace) {
         // pair path: (a, a) and (a, -a) must give the single-path results
         let neg: Vec<f64> = a.iter().map(|v| -v).collect();
-        let mut m = a.to_vec();
-        let single = extreme_eigenvalues(ws, n, &mut m);
+        let single = extreme_eigenvalues(ws, n, a);
         let [p0, p1] = extreme_eigenvalues_pair(ws, n, a, &neg);
         let sc = single.0.abs().max(single.1.abs()).max(1.0);
         assert!(
@@ -1131,8 +798,7 @@ mod tests {
         );
         let mut m = a.to_vec();
         let full = symmetric_eigenvalues(n, &mut m);
-        let mut m = a.to_vec();
-        let (lo, hi) = extreme_eigenvalues(ws, n, &mut m);
+        let (lo, hi) = extreme_eigenvalues(ws, n, a);
         let norm = full[0].abs().max(full[n - 1].abs()).max(1.0);
         assert!(
             (lo - full[0]).abs() <= 1e-13 * norm,
@@ -1188,5 +854,114 @@ mod tests {
             a[i * 4 + i] = i as f64 - 1.5;
         }
         check(4, &a, &mut ws);
+    }
+
+    /// Bonds of a molecule-like graph on `n` atoms, a tree plus a few ring
+    /// closures, each unordered pair once (the [`BurdenMatrix`] contract):
+    /// `local` grows a chain with short branches and small rings (narrow band
+    /// after reordering), otherwise parents and ring closures are random.
+    fn molecule_like(n: usize, local: bool, st: &mut u64) -> Vec<(u32, u32, f64)> {
+        let mut entries: Vec<(u32, u32, f64)> = Vec::new();
+        for i in 1..n {
+            let j = if local { i - 1 - ((lcg(st) * 3.0) as usize).min(i - 1) } else { (lcg(st) * i as f64) as usize };
+            entries.push((i as u32, j as u32, [0.1, 0.15, 0.2, 0.3][(lcg(st) * 4.0) as usize]));
+        }
+        for _ in 0..n / 6 {
+            let i = (lcg(st) * n as f64) as u32;
+            let j = if local { i.saturating_sub(5) } else { (lcg(st) * n as f64) as u32 };
+            if i != j && !entries.iter().any(|&(a, b, _)| (a, b) == (i, j) || (a, b) == (j, i)) {
+                entries.push((i, j, 0.15));
+            }
+        }
+        entries
+    }
+
+    /// Diagonals of `count` Burden matrices: masses, charges or constant.
+    fn burden_diags(n: usize, count: usize, kind: usize, st: &mut u64) -> Vec<Vec<f64>> {
+        (0..count)
+            .map(|_| {
+                (0..n)
+                    .map(|_| match kind {
+                        0 => [12.011, 15.999, 14.007, 32.06][(lcg(st) * 4.0) as usize],
+                        1 => lcg(st) * 0.8 - 0.4,
+                        _ => 1.0,
+                    })
+                    .collect()
+            })
+            .collect()
+    }
+
+    /// `(min, max)` eigenvalue of a Burden matrix by the full QL solver.
+    fn burden_reference(n: usize, job: &BurdenMatrix) -> (f64, f64) {
+        let mut a = vec![job.fill; n * n];
+        for &(i, j, w) in job.entries {
+            a[i as usize * n + j as usize] = w;
+            a[j as usize * n + i as usize] = w;
+        }
+        for i in 0..n {
+            a[i * n + i] = job.diag[i];
+        }
+        let full = symmetric_eigenvalues(n, &mut a);
+        (full[0], full[n - 1])
+    }
+
+    fn assert_extremes(got: (f64, f64), want: (f64, f64), what: &str) {
+        let norm = want.0.abs().max(want.1.abs()).max(1.0);
+        assert!(
+            (got.0 - want.0).abs() <= 1e-13 * norm && (got.1 - want.1).abs() <= 1e-13 * norm,
+            "{what}: {got:?} vs {want:?}"
+        );
+    }
+
+    #[test]
+    fn band_reduction_matches_full_solver() {
+        let mut st = 7u64;
+        let mut ws = EigenWorkspace::new();
+        for n in 3..70 {
+            for kind in 0..3 {
+                let entries = molecule_like(n, kind != 1, &mut st);
+                let diags = burden_diags(n, 8, kind, &mut st);
+                let jobs: Vec<BurdenMatrix> =
+                    diags.iter().map(|d| BurdenMatrix { fill: 0.001, entries: &entries, diag: d }).collect();
+                let edges: Vec<(u32, u32)> = entries.iter().map(|&(a, b, _)| (a, b)).collect();
+                let (order, b) = lanes::band::rcm_order(n, &edges);
+                let mut inv = vec![0u32; n];
+                for (k, &o) in order.iter().enumerate() {
+                    inv[o as usize] = k as u32;
+                }
+                let bounds: Vec<SpectrumBounds> = jobs.iter().map(|j| burden_bounds(n, j, &mut ws.d)).collect();
+                // eight lanes, three (padded) lanes and one (padded) lane
+                let mut out = [(0.0, 0.0); 12];
+                let mut buf = Vec::new();
+                solve_band::<4>(&mut ws, n, b, &inv, &jobs, &mut buf, &bounds, &mut out[..8]);
+                solve_band::<2>(&mut ws, n, b, &inv, &jobs[..3], &mut buf, &bounds, &mut out[8..11]);
+                solve_band::<1>(&mut ws, n, b, &inv, &jobs[..1], &mut buf, &bounds, &mut out[11..]);
+                for (m, job) in jobs.iter().chain(&jobs[..3]).chain(&jobs[..1]).enumerate() {
+                    assert_extremes(out[m], burden_reference(n, job), &format!("n={n} kind={kind} b={b} lane {m}"));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn burden_extremes_match_full_solver() {
+        // every reduction path: dense with four / two lanes, band reduction
+        // with eight / four / two lanes (large n), padded lanes
+        let mut st = 11u64;
+        for n in [1, 2, 7, 33, 60, 90, 130, 200] {
+            let entries = molecule_like(n, true, &mut st);
+            for count in [1, 2, 3, 4, 5, 8, 15] {
+                if n >= 130 && count > 5 {
+                    continue;
+                }
+                let kind = count % 3;
+                let diags = burden_diags(n, count, kind, &mut st);
+                let jobs: Vec<BurdenMatrix> =
+                    diags.iter().map(|d| BurdenMatrix { fill: 0.001, entries: &entries, diag: d }).collect();
+                for (k, (got, job)) in burden_extremes(n, &jobs).into_iter().zip(&jobs).enumerate() {
+                    assert_extremes(got, burden_reference(n, job), &format!("n={n} count={count} job {k}"));
+                }
+            }
+        }
     }
 }

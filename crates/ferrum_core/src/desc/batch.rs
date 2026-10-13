@@ -161,11 +161,13 @@ pub enum BatchDescriptor {
     MordredTopologicalCharge,
     MordredMolecularId,
     MordredInformationContent,
+    MordredEta,
+    MordredMatrix,
 }
 
 impl BatchDescriptor {
     pub fn all() -> &'static [Self] {
-        const ALL: [BatchDescriptor; 99] = [
+        const ALL: [BatchDescriptor; 101] = [
             BatchDescriptor::MolecularWeight,
             BatchDescriptor::LogP,
             BatchDescriptor::MolarRefractivity,
@@ -265,6 +267,8 @@ impl BatchDescriptor {
             BatchDescriptor::MordredTopologicalCharge,
             BatchDescriptor::MordredMolecularId,
             BatchDescriptor::MordredInformationContent,
+            BatchDescriptor::MordredEta,
+            BatchDescriptor::MordredMatrix,
         ];
         &ALL
     }
@@ -423,6 +427,8 @@ impl BatchDescriptor {
             Self::MordredTopologicalCharge => "MordredTopologicalCharge",
             Self::MordredMolecularId => "MordredMolecularId",
             Self::MordredInformationContent => "MordredInformationContent",
+            Self::MordredEta => "MordredEta",
+            Self::MordredMatrix => "MordredMatrix",
         }
     }
 
@@ -535,6 +541,8 @@ impl BatchDescriptor {
             Self::MordredInformationContent => {
                 super::mordred_information::MordredInformationContent.calculate(mol, ctx)
             }
+            Self::MordredEta => super::mordred_eta::MordredEta.calculate(mol, ctx),
+            Self::MordredMatrix => super::mordred_matrix::MordredMatrix.calculate(mol, ctx),
         }
     }
 
@@ -595,6 +603,8 @@ impl BatchDescriptor {
             Self::MordredTopologicalCharge => super::mordred_topological::MORDRED_TOPOLOGICAL_CHARGE_LEN,
             Self::MordredMolecularId => super::mordred_molecular_id::MORDRED_MOLECULAR_ID_LEN,
             Self::MordredInformationContent => super::mordred_information::MORDRED_INFORMATION_CONTENT_LEN,
+            Self::MordredEta => super::mordred_eta::MORDRED_ETA_LEN,
+            Self::MordredMatrix => super::mordred_matrix::MORDRED_MATRIX_LEN,
             _ => 1,
         }
     }
@@ -762,6 +772,9 @@ impl BatchDescriptor {
             Self::MordredTopologicalCharge => super::mordred_topological::mordred_topological_charge_names(),
             Self::MordredMolecularId => super::mordred_molecular_id::mordred_molecular_id_names(),
             Self::MordredInformationContent => super::mordred_information::mordred_information_content_names(),
+            Self::MordredEta => list(&super::mordred_eta::MORDRED_ETA_NAMES),
+            // Mordred AdjacencyMatrix, BaryszMatrix, DetourMatrix, DistanceMatrix
+            Self::MordredMatrix => super::mordred_matrix::mordred_matrix_names(),
         }
     }
 

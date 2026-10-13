@@ -20,8 +20,10 @@
 //!
 //! The subgraphs are enumerated with the ESU algorithm (Wernicke 2006) on the
 //! line graph, which visits every connected bond set of up to 7 bonds exactly
-//! once; atom degrees, atom count and the property products are updated
-//! incrementally while the set grows.
+//! once (on bit sets for up to 256 bonds); atom degrees, atom count and the
+//! property products are updated incrementally while the set grows. Clusters
+//! and path-clusters of 7 bonds are not part of the preset, so those leaves
+//! of the search are skipped.
 
 use super::typed::{Descriptor, DescriptorValue};
 use crate::mol::elements::outer_electrons;
@@ -133,7 +135,7 @@ impl Esu<'_> {
         self.nbr_start[e as usize] as usize..self.nbr_start[e as usize + 1] as usize
     }
 
-    #[inline]
+    #[inline(always)]
     fn add_atom_degree(&mut self, x: usize) {
         let old = self.deg[x];
         self.deg[x] = old + 1;
@@ -156,7 +158,7 @@ impl Esu<'_> {
         }
     }
 
-    #[inline]
+    #[inline(always)]
     fn remove_atom_degree(&mut self, x: usize) {
         let new = self.deg[x] - 1;
         self.deg[x] = new;
@@ -204,7 +206,7 @@ impl Esu<'_> {
     }
 
     /// Records the current subgraph of `size` bonds.
-    #[inline]
+    #[inline(always)]
     fn record(&mut self, size: usize) {
         let ty = if self.n_atoms as usize <= size {
             CHAIN
@@ -225,6 +227,127 @@ impl Esu<'_> {
         }
     }
 
+    /// Records the current subgraph of `MAX_ORDER - 1` bonds extended by
+    /// edge `e` (a leaf of the search tree: only its atoms matter, not its
+    /// neighbourhood), unless that is a cluster or path-cluster (not in the
+    /// preset).
+    #[inline(always)]
+    fn leaf(&mut self, e: u32) {
+        let (a, b) = self.ends[e as usize];
+        let (da, db) = (self.deg[a as usize], self.deg[b as usize]);
+        // MAX_ORDER - 1 connected bonds: a cycle iff fewer than MAX_ORDER atoms
+        let cyclic = (self.n_atoms as usize) < MAX_ORDER;
+        if !cyclic && (da == 0 || db == 0) && (self.n_deg3 > 0 || da.max(db) > 1) {
+            // a tree with a branch
+            return;
+        }
+        let saved = self.prod;
+        self.add_atom_degree(a as usize);
+        self.add_atom_degree(b as usize);
+        self.record(MAX_ORDER);
+        self.remove_atom_degree(b as usize);
+        self.remove_atom_degree(a as usize);
+        self.prod = saved;
+    }
+
+    /// Adds edge `e` to the subgraph (atoms only).
+    #[inline(always)]
+    fn push_atoms(&mut self, e: u32) {
+        let (a, b) = self.ends[e as usize];
+        self.add_atom_degree(a as usize);
+        self.add_atom_degree(b as usize);
+    }
+
+    #[inline(always)]
+    fn pop_atoms(&mut self, e: u32) {
+        let (a, b) = self.ends[e as usize];
+        self.remove_atom_degree(b as usize);
+        self.remove_atom_degree(a as usize);
+    }
+
+    /// ESU `ExtendSubgraph` on bit sets of the line-graph vertices: extends
+    /// the current subgraph of `size` bonds by every element of `ext`;
+    /// `closed` holds the subgraph and its neighbourhood, `above` the
+    /// vertices above the root, `nbr` the neighbourhood of each vertex.
+    fn extend_bits<const W: usize>(
+        &mut self,
+        nbr: &[[u64; W]],
+        size: usize,
+        mut ext: [u64; W],
+        closed: &[u64; W],
+        above: &[u64; W],
+    ) {
+        if size + 1 == MAX_ORDER {
+            for (i, &word) in ext.iter().enumerate() {
+                let mut word = word;
+                while word != 0 {
+                    let w = i as u32 * 64 + word.trailing_zeros();
+                    word &= word - 1;
+                    self.leaf(w);
+                }
+            }
+            return;
+        }
+        for i in 0..W {
+            while ext[i] != 0 {
+                let w = i as u32 * 64 + ext[i].trailing_zeros();
+                ext[i] &= ext[i] - 1;
+                // remaining extension set plus the exclusive neighbours of w
+                let nb = &nbr[w as usize];
+                let mut child = ext;
+                let mut child_closed = *closed;
+                for j in 0..W {
+                    child[j] |= nb[j] & !closed[j] & above[j];
+                    child_closed[j] |= nb[j];
+                }
+                let saved = self.prod;
+                self.push_atoms(w);
+                self.record(size + 1);
+                self.extend_bits(nbr, size + 1, child, &child_closed, above);
+                self.pop_atoms(w);
+                self.prod = saved;
+            }
+        }
+    }
+
+    /// Enumerates all subgraphs with [`Self::extend_bits`] (`W` words hold
+    /// every line-graph vertex).
+    fn run_bits<const W: usize>(&mut self) {
+        let n_edges = self.ends.len();
+        let mut nbr = vec![[0u64; W]; n_edges];
+        for (e, bits) in nbr.iter_mut().enumerate() {
+            for k in self.nbrs(e as u32) {
+                let u = self.nbr[k] as usize;
+                bits[u / 64] |= 1 << (u % 64);
+            }
+        }
+        for v in 0..n_edges {
+            let mut above = [0u64; W];
+            // vertices v + 1.. per word
+            for (i, word) in above.iter_mut().enumerate() {
+                let lo = i * 64;
+                *word = if v < lo {
+                    !0
+                } else if v + 1 >= lo + 64 {
+                    0
+                } else {
+                    !0 << (v + 1 - lo)
+                };
+            }
+            let mut ext = nbr[v];
+            let mut closed = nbr[v];
+            for i in 0..W {
+                ext[i] &= above[i];
+            }
+            closed[v / 64] |= 1 << (v % 64);
+            self.push_atoms(v as u32);
+            self.record(1);
+            self.extend_bits(&nbr, 1, ext, &closed, &above);
+            self.pop_atoms(v as u32);
+            self.prod = [1.0; 2];
+        }
+    }
+
     /// Extends the current subgraph of `size` bonds by every element of the
     /// extension set `ext[start..end]` (ESU `ExtendSubgraph`).
     fn extend(&mut self, size: usize, start: usize, end: usize) {
@@ -232,17 +355,8 @@ impl Esu<'_> {
             return;
         }
         if size + 1 == MAX_ORDER {
-            // the children are leaves of the search tree: only their atoms
-            // matter, not their neighbourhoods
             for i in start..end {
-                let (a, b) = self.ends[self.ext[i] as usize];
-                let saved = self.prod;
-                self.add_atom_degree(a as usize);
-                self.add_atom_degree(b as usize);
-                self.record(MAX_ORDER);
-                self.remove_atom_degree(b as usize);
-                self.remove_atom_degree(a as usize);
-                self.prod = saved;
+                self.leaf(self.ext[i]);
             }
             return;
         }
@@ -273,6 +387,12 @@ impl Esu<'_> {
 
 /// Mordred Chi values in [`mordred_chi_names`] order.
 pub fn mordred_chi(mol: &Molecule) -> Vec<f64> {
+    chi_values(mol, true)
+}
+
+/// [`mordred_chi`]; `bits = false` enumerates with the vector-based ESU
+/// (used above 256 bonds; for tests).
+fn chi_values(mol: &Molecule, bits: bool) -> Vec<f64> {
     let n = mol.num_atoms();
     let mut factors = Vec::with_capacity(n);
     for a in 0..n {
@@ -310,7 +430,7 @@ pub fn mordred_chi(mol: &Molecule) -> Vec<f64> {
         nbr_start: &nbr_start,
         nbr: &nbr,
         factors: &factors,
-        cover: vec![0; ends.len()],
+        cover: Vec::new(),
         ext: Vec::new(),
         deg: vec![0; n],
         n_atoms: 0,
@@ -326,21 +446,29 @@ pub fn mordred_chi(mol: &Molecule) -> Vec<f64> {
             fail: [[[false; 2]; MAX_ORDER + 1]; 4],
         },
     };
-    for v in 0..ends.len() as u32 {
-        esu.root = v;
-        esu.ext.clear();
-        for k in esu.nbrs(v) {
-            let u = esu.nbr[k];
-            if u > v {
-                esu.ext.push(u);
+    match ends.len() {
+        0..=64 if bits => esu.run_bits::<1>(),
+        65..=128 if bits => esu.run_bits::<2>(),
+        129..=256 if bits => esu.run_bits::<4>(),
+        _ => {
+            esu.cover = vec![0; ends.len()];
+            for v in 0..ends.len() as u32 {
+                esu.root = v;
+                esu.ext.clear();
+                for k in esu.nbrs(v) {
+                    let u = esu.nbr[k];
+                    if u > v {
+                        esu.ext.push(u);
+                    }
+                }
+                esu.push_edge(v);
+                esu.record(1);
+                let end = esu.ext.len();
+                esu.extend(1, 0, end);
+                esu.pop_edge(v);
+                esu.prod = [1.0; 2];
             }
         }
-        esu.push_edge(v);
-        esu.record(1);
-        let end = esu.ext.len();
-        esu.extend(1, 0, end);
-        esu.pop_edge(v);
-        esu.prod = [1.0; 2];
     }
     let mut acc = esu.acc;
 
@@ -403,6 +531,29 @@ mod tests {
     fn chi(smiles: &str) -> std::collections::HashMap<String, f64> {
         let mol = parse_smiles(smiles).unwrap();
         mordred_chi_names().into_iter().zip(mordred_chi(&mol)).collect()
+    }
+
+    #[test]
+    fn bit_set_and_vector_enumerations_agree() {
+        for smi in [
+            "CC(C)C",
+            "C1CC1",
+            "c1ccc2c(c1)ccc1ccccc12",
+            "CC(C)(C)C1CCC(CC1)C(=O)OCC",
+            "C12C3C4C1C5C2C3C45",
+            // more than 64 and 128 bonds
+            "CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC(C)C(C)C",
+            "c1ccc(cc1)C(c1ccccc1)(c1ccccc1)CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC1CC2CCC1C2",
+        ] {
+            let mol = parse_smiles(smi).unwrap();
+            let (a, b) = (chi_values(&mol, true), chi_values(&mol, false));
+            for (i, (x, y)) in a.iter().zip(&b).enumerate() {
+                assert!(
+                    (x.is_nan() && y.is_nan()) || (x - y).abs() <= 1e-12 * x.abs().max(1.0),
+                    "{smi} column {i}: {x} vs {y}"
+                );
+            }
+        }
     }
 
     #[test]

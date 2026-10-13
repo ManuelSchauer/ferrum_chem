@@ -110,11 +110,10 @@ struct Canon {
     index: Vec<i32>,
     neighbor_num: Vec<Vec<i32>>,
     revisited: Vec<Vec<i32>>,
-    /// Bumped whenever `index` changes; an atom's bond list is re-sorted only
-    /// when its `sorted_at` epoch is stale (the sort is deterministic, so this
-    /// equals RDKit's re-sorting on every comparison).
-    epoch: u64,
-    sorted_at: Vec<u64>,
+    /// Set when the index of a neighbour changed: an atom's bond list is
+    /// re-sorted only then (the stable sort of a sorted list keeps it, so
+    /// this equals RDKit's re-sorting on every comparison).
+    stale: Vec<bool>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -175,8 +174,7 @@ impl Canon {
             index: vec![0; total],
             neighbor_num: vec![Vec::new(); total],
             revisited: vec![Vec::new(); total],
-            epoch: 0,
-            sorted_at: vec![u64::MAX; total],
+            stale: vec![true; total],
         };
         for (a, atom) in mol.atoms.iter().enumerate() {
             c.z.push(atom.atomic_number);
@@ -212,12 +210,22 @@ impl Canon {
         self.z.len()
     }
 
+    /// Sets the class of atom `i` (marking its neighbours stale).
+    fn set_index(&mut self, i: usize, class: i32) {
+        if self.index[i] != class {
+            self.index[i] = class;
+            for k in self.range(i) {
+                self.stale[self.nbrs[k] as usize] = true;
+            }
+        }
+    }
+
     /// `updateAtomNeighborIndex`.
     fn update_nbr_index(&mut self, i: usize) {
-        if self.sorted_at[i] == self.epoch {
+        if !self.stale[i] {
             return;
         }
-        self.sorted_at[i] = self.epoch;
+        self.stale[i] = false;
         let r = self.range(i);
         let index = &self.index;
         let bonds = &mut self.bonds[r];
@@ -239,7 +247,7 @@ impl Canon {
 
     /// Anonymous-namespace `getChiralRank`.
     fn chiral_rank(&self, i: usize) -> u32 {
-        let mut perm: Vec<u32> = Vec::with_capacity(self.nb(i).len());
+        let mut perm: smallvec::SmallVec<[u32; 8]> = smallvec::SmallVec::new();
         for &nb in self.nb(i) {
             let r = self.index[nb as usize] as u32;
             if perm.contains(&r) {
@@ -630,8 +638,7 @@ impl Refiner {
                 if self.count[index] != 0 {
                     symclass = (offset + i) as i32;
                 }
-                canon.index[index] = symclass;
-                canon.epoch += 1;
+                canon.set_index(index, symclass);
                 for &nb in canon.nb(index) {
                     self.changed[nb as usize] = 1;
                 }
@@ -658,8 +665,7 @@ impl Refiner {
                 let len = self.count[partition];
                 let offset = (canon.index[partition] + len - 1) as usize;
                 let index = self.order[offset];
-                canon.index[index] = offset as i32;
-                canon.epoch += 1;
+                canon.set_index(index, offset as i32);
                 self.count[partition] = len - 1;
                 self.count[index] = 1;
                 if canon.nb(index).is_empty() {
@@ -704,7 +710,7 @@ pub(crate) fn canonical_ranks_with_hs(mol: &Molecule, ctx: &mut CalculationConte
     };
     // CreateSinglePartition
     canon.index.fill(0);
-    canon.epoch += 1;
+    canon.stale.fill(true);
     r.count[0] = n as i32;
     r.activate();
     r.refine(&mut canon, Functor::Atom);
