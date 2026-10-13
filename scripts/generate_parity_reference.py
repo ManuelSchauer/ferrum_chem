@@ -24,6 +24,7 @@ Molecules are processed and written one at a time (constant memory).
     python scripts/generate_parity_reference.py --embed-3d  # re-embed parity_3d.sdf (then rewrite)
 """
 import csv
+from collections import Counter
 import math
 import sys
 from pathlib import Path
@@ -233,6 +234,14 @@ def same(a, b):
     return abs(x - y) <= 1e-9 + 1e-9 * abs(y)
 
 
+# RDKit's own Ipc/AvgIpc are numerically unstable for large molecules: the
+# result depends on the floating-point rounding of the BLAS/LAPACK build
+# (macOS Accelerate vs. Linux OpenBLAS give different values for the same
+# RDKit version). They are reported but not required to reproduce exactly
+# across platforms; tests/rdkit_parity.rs documents the deviation.
+PLATFORM_DEPENDENT = {"Ipc", "AvgIpc"}
+
+
 def check_file(out_file, generator):
     """Compares a fresh RDKit run with a committed reference (float tolerance 1e-9)."""
     with open(out_file, newline="") as f:
@@ -241,17 +250,27 @@ def check_file(out_file, generator):
     fresh = list(generator())
     if len(fresh) != len(expected_rows):
         sys.exit(f"{out_file.name}: {len(expected_rows)} committed rows, RDKit gives {len(fresh)}")
-    bad = 0
+    bad, platform = Counter(), Counter()
+    shown = 0
     for (columns, row), expected in zip(fresh, expected_rows):
         if columns != header:
             sys.exit(f"{out_file.name}: column layout changed; regenerate the reference")
         for col, a, b in zip(columns, row, expected):
-            if not same(a, b):
-                bad += 1
-                if bad <= 10:
-                    print(f"{row[0]}: {col}: committed={b} rdkit={a}")
+            if same(a, b):
+                continue
+            if col in PLATFORM_DEPENDENT:
+                platform[col] += 1
+                continue
+            bad[col] += 1
+            if shown < 10:
+                shown += 1
+                print(f"{row[0]}: {col}: committed={b} rdkit={a}")
+    for col, n in sorted(platform.items()):
+        print(f"note: {col} differs on {n} molecules (platform-dependent in RDKit, not checked)")
     if bad:
-        sys.exit(f"{out_file.name}: {bad} values differ from the committed reference")
+        for col, n in bad.most_common():
+            print(f"  {col}: {n} molecules")
+        sys.exit(f"{out_file.name}: {sum(bad.values())} values differ from the committed reference")
     print(f"committed {out_file.name} ({len(fresh)} molecules) matches RDKit", rdkit.__version__)
 
 
