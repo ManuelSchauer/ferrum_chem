@@ -368,4 +368,11 @@ bindings.
 
 ## License
 
-No license has been chosen yet.
+FerrumChem is licensed under the GNU Lesser General Public License, version
+2.1 or (at your option) any later version (`LGPL-2.1-or-later`, see
+[LICENSE](LICENSE)). It can be used as a library from software under other
+licenses; changes to FerrumChem itself must be released under the LGPL.
+
+FerrumChem reimplements algorithms and data tables of the CDK (LGPL-2.1+),
+RDKit (BSD-3-Clause), Mordred (BSD-3-Clause) and Biosynfoni (MIT) to reproduce
+their results; their copyright notices are reproduced in [NOTICE](NOTICE).
