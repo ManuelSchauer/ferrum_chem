@@ -213,7 +213,7 @@ everything with FerrumChem:
 | `rdkit_parity` | RDKit 2026.03.2 | 1,277 | 325 of 327 (321 scalars, 5 fingerprints, atom perception) |
 | `rdkit_3d_parity` | RDKit 2026.03.2, ETKDG conformers | 296 | 4 of 5 (PMI1–3, Asphericity; perception see below) |
 | `cdk_parity` | CDK 2.13 | 1,277 | 124 of 124 |
-| `mordred_parity` | mordred-community 2.0.7 | 1,277 | 25 of 25 |
+| `mordred_parity` | mordred-community 2.0.7, all 1,613 2D descriptors | 1,277 | 111 of 111 implemented (1,502 Mordred columns not implemented yet) |
 | `biosynfoni_parity` | Biosynfoni (original Python package) | 1,277 | 39 of 39 |
 
 Known deviations, tracked per column in `tests/data/*_baseline.tsv` (a column

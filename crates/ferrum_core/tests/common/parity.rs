@@ -136,17 +136,29 @@ fn write_baseline(file: &str, label: &str, stats: &BTreeMap<String, ColumnStats>
 /// Compares FerrumChem against a reference CSV (one molecule per row, columns
 /// named like FerrumChem features). Empty reference cells are not compared.
 pub fn run_parity(label: &str, reference_file: &str, baseline_file: &str) {
-    run(label, None, reference_file, baseline_file);
+    run(label, None, reference_file, baseline_file, &|c| c.to_string());
+}
+
+/// Like [`run_parity`], but each reference column name is mapped to the
+/// FerrumChem column through `column` (used for Mordred's names).
+pub fn run_parity_mapped(label: &str, reference_file: &str, baseline_file: &str, column: &dyn Fn(&str) -> String) {
+    run(label, None, reference_file, baseline_file, column);
 }
 
 /// Like [`run_parity`], but the molecules are read from an SDF file with
 /// FerrumChem's SDF reader. The reference's first column `name` holds the
 /// record titles, in file order.
 pub fn run_parity_sdf(label: &str, sdf_file: &str, reference_file: &str, baseline_file: &str) {
-    run(label, Some(sdf_file), reference_file, baseline_file);
+    run(label, Some(sdf_file), reference_file, baseline_file, &|c| c.to_string());
 }
 
-fn run(label: &str, sdf_file: Option<&str>, reference_file: &str, baseline_file: &str) {
+fn run(
+    label: &str,
+    sdf_file: Option<&str>,
+    reference_file: &str,
+    baseline_file: &str,
+    column: &dyn Fn(&str) -> String,
+) {
     let descriptors = BatchDescriptor::all();
     let mut by_name: HashMap<String, (usize, usize)> = HashMap::new();
     for (di, d) in descriptors.iter().enumerate() {
@@ -191,7 +203,7 @@ fn run(label: &str, sdf_file: Option<&str>, reference_file: &str, baseline_file:
                 let (di, off) = fp_descriptor(col);
                 Check::Bits(di, off)
             } else {
-                match by_name.get(col) {
+                match by_name.get(&column(col)) {
                     Some(&(di, k)) => Check::Value(di, k),
                     None => Check::Missing,
                 }
@@ -350,10 +362,16 @@ fn run(label: &str, sdf_file: Option<&str>, reference_file: &str, baseline_file:
         stats.len()
     );
     if !missing.is_empty() {
+        const SHOWN: usize = 40;
+        let verbose = std::env::var("FERRUM_PARITY_VERBOSE").is_ok();
+        let shown = if verbose { missing.len() } else { missing.len().min(SHOWN) };
         println!(
-            "  {} {label} columns not implemented in FerrumChem: {}",
+            "  {} of {} {label} columns implemented; {} not implemented in FerrumChem: {}{}",
+            stats.len() - stats.contains_key("perception") as usize,
+            checks.len() - stats.contains_key("perception") as usize,
             missing.len(),
-            missing.join(" ")
+            missing[..shown].join(" "),
+            if shown < missing.len() { " ... (FERRUM_PARITY_VERBOSE=1 lists all)" } else { "" }
         );
     }
     if !improvements.is_empty() {

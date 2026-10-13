@@ -52,6 +52,7 @@ pub mod maccs;
 pub mod mde;
 pub mod molecular_weight;
 mod mordred_data;
+pub mod mordred_names;
 pub mod path_fingerprints;
 pub mod petitjean;
 pub mod pi_system;
