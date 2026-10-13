@@ -4,6 +4,9 @@ use ferrum_cli::calc::run_calc;
 use ferrum_cli::tui::run_tui;
 use std::path::PathBuf;
 
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 #[derive(Parser)]
 #[command(name = "ferrum_cli")]
 #[command(author = "Manuel Schauer <info@ferrumchem.com>")]
@@ -33,7 +36,7 @@ enum Commands {
         fingerprints: FpFormat,
 
         /// Records processed per chunk (memory scales with this)
-        #[arg(long, default_value_t = 4096)]
+        #[arg(long, default_value_t = 1024)]
         chunk_size: usize,
     },
     /// Launch the interactive Terminal User Interface (TUI)

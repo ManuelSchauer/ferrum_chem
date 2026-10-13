@@ -51,8 +51,20 @@ pub mod logp;
 pub mod maccs;
 pub mod mde;
 pub mod molecular_weight;
+mod mordred_atomic;
 mod mordred_data;
 pub mod mordred_names;
+pub mod mordred_estate;
+pub mod mordred_mde;
+pub mod mordred_constitutional;
+pub mod mordred_misc;
+pub mod mordred_rings;
+pub mod mordred_chi;
+pub mod mordred_information;
+mod mordred_kekulize;
+pub mod mordred_molecular_id;
+pub mod mordred_paths;
+pub mod mordred_topological;
 pub mod path_fingerprints;
 pub mod petitjean;
 pub mod pi_system;
@@ -391,14 +403,14 @@ mod descriptor_tests {
     fn test_autocorrelation() {
         use super::autocorrelation::Autocorrelation;
         let v = calc_float_vec(&Autocorrelation, "c1ccccc1");
-        assert_eq!(v.len(), 33, "ATS has 33 values (CDK ATSm/p/c 1-5 + Mordred ATS0-8pe/v)");
+        assert_eq!(v.len(), 621, "ATS has 621 values (CDK ATSm/p/c 1-5 + 606 Mordred autocorrelations)");
     }
 
     #[test]
     fn test_bcut() {
         use super::bcut::BCUT;
         let v = calc_float_vec(&BCUT, "c1ccccc1");
-        assert_eq!(v.len(), 10, "BCUT has 10 values (CDK w/c/p + Mordred BCUTpe/v)");
+        assert_eq!(v.len(), 30, "BCUT has 30 values (CDK w/c/p + 24 Mordred BCUT)");
     }
 
     #[test]

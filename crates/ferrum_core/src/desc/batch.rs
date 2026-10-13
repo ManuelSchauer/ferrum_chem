@@ -150,11 +150,22 @@ pub enum BatchDescriptor {
     StereoCenters,
     Sps,
     CdkKappa,
+    MordredEState,
+    MordredMde,
+    MordredMisc,
+    MordredConstitutional,
+    MordredRingCount,
+    MordredChi,
+    MordredPathCount,
+    MordredWalkCount,
+    MordredTopologicalCharge,
+    MordredMolecularId,
+    MordredInformationContent,
 }
 
 impl BatchDescriptor {
     pub fn all() -> &'static [Self] {
-        const ALL: [BatchDescriptor; 88] = [
+        const ALL: [BatchDescriptor; 99] = [
             BatchDescriptor::MolecularWeight,
             BatchDescriptor::LogP,
             BatchDescriptor::MolarRefractivity,
@@ -243,6 +254,17 @@ impl BatchDescriptor {
             BatchDescriptor::StereoCenters,
             BatchDescriptor::Sps,
             BatchDescriptor::CdkKappa,
+            BatchDescriptor::MordredEState,
+            BatchDescriptor::MordredMde,
+            BatchDescriptor::MordredMisc,
+            BatchDescriptor::MordredConstitutional,
+            BatchDescriptor::MordredRingCount,
+            BatchDescriptor::MordredChi,
+            BatchDescriptor::MordredPathCount,
+            BatchDescriptor::MordredWalkCount,
+            BatchDescriptor::MordredTopologicalCharge,
+            BatchDescriptor::MordredMolecularId,
+            BatchDescriptor::MordredInformationContent,
         ];
         &ALL
     }
@@ -390,6 +412,17 @@ impl BatchDescriptor {
             Self::StereoCenters => "StereoCenters",
             Self::Sps => "SPS",
             Self::CdkKappa => "CdkKappaShapeIndices",
+            Self::MordredEState => "MordredEState",
+            Self::MordredMde => "MordredMDE",
+            Self::MordredMisc => "MordredMisc",
+            Self::MordredConstitutional => "MordredConstitutional",
+            Self::MordredRingCount => "MordredRingCount",
+            Self::MordredChi => "MordredChi",
+            Self::MordredPathCount => "MordredPathCount",
+            Self::MordredWalkCount => "MordredWalkCount",
+            Self::MordredTopologicalCharge => "MordredTopologicalCharge",
+            Self::MordredMolecularId => "MordredMolecularId",
+            Self::MordredInformationContent => "MordredInformationContent",
         }
     }
 
@@ -489,6 +522,19 @@ impl BatchDescriptor {
             Self::StereoCenters => super::rdkit_extra::StereoCenters.calculate(mol, ctx),
             Self::Sps => super::rdkit_extra::Sps.calculate(mol, ctx),
             Self::CdkKappa => super::kappa::CdkKappaShapeIndices.calculate(mol, ctx),
+            Self::MordredEState => super::mordred_estate::MordredEState.calculate(mol, ctx),
+            Self::MordredMde => super::mordred_mde::MordredMDE.calculate(mol, ctx),
+            Self::MordredMisc => super::mordred_misc::MordredMisc.calculate(mol, ctx),
+            Self::MordredConstitutional => super::mordred_constitutional::MordredConstitutional.calculate(mol, ctx),
+            Self::MordredRingCount => super::mordred_rings::MordredRingCount.calculate(mol, ctx),
+            Self::MordredChi => super::mordred_chi::MordredChi.calculate(mol, ctx),
+            Self::MordredPathCount => super::mordred_paths::MordredPathCount.calculate(mol, ctx),
+            Self::MordredWalkCount => super::mordred_topological::MordredWalkCount.calculate(mol, ctx),
+            Self::MordredTopologicalCharge => super::mordred_topological::MordredTopologicalCharge.calculate(mol, ctx),
+            Self::MordredMolecularId => super::mordred_molecular_id::MordredMolecularId.calculate(mol, ctx),
+            Self::MordredInformationContent => {
+                super::mordred_information::MordredInformationContent.calculate(mol, ctx)
+            }
         }
     }
 
@@ -504,8 +550,8 @@ impl BatchDescriptor {
             Self::CdkChiIndices => 40,
             Self::KappaIndices => 3,
             Self::EStateIndices => 3 + super::estate::NUM_ESTATE_TYPES,
-            Self::Autocorrelation => 33,
-            Self::Bcut => 10,
+            Self::Autocorrelation => super::autocorrelation::N_OUT,
+            Self::Bcut => super::bcut::N_OUT,
             Self::WeightedPath => 5,
             Self::Mde => 19,
             Self::WienerIndex => 2,
@@ -538,6 +584,17 @@ impl BatchDescriptor {
             Self::StereoCenters => 2,
             Self::Sps => 1,
             Self::CdkKappa => 3,
+            Self::MordredEState => super::mordred_estate::MORDRED_ESTATE_LEN,
+            Self::MordredMde => super::mordred_mde::MORDRED_MDE_NAMES.len(),
+            Self::MordredMisc => super::mordred_misc::MORDRED_MISC_LEN,
+            Self::MordredConstitutional => super::mordred_constitutional::MORDRED_CONSTITUTIONAL_LEN,
+            Self::MordredRingCount => super::mordred_rings::MORDRED_RING_COUNT_LEN,
+            Self::MordredChi => super::mordred_chi::MORDRED_CHI_LEN,
+            Self::MordredPathCount => super::mordred_paths::MORDRED_PATH_COUNT_LEN,
+            Self::MordredWalkCount => super::mordred_topological::MORDRED_WALK_COUNT_LEN,
+            Self::MordredTopologicalCharge => super::mordred_topological::MORDRED_TOPOLOGICAL_CHARGE_LEN,
+            Self::MordredMolecularId => super::mordred_molecular_id::MORDRED_MOLECULAR_ID_LEN,
+            Self::MordredInformationContent => super::mordred_information::MORDRED_INFORMATION_CONTENT_LEN,
             _ => 1,
         }
     }
@@ -621,19 +678,17 @@ impl BatchDescriptor {
                 v.extend(super::estate::ESTATE_TYPE_NAMES.iter().map(|t| format!("SEstate_{t}")));
                 v
             }
-            // CDK ATSm/ATSp/ATSc (lags 0..4) + Mordred ATS{0..8}pe / ATS{0..8}v
+            // CDK ATSm/ATSp/ATSc (lags 0..4) + Mordred Autocorrelation module
             Self::Autocorrelation => {
-                let mut v = Vec::with_capacity(33);
+                let mut v = Vec::with_capacity(super::autocorrelation::N_OUT);
                 for w in ["m", "p", "c"] {
                     v.extend(seq(&format!("ATS{w}"), 1..=5));
                 }
-                for w in ["pe", "v"] {
-                    v.extend((0..=8).map(|k| format!("ATS{k}{w}")));
-                }
+                v.extend(super::autocorrelation::mordred_feature_names());
                 v
             }
-            // CDK BCUT (w = mass, c = charge, p = polarizability) + Mordred BCUTpe / BCUTv
-            Self::Bcut => list(&["BCUTw-1l", "BCUTw-1h", "BCUTc-1l", "BCUTc-1h", "BCUTp-1l", "BCUTp-1h", "BCUTpe-1l", "BCUTpe-1h", "BCUTv-1l", "BCUTv-1h"]),
+            // CDK BCUT (w = mass, c = charge, p = polarizability) + Mordred BCUT module
+            Self::Bcut => super::bcut::feature_names(),
             Self::WeightedPath => (1..=5).map(|i| format!("WTPT-{i}")).collect(),
             Self::Mde => list(&[
                 "MDEC-11", "MDEC-12", "MDEC-13", "MDEC-14", "MDEC-22", "MDEC-23", "MDEC-24", "MDEC-33", "MDEC-34",
@@ -691,6 +746,22 @@ impl BatchDescriptor {
             Self::StereoCenters => list(&["NumAtomStereoCenters", "NumUnspecifiedAtomStereoCenters"]),
             Self::Sps => one("SPS"),
             Self::CdkKappa => seq("Kier", 1..=3),
+            // Mordred AtomTypeEState: N / S / MAX / MIN per E-State type
+            Self::MordredEState => super::mordred_estate::mordred_estate_names(),
+            // Mordred MolecularDistanceEdge (plain MDE* names are CDK's)
+            Self::MordredMde => super::mordred_mde::MORDRED_MDE_NAMES
+                .iter()
+                .map(|n| format!("{}{n}", super::mordred_names::MORDRED_PREFIX))
+                .collect(),
+            Self::MordredMisc => list(&super::mordred_misc::MORDRED_MISC_NAMES),
+            Self::MordredConstitutional => super::mordred_constitutional::mordred_constitutional_names(),
+            Self::MordredRingCount => super::mordred_rings::mordred_ring_count_names(),
+            Self::MordredChi => super::mordred_chi::mordred_chi_names(),
+            Self::MordredPathCount => super::mordred_paths::mordred_path_count_names(),
+            Self::MordredWalkCount => super::mordred_topological::mordred_walk_count_names(),
+            Self::MordredTopologicalCharge => super::mordred_topological::mordred_topological_charge_names(),
+            Self::MordredMolecularId => super::mordred_molecular_id::mordred_molecular_id_names(),
+            Self::MordredInformationContent => super::mordred_information::mordred_information_content_names(),
         }
     }
 

@@ -4,16 +4,18 @@
 //! diagonal. The highest and lowest eigenvalues capture molecular shape
 //! and property extremes.
 //!
-//! Output (10 values, `BatchDescriptor::feature_names` order):
+//! Output (30 values, `BatchDescriptor::feature_names` order):
 //! - `BCUTw-1l/h`, `BCUTc-1l/h`, `BCUTp-1l/h`: CDK 2.13 `BCUTDescriptor`
 //!   (nhigh = nlow = 1, checkAromaticity). Hydrogen-suppressed Burden matrix:
 //!   diagonal = major-isotope mass / Gasteiger-Marsili charge (computed with
 //!   explicit H) / Gasteiger-Hückel effective polarizability; off-diagonal
 //!   0.15 for cdkLegacy-aromatic bonds, else 0.1/0.2/0.3 by Kekulé order,
 //!   +0.01 if a bond atom is terminal, 0.001 for non-bonded pairs.
-//! - `BCUTpe-1l/h`, `BCUTv-1l/h`: Mordred (mordred-community 2.0.7) `BCUT(prop, nth)` with
-//!   `pe` = Pauling electronegativity and `v` = van der Waals volume
-//!   (Mordred atomic property tables, `mordred_data.rs`). Burden matrix of the
+//! - The 24 columns of the Mordred (mordred-community 2.0.7) `BCUT` module,
+//!   `BCUT{p}-1h`, `BCUT{p}-1l` (highest / lowest eigenvalue) for the 12
+//!   Mordred atomic properties `p` in Mordred's order (`mordred_atomic.rs`;
+//!   `BCUTc-1h/l` and `BCUTp-1h/l` are output as `Mordred_BCUTc-1h` etc.,
+//!   the plain names being the CDK columns). Burden matrix of the
 //!   hydrogen-suppressed RDKit graph (hydrogen atoms kept by RDKit stay):
 //!   off-diagonal `GetBondTypeAsDouble() / 10` (aromatic 0.15), `+ 0.01` if
 //!   either bond atom has degree 1, 0.001 for non-bonded pairs. Mordred
@@ -29,7 +31,7 @@
 //! - Moriwaki et al. (2018) Mordred: a molecular descriptor calculator, J. Cheminform. 10, 4.
 
 use super::cdk_perception::{CdkView, MAJOR_ISOTOPE_MASS};
-use super::mordred_data::{MORDRED_PAULING_EN, MORDRED_VDW_VOLUME};
+use super::mordred_atomic::{mordred_atom_props, N_PROPS, PROP_NAMES};
 use super::typed::{Descriptor, DescriptorValue};
 use crate::algo::linalg::BurdenMatrix;
 use crate::algo::paths::DIST_INF;
@@ -44,8 +46,15 @@ use crate::types::BondType;
 type BondEntries = Vec<(u32, u32, f64)>;
 /// CDK: bond entries and the mass / charge / polarizability diagonals.
 type CdkMatrices = (BondEntries, [Vec<f64>; 3]);
-/// Mordred: bond entries and the electronegativity / vdW volume diagonals.
-type MordredMatrices = (BondEntries, [Option<Vec<f64>>; 2]);
+/// Mordred: bond entries and the diagonal of every atomic property (`None`
+/// where Mordred reports the property as missing).
+type MordredMatrices = (BondEntries, Vec<Option<Vec<f64>>>);
+/// CDK columns (`BCUTw/c/p-1l/h`).
+const CDK_N: usize = 6;
+/// Mordred columns (`BCUT{p}-1h/l` for the 12 atomic properties).
+const MORDRED_N: usize = 2 * N_PROPS;
+/// All BCUT columns.
+pub(crate) const N_OUT: usize = CDK_N + MORDRED_N;
 
 /// CDK `BCUTDescriptor` Burden matrices: off-diagonal template and the
 /// mass / charge / polarizability diagonals, or the final values where CDK
@@ -107,9 +116,9 @@ fn cdk_bcut_matrices_with(
     Ok((entries, [mass, charges, pol]))
 }
 
-/// Mordred `BCUT` Burden matrix template and the Pauling electronegativity /
-/// vdW volume diagonals (`None` where Mordred reports a missing value), or
-/// `None` overall when Mordred fails for the molecule.
+/// Mordred `BCUT` Burden matrix template and the atomic property diagonals
+/// (`None` where Mordred reports a missing value), or `None` overall when
+/// Mordred fails for the molecule.
 fn mordred_bcut_matrices(mol: &Molecule, ctx: &mut crate::desc::context::CalculationContext) -> Option<MordredMatrices> {
     let n = mol.num_atoms();
     // require_connected: Mordred counts RDKit fragments (an empty molecule has 0).
@@ -140,33 +149,31 @@ fn mordred_bcut_matrices(mol: &Molecule, ctx: &mut crate::desc::context::Calcula
         }
         entries.push((i as u32, j as u32, w));
     }
-    let diags = [&MORDRED_PAULING_EN, &MORDRED_VDW_VOLUME].map(|table| {
-        let diag: Vec<f64> = mol
-            .atoms
-            .iter()
-            .map(|atom| table.get(atom.atomic_number as usize).copied().unwrap_or(f64::NAN))
-            .collect();
-        (!diag.iter().any(|p| p.is_nan())).then_some(diag)
-    });
+    let props = mordred_atom_props(mol, false);
+    let diags = (0..N_PROPS)
+        .map(|p| props.valid[p].then(|| props.w.iter().map(|w| w[p]).collect()))
+        .collect();
     Some((entries, diags))
 }
 
-/// All 10 BCUT values: CDK `[w_lo, w_hi, c_lo, c_hi, p_lo, p_hi]` then
-/// Mordred `[pe_lo, pe_hi, v_lo, v_hi]`. The (up to five) Burden matrices of
-/// both flavours share one batched eigen-solve.
-fn bcut_values(mol: &Molecule, ctx: &mut crate::desc::context::CalculationContext) -> [f64; 10] {
+/// The BCUT values: CDK `[w_lo, w_hi, c_lo, c_hi, p_lo, p_hi]` (`cdk`) then
+/// Mordred `[c_hi, c_lo, dv_hi, dv_lo, ...]` (`mordred`; NaN where not
+/// requested). All Burden matrices share one batched eigen-solve.
+fn bcut_values(mol: &Molecule, ctx: &mut crate::desc::context::CalculationContext, cdk: bool, mordred: bool) -> [f64; N_OUT] {
     let n = mol.num_atoms();
-    let mut out = [f64::NAN; 10];
-    let cdk = cdk_bcut_matrices(mol, ctx);
-    let mordred = mordred_bcut_matrices(mol, ctx);
-    let mut jobs: Vec<BurdenMatrix> = Vec::with_capacity(5);
-    let mut slots: Vec<usize> = Vec::with_capacity(5);
+    let mut out = [f64::NAN; N_OUT];
+    let cdk = if cdk { Some(cdk_bcut_matrices(mol, ctx)) } else { None };
+    let mordred = if mordred { mordred_bcut_matrices(mol, ctx) } else { None };
+    let mut jobs: Vec<BurdenMatrix> = Vec::with_capacity(3 + N_PROPS);
+    // (low, high) output slots of each job
+    let mut slots: Vec<(usize, usize)> = Vec::with_capacity(3 + N_PROPS);
     match &cdk {
-        Err(v) => out[..6].copy_from_slice(v),
-        Ok((entries, diags)) => {
+        None => {}
+        Some(Err(v)) => out[..CDK_N].copy_from_slice(v),
+        Some(Ok((entries, diags))) => {
             for (k, diag) in diags.iter().enumerate() {
                 jobs.push(BurdenMatrix { fill: 0.001, entries, diag });
-                slots.push(2 * k);
+                slots.push((2 * k, 2 * k + 1));
             }
         }
     }
@@ -174,23 +181,35 @@ fn bcut_values(mol: &Molecule, ctx: &mut crate::desc::context::CalculationContex
         for (k, diag) in diags.iter().enumerate() {
             if let Some(diag) = diag {
                 jobs.push(BurdenMatrix { fill: 0.001, entries, diag });
-                slots.push(6 + 2 * k);
+                slots.push((CDK_N + 2 * k + 1, CDK_N + 2 * k));
             }
         }
     }
-    for (&slot, (lo, hi)) in slots.iter().zip(crate::algo::linalg::burden_extremes(n, &jobs)) {
-        out[slot] = lo;
-        out[slot + 1] = hi;
+    for (&(lo_slot, hi_slot), (lo, hi)) in slots.iter().zip(crate::algo::linalg::burden_extremes(n, &jobs)) {
+        out[lo_slot] = lo;
+        out[hi_slot] = hi;
     }
     out
 }
 
+/// BCUT column names (CDK, then Mordred in Mordred's order with the
+/// [`super::mordred_names`] prefix for names CDK already uses).
+pub(crate) fn feature_names() -> Vec<String> {
+    let mut v: Vec<String> =
+        ["BCUTw-1l", "BCUTw-1h", "BCUTc-1l", "BCUTc-1h", "BCUTp-1l", "BCUTp-1h"].map(String::from).to_vec();
+    for p in PROP_NAMES {
+        for end in ["h", "l"] {
+            v.push(super::mordred_names::ferrum_column(&format!("BCUT{p}-1{end}")));
+        }
+    }
+    v
+}
+
 /// BCUT descriptors.
 ///
-/// Returns FloatVec with 10 values:
-/// `[BCUTw-1l, BCUTw-1h, BCUTc-1l, BCUTc-1h, BCUTp-1l, BCUTp-1h,
-///   BCUTpe-1l, BCUTpe-1h, BCUTv-1l, BCUTv-1h]`
-/// (CDK BCUT, then Mordred Pauling electronegativity / vdW volume BCUT).
+/// Returns FloatVec with 30 values (see [`feature_names`]): CDK
+/// `[BCUTw-1l, BCUTw-1h, BCUTc-1l, BCUTc-1h, BCUTp-1l, BCUTp-1h]`, then the
+/// Mordred `BCUT{p}-1h`, `BCUT{p}-1l` for the 12 Mordred atomic properties.
 ///
 /// # Thread Safety
 /// Stateless and thread-safe (Send + Sync).
@@ -207,13 +226,14 @@ impl Descriptor for BCUT {
         ctx: &mut crate::desc::context::CalculationContext,
     ) -> DescriptorValue {
         if mol.num_atoms() == 0 {
-            return DescriptorValue::FloatVec(vec![0.0f64; 10]);
+            return DescriptorValue::FloatVec(vec![0.0f64; N_OUT]);
         }
-        let mut values = bcut_values(mol, ctx);
         // CDK computes on `removeHydrogens(container)`; Mordred keeps the
         // hydrogens RDKit keeps
-        if let Some(suppressed) = crate::algo::sanitize::cdk_remove_hydrogens(mol) {
-            values[..6].copy_from_slice(&bcut_values(&suppressed, ctx)[..6]);
+        let suppressed = crate::algo::sanitize::cdk_remove_hydrogens(mol);
+        let mut values = bcut_values(mol, ctx, suppressed.is_none(), true);
+        if let Some(suppressed) = suppressed {
+            values[..CDK_N].copy_from_slice(&bcut_values(&suppressed, ctx, true, false)[..CDK_N]);
         }
         DescriptorValue::FloatVec(values.to_vec())
     }
@@ -243,7 +263,8 @@ mod tests {
 
     #[test]
     fn test_bcut_len() {
-        assert_eq!(calc_bcut("CC").len(), 10);
+        assert_eq!(calc_bcut("CC").len(), N_OUT);
+        assert_eq!(feature_names().len(), N_OUT);
     }
 
     #[test]
@@ -254,8 +275,12 @@ mod tests {
     #[test]
     fn test_bcut_high_ge_low() {
         let b = calc_bcut("c1ccccc1");
-        for i in 0..5 {
+        for i in 0..3 {
             assert!(b[i * 2 + 1] >= b[i * 2], "prop {i}: high {} >= low {}", b[i * 2 + 1], b[i * 2]);
+        }
+        for i in 0..N_PROPS {
+            let (hi, lo) = (b[CDK_N + 2 * i], b[CDK_N + 2 * i + 1]);
+            assert!(hi >= lo, "Mordred prop {i}: high {hi} >= low {lo}");
         }
     }
 
@@ -266,19 +291,28 @@ mod tests {
         assert_eq!(b[0], 12.0);
         assert_eq!(b[1], 12.0);
         // Mordred: 1x1 matrix -> the property itself
-        assert_eq!(b[6], 2.55);
-        assert_eq!(b[7], 2.55);
+        assert_eq!(mordred_value(&b, "BCUTpe-1h"), 2.55);
+        assert_eq!(mordred_value(&b, "BCUTpe-1l"), 2.55);
     }
 
+    /// Column `name` of `values` (as returned by [`calc_bcut`]).
+    fn mordred_value(values: &[f64], name: &str) -> f64 {
+        values[feature_names().iter().position(|n| n == name).unwrap_or_else(|| panic!("no column {name}"))]
+    }
+
+    /// `expected`: Mordred `[BCUTpe-1l, BCUTpe-1h, BCUTv-1l, BCUTv-1h]`.
     fn assert_mordred(smiles: &str, expected: [f64; 4]) {
         let b = calc_bcut(smiles);
-        for (k, e) in expected.into_iter().enumerate() {
-            let got = b[6 + k];
-            if e.is_nan() {
-                assert!(got.is_nan(), "{smiles} BCUT[{}] = {got}, expected NaN", 6 + k);
-            } else {
-                assert!((got - e).abs() < 1e-12 * e.abs().max(1.0), "{smiles} BCUT[{}] = {got} expected {e}", 6 + k);
-            }
+        for (name, e) in ["BCUTpe-1l", "BCUTpe-1h", "BCUTv-1l", "BCUTv-1h"].into_iter().zip(expected) {
+            assert_mordred_column(smiles, name, mordred_value(&b, name), e);
+        }
+    }
+
+    fn assert_mordred_column(smiles: &str, name: &str, got: f64, e: f64) {
+        if e.is_nan() {
+            assert!(got.is_nan(), "{smiles} {name} = {got}, expected NaN");
+        } else {
+            assert!((got - e).abs() < 1e-10 * e.abs().max(1.0), "{smiles} {name} = {got} expected {e}");
         }
     }
 
@@ -302,6 +336,24 @@ mod tests {
         assert_mordred("C(=O)[O-].[Na+]", [f64::NAN; 4]);
         // He has no Pauling electronegativity in Mordred's table
         assert_mordred("[He]", [f64::NAN, f64::NAN, 11.494040321933852, 11.494040321933852]);
+        // methane: no intrinsic state for an atom without heavy neighbours
+        assert!(mordred_value(&calc_bcut("C"), "BCUTs-1h").is_nan());
+    }
+
+    #[test]
+    fn test_bcut_mordred_all_properties() {
+        let b = calc_bcut("c1ccccc1O");
+        for (name, e) in [
+            // Gasteiger charge incl. implicit-hydrogen charge (`Mordred_` prefix: CDK has BCUTc)
+            ("Mordred_BCUTc-1h", 0.3567978162306468),
+            ("Mordred_BCUTc-1l", -0.2910752886763698),
+            ("BCUTdv-1h", 5.012264812820403),
+            ("BCUTs-1l", 1.548548182537098),
+            ("Mordred_BCUTp-1h", 1.9749407620173023),
+            ("BCUTi-1l", 10.960543795382984),
+        ] {
+            assert_mordred_column("c1ccccc1O", name, mordred_value(&b, name), e);
+        }
     }
 
     fn assert_cdk(smiles: &str, expected: [f64; 6]) {

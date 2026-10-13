@@ -38,13 +38,7 @@ pub(crate) fn compute_estates(
     mol: &Molecule,
     ctx: &mut crate::desc::context::CalculationContext,
 ) -> Vec<f64> {
-    let key = crate::desc::context::molecule_cache_key(mol);
-    if ctx.estates_key != Some(key) {
-        let estates = compute_estates_uncached(mol, ctx);
-        ctx.estates = estates;
-        ctx.estates_key = Some(key);
-    }
-    ctx.estates.clone()
+    cached_estates(mol, ctx).to_vec()
 }
 
 fn compute_estates_uncached(
@@ -536,6 +530,22 @@ fn neighbours(mol: &Molecule, i: usize) -> Neighbours {
         .collect()
 }
 
+/// Whether atom `i` (explicit degree `degree`) matches the centre atom of `ty`.
+fn centre_matches(mol: &Molecule, i: usize, degree: usize, ty: &EStateType) -> bool {
+    let aromatic = mol.atoms[i].is_aromatic();
+    let mut total_h = None;
+    ty.alts.iter().any(|a| {
+        (match a.arom {
+            Arom::Any => true,
+            Arom::Aliphatic => !aromatic,
+            Arom::Aromatic => aromatic,
+        }) && a.degree.is_none_or(|d| d as usize == degree)
+            && a.total_h.is_none_or(|h| {
+                h as u32 == *total_h.get_or_insert_with(|| mol.total_hs_with_neighbors(i))
+            })
+    })
+}
+
 /// Atom sets (centre plus covered neighbours, sorted) of the distinct matches
 /// of `ty` centred on atom `i` (with neighbours `nbrs`); empty when the
 /// centre does not match.
@@ -551,19 +561,7 @@ fn match_sets(
     if ty.slots.len() > degree || degree > 64 {
         return; // patterns have at most 5 branches
     }
-    let aromatic = mol.atoms[i].is_aromatic();
-    let mut total_h = None;
-    let centre_ok = ty.alts.iter().any(|a| {
-        (match a.arom {
-            Arom::Any => true,
-            Arom::Aliphatic => !aromatic,
-            Arom::Aromatic => aromatic,
-        }) && a.degree.is_none_or(|d| d as usize == degree)
-            && a.total_h.is_none_or(|h| {
-                h as u32 == *total_h.get_or_insert_with(|| mol.total_hs_with_neighbors(i))
-            })
-    });
-    if !centre_ok {
+    if !centre_matches(mol, i, degree, ty) {
         return;
     }
     let mut masks: SmallVec<[u64; 4]> = SmallVec::new();
@@ -636,6 +634,87 @@ fn estate_type_sums(mol: &Molecule, estates: &[f64]) -> [f64; NUM_ESTATE_TYPES] 
         }
     }
     sums
+}
+
+/// Number of injective slot -> neighbour assignments (RDKit's non-unique
+/// matches of a star pattern for a fixed centre), counted up to `limit`.
+fn count_assignments(
+    slots: &[Slot],
+    mol: &Molecule,
+    nbrs: &[(usize, BondType)],
+    used: u64,
+    limit: usize,
+) -> usize {
+    let Some((slot, rest)) = slots.split_first() else {
+        return 1;
+    };
+    let mut n = 0;
+    for (k, &(nbr, bond)) in nbrs.iter().enumerate() {
+        if n >= limit {
+            break;
+        }
+        if used & (1 << k) == 0 && slot_accepts(slot, mol, bond, nbr) {
+            n += count_assignments(rest, mol, nbrs, used | (1 << k), limit - n);
+        }
+    }
+    n
+}
+
+/// RDKit `rdkit.Chem.EState.AtomTypes.TypeAtoms`, used by Mordred
+/// (mordred-community 2.0.7) `AtomTypeEState`: bit `t` of `types[i]` is set
+/// when atom `i` is the first atom of a match of E-State type `t`.
+///
+/// Unlike `FingerprintMol`, `TypeAtoms` enumerates
+/// `GetSubstructMatches(patt, uniquify=False)`: every centre of a match is
+/// typed (both carbons of ethane are `sCH3`), but the default
+/// `maxMatches = 1000` applies to the *non-unique* matches, which RDKit lists
+/// by ascending centre with one match per permutation of the branches (24 per
+/// `ssssC` centre). An atom is typed only if fewer than 1000 matches of the
+/// type precede it.
+pub(crate) fn estate_type_atoms(mol: &Molecule, types: &mut Vec<u128>) {
+    let n_atoms = mol.num_atoms();
+    types.clear();
+    types.resize(n_atoms, 0);
+    let mut counts = [0usize; NUM_ESTATE_TYPES];
+    let table = types_by_element_and_degree();
+    for (i, ty_bits) in types.iter_mut().enumerate() {
+        let degree = mol.get_degree(i as AtomIdx);
+        let candidates = &table[(mol.atoms[i].atomic_number as usize).min(118)][degree.min(6)];
+        if candidates.is_empty() {
+            continue;
+        }
+        let nbrs = neighbours(mol, i);
+        for &ti in candidates {
+            let ti = ti as usize;
+            let ty = &ESTATE_TYPES[ti];
+            if counts[ti] >= MAX_MATCHES_PER_TYPE
+                || ty.slots.len() > degree
+                || degree > 64
+                || !centre_matches(mol, i, degree, ty)
+            {
+                continue;
+            }
+            let found =
+                count_assignments(ty.slots, mol, &nbrs, 0, MAX_MATCHES_PER_TYPE - counts[ti]);
+            if found > 0 {
+                counts[ti] += found;
+                *ty_bits |= 1u128 << ti;
+            }
+        }
+    }
+}
+
+/// [`compute_estates`] without the copy: the cached E-State indices.
+pub(crate) fn cached_estates<'a>(
+    mol: &Molecule,
+    ctx: &'a mut crate::desc::context::CalculationContext,
+) -> &'a [f64] {
+    let key = crate::desc::context::molecule_cache_key(mol);
+    if ctx.estates_key != Some(key) {
+        ctx.estates = compute_estates_uncached(mol, ctx);
+        ctx.estates_key = Some(key);
+    }
+    &ctx.estates
 }
 
 // ===========================================================================

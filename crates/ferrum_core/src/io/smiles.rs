@@ -127,9 +127,10 @@ struct SmilesParser<'a> {
     // Ring closures: ring_number -> (atom_idx, explicit bond if provided at
     // opening side, closure id, `/` (true) or `\\` (false) at the opening side)
     rings: Vec<Option<(AtomIdx, Option<BondType>, usize, Option<bool>)>>,
-    // Ring-closure bonds, added after all chain bonds in closing order (RDKit
-    // bond ordering): (begin = closing atom, end = opening atom, type).
+    // Ring-closure bonds in closing order: (begin = closing atom, end =
+    // opening atom, type), and the ring-closure number of each.
     closure_bonds: Vec<(AtomIdx, AtomIdx, BondType)>,
+    closure_numbers: Vec<usize>,
     // `<-` dative bond: next bond is directed from the following atom to the previous one.
     pending_dative_reverse: bool,
     // `/` (true) or `\\` (false) seen for the pending bond.
@@ -158,6 +159,7 @@ impl<'a> SmilesParser<'a> {
             branch_stack: SmallVec::new(),
             rings: Vec::new(),
             closure_bonds: Vec::new(),
+            closure_numbers: Vec::new(),
             pending_dative_reverse: false,
             pending_direction: None,
             closure_directions: Vec::new(),
@@ -195,9 +197,15 @@ impl<'a> SmilesParser<'a> {
             return Err(FerrumError::ParseError("Dangling bond at end of SMILES".to_string()));
         }
 
-        // Ring-closure bonds come after all chain bonds (RDKit bond order).
+        // Ring-closure bonds come after all chain bonds, ordered by ring-closure
+        // number and, for a reused number, in SMILES order (RDKit
+        // `CloseMolRings` walks its ring bookmarks in number order).
         let directions = std::mem::take(&mut self.closure_directions);
-        for (k, (begin, end, bond_type)) in std::mem::take(&mut self.closure_bonds).into_iter().enumerate() {
+        let closures = std::mem::take(&mut self.closure_bonds);
+        let mut order: Vec<usize> = (0..closures.len()).collect();
+        order.sort_by_key(|&k| self.closure_numbers[k]);
+        for k in order {
+            let (begin, end, bond_type) = closures[k];
             self.push_bond(begin, end, bond_type)?;
             if let Some(up) = directions.get(k).copied().flatten() {
                 crate::algo::stereo::set_bond_direction(self.mol.bonds.last_mut().unwrap(), up);
@@ -700,6 +708,7 @@ impl<'a> SmilesParser<'a> {
                 }
             });
             self.closure_bonds.push((current_atom, ring_atom, bond_type));
+            self.closure_numbers.push(ring_num);
             // RDKit keeps the closing-side direction, else the opening-side
             // one flipped (the bond begins at the closing atom here).
             let closing_dir = self.pending_direction.take();

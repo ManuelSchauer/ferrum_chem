@@ -9,10 +9,12 @@ use std::sync::mpsc;
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::Instant;
 
-/// Records calculated concurrently (summed over all chunks in flight). A
-/// chunk waits for its slowest molecule; keeping several chunks in flight lets
-/// the other cores continue with later chunks meanwhile. Memory scales with it.
-const IN_FLIGHT_RECORDS: usize = 16_384;
+/// Output values (scalars + fingerprint words) calculated concurrently, summed
+/// over all chunks in flight. A chunk waits for its slowest molecule; keeping
+/// several chunks in flight lets the other cores continue with later chunks
+/// meanwhile. Memory scales with it, so the number of records in flight
+/// follows the row width.
+const IN_FLIGHT_VALUES: usize = 4_000_000;
 
 /// Runs batch descriptor calculation from CLI arguments.
 ///
@@ -56,7 +58,10 @@ pub fn run_calc(
         .map_err(|e| format!("Failed to write '{}': {}", output.display(), e))?;
 
     let start = Instant::now();
-    let in_flight = (IN_FLIGHT_RECORDS / chunk_size.max(1)).max(2);
+    let row_values = layout.n_scalars()
+        + layout.fingerprint_shapes().iter().map(|&(_, bits)| bits.div_ceil(64)).sum::<usize>();
+    let budget = std::env::var("FERRUM_IN_FLIGHT_VALUES").ok().and_then(|v| v.parse().ok()).unwrap_or(IN_FLIGHT_VALUES);
+    let in_flight = (budget / row_values.max(1) / chunk_size.max(1)).max(2);
     let slots = Arc::new((Mutex::new(in_flight), Condvar::new()));
     // (chunk index, formatted CSV rows, rows, unparseable rows)
     let (tx, rx) = mpsc::channel::<(usize, Vec<u8>, usize, usize)>();

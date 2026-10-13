@@ -42,6 +42,9 @@ pub const MORDRED_ALIASES: &[(&str, &str)] = &[
     ("nHBAcc", "NumHAcceptors"),
     ("nHBDon", "NumHDonors"),
     ("nRot", "NumRotatableBonds"),
+    // RDKit CalcNumRings is RingInfo::numRings of the sanitized molecule, i.e.
+    // the symmetrized SSSR that Mordred's Chem.GetSymmSSSR returns
+    ("nRing", "RingCount"),
 ];
 
 /// Mordred names that clash with an RDKit or CDK column of a different
@@ -52,12 +55,18 @@ pub const MORDRED_PREFIXED: &[&str] = &[
     "nHeavyAtom",
     "nBonds",
     "nBondsS",
-    // carbon types (CDK CarbonTypes)
+    // carbon types (CDK CarbonTypes: CDK atom typing vs RDKit hybridization,
+    // differ e.g. for carbanions)
     "C1SP1",
     "C2SP1",
     "C1SP2",
     "C2SP2",
+    "C3SP2",
+    "C1SP3",
     "C2SP3",
+    "C3SP3",
+    "C4SP3",
+    "HybRatio",
     // CDK BCUT
     "BCUTc-1h",
     "BCUTc-1l",

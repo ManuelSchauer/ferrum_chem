@@ -5,8 +5,10 @@ The values are taken from `mordred._atomic_property` itself (not re-parsed), so
 missing entries ("-" in the data files, or beyond the end of a table) become NaN
 exactly as in Mordred, and derived properties (vdW volume = 4/3 * pi * r**3) are
 the doubles Mordred computes. Index = atomic number; index 0 (dummy atom) is NaN.
+The number of outer-shell electrons (Mordred's valence electrons `dv`) comes
+from RDKit's periodic table, which Mordred queries at run time.
 
-Uses the installed mordred-community (`pip install mordredcommunity`):
+Uses the installed mordred-community (`pip install mordredcommunity`) and RDKit:
 
     python scripts/gen_mordred_data.py
 """
@@ -16,6 +18,7 @@ from pathlib import Path
 import importlib.metadata
 
 from mordred import _atomic_property as ap
+from rdkit import Chem
 
 MORDRED_VERSION = importlib.metadata.version("mordredcommunity")
 
@@ -33,6 +36,12 @@ def table(name, doc, getter):
     return f"/// {doc}\npub(crate) const {name}: [f64; {N}] = [\n{rows},\n];\n"
 
 
+def int_table(name, doc, ty, getter):
+    vals = [str(int(getter(z))) for z in range(N)]
+    rows = ",\n".join("    " + ", ".join(vals[i:i + 20]) for i in range(0, N, 20))
+    return f"/// {doc}\npub(crate) const {name}: [{ty}; {N}] = [\n{rows},\n];\n"
+
+
 out = [
     f"//! mordred-community {MORDRED_VERSION} atomic property tables (`mordred/_atomic_property.py`).\n",
     "//!\n",
@@ -44,6 +53,30 @@ out = [
     "\n",
     table("MORDRED_VDW_VOLUME", "Mordred `v`: van der Waals volume, 4/3·π·r³ (`van_der_waals_radii.txt`).",
           ap.vdw_volume),
+    "\n",
+    table("MORDRED_MASS", "Mordred `m`: atomic mass (`mass.txt`).", ap.mass),
+    "\n",
+    table("MORDRED_SANDERSON_EN", "Mordred `se`: Sanderson electronegativity (`sanderson_electron_negativity.txt`).",
+          ap.sanderson),
+    "\n",
+    table("MORDRED_ALLRED_ROCOW_EN",
+          "Mordred `are`: Allred-Rochow electronegativity (`allred_rocow_electron_negativity.txt`).",
+          ap.allred_rocow),
+    "\n",
+    table("MORDRED_POLARIZABILITY94", "Mordred `p`: polarizability, CRC 1994 (`polarizalibity94.txt`).",
+          ap.polarizability94),
+    "\n",
+    table("MORDRED_IONIZATION_POTENTIAL", "Mordred `i`: first ionization potential (`ionization_potential.txt`).",
+          ap.ionization_potentials),
+    "\n",
+    table("MORDRED_MCGOWAN_VOLUME", "Mordred McGowan characteristic atomic volume (`mc_gowan_volume.txt`).",
+          ap.mc_gowan_volume),
+    "\n",
+    table("MORDRED_PERIOD", "Mordred `period`: period of the element (NaN beyond element 118).", ap.period),
+    "\n",
+    int_table("RDKIT_N_OUTER_ELECS",
+              f"RDKit {Chem.rdBase.rdkitVersion} `PeriodicTable::getNouterElecs` (Mordred valence electrons `dv`).",
+              "u8", Chem.GetPeriodicTable().GetNOuterElecs),
 ]
 OUT.write_text("".join(out))
 print(f"wrote {OUT}")

@@ -14,13 +14,14 @@ bit-exact), so the speed-ups compare identical results.
 | full RDKit descriptor catalogue (217 descriptors), 1 thread | RDKit 3.9–6.6 ms/mol | 152–240 µs/mol | **25–28×** |
 | 5 fingerprints (MACCS, ECFP4, FCFP4, AtomPair, TopoTorsion), 1 thread | RDKit 0.66–1.12 ms/mol | 89–114 µs/mol | **7–10×** |
 | all CDK-equivalent descriptors (124 columns), 1,273 molecules, 1 thread | CDK 147.5 s | 0.165 s | **~900×** |
-| catalogue + fingerprints, all 14 cores | RDKit 744 mol/s | 7,629 mol/s with the *full* bundle | **10×** |
-| CLI, 100,000 molecules, full bundle, all cores | – | 7.0 s (14,203 mol/s), 406 MB peak RSS | – |
+| catalogue + fingerprints, all 14 cores | RDKit 744 mol/s | ~9,000 mol/s with the *full* bundle | **12×** |
+| CLI, 100,000 molecules, full bundle, all cores | – | 10.0 s (~10,000 mol/s), 430–540 MB peak RSS | – |
 
-The FerrumChem full bundle computes 531 scalar columns plus 6 fingerprints
-(9,239 bits): the complete RDKit catalogue, all tested CDK and Mordred
-descriptors, Biosynfoni and a few FerrumChem-only descriptors. It takes
-627 µs/mol on one core for the mixed set (399 µs/mol for the parity set).
+The FerrumChem full bundle computes 1,850 scalar columns plus 6 fingerprints
+(9,239 bits): the complete RDKit catalogue, the tested CDK descriptors, 1,426
+Mordred 2D descriptors, Biosynfoni and a few FerrumChem-only descriptors. It
+takes 932 µs/mol on one core for the mixed set (562 µs/mol for the parity
+set); before the Mordred expansion (531 columns) it took 634 / 399 µs/mol.
 
 ## Datasets
 
@@ -43,7 +44,7 @@ extra columns as well).
 | parse SMILES (+ sanitize) | 79 | 18 | 4.4× | 52 | 13 | 4.0× |
 | RDKit descriptor catalogue (217/217) | 6,605 | 240 | 27.5× | 3,874 | 152 | 25.5× |
 | 5 fingerprints | 1,119 | 114 | 9.8× | 658 | 89 | 7.4× |
-| FerrumChem full bundle | – | 627 | – | – | 399 | – |
+| FerrumChem full bundle (1,850 scalars) | – | 932 | – | – | 562 | – |
 
 Selected descriptors (first 1,500 molecules of the mixed 5k sample, µs/mol,
 each group run on its own):
@@ -68,12 +69,11 @@ writing.
 | wall time | 6.72 s | 0.66 s |
 | molecules/s | 744 | 7,629 |
 
-| `ferrum_cli calc`, mixed set | wall time | molecules/s | peak RSS |
+| `ferrum_cli calc`, mixed set, full bundle | wall time | molecules/s | peak RSS |
 |---|---|---|---|
-| 10,000 molecules, 1 thread | 6.77 s | 1,477 | 148 MB |
-| 10,000 molecules, 14 cores | 0.73 s | 13,664 | 219 MB |
-| 100,000 molecules, 14 cores | 7.04 s | 14,203 | 406 MB |
-| 100,000 molecules, 14 cores, `--chunk-size 1024` | 7.11 s | 14,066 | 352 MB |
+| 10,000 molecules, 1 thread | 9.09 s | 1,100 | 135 MB |
+| 10,000 molecules, 14 cores | 0.93–1.03 s | ~10,000 | 340–360 MB |
+| 100,000 molecules, 14 cores | 9.5–10.0 s | ~10,000 | 430–540 MB |
 
 (The parity-set run on all cores, 0.40 s for 1,273 molecules, is dominated by
 process start-up.)
@@ -97,20 +97,24 @@ columns).
 
 ## Streaming and memory
 
-The CLI reads its input in chunks (`--chunk-size`, default 4,096 records),
+The CLI reads its input in chunks (`--chunk-size`, default 1,024 records),
 computes several chunks concurrently, formats the CSV rows in the worker pool
-and writes them in input order, so memory does not grow with the input length:
+and writes them in input order, so memory does not grow with the input length.
+The number of records in flight is bounded by a budget of 4 million output
+values, so wider rows mean fewer records in flight. The CLI uses mimalloc as
+its allocator: with the macOS system allocator the peak RSS of a
+single-threaded 10,000-molecule run was 442 MB instead of 135 MB, because freed
+chunk buffers were not returned.
 
 | input | peak RSS |
 |---|---|
-| first 10,000 molecules of the mixed set | 219 MB |
-| first / last 25,000 molecules of the mixed set | 315 / 301 MB |
-| all 100,000 molecules | 406 MB |
-| 10,000 molecules, 1 thread | 148 MB |
+| 10,000 molecules, 1 thread | 135 MB |
+| 10,000 molecules, 14 cores | 340–360 MB |
+| 100,000 molecules, 14 cores | 430–540 MB |
 
 Peak memory depends on the largest molecules and the number of threads
-working at once, not on the file size. CSV size for 100,000 molecules: 433 MB
-without fingerprints, 665 MB with hex-packed fingerprints (default).
+working at once, not on the file size. CSV size for 100,000 molecules with the
+full bundle: 2.33 GB with hex-packed fingerprints (default).
 
 ## Cost per descriptor family
 
@@ -119,21 +123,21 @@ expensive families of the full bundle:
 
 | family | µs/mol |
 |---|---|
-| PubChem881 | 69 |
+| BCUT (CDK + 24 Mordred: 30 eigenvalue problems) | 101 |
+| PubChem881 | 71 |
 | MaccsKeys | 67 |
-| CdkChiIndices | 53 |
-| BCUT (CDK + Mordred) | 41 |
+| MordredMolecularId | 65 |
+| MordredInformationContent | 58 |
+| CdkChiIndices | 54 |
+| MordredChi | 49 |
 | Biosynfoni | 40 |
-| WeightedPath | 29 |
+| WeightedPath | 30 |
 | QED | 28 |
 | BCUT2D | 27 |
-| Fragments | 26 |
-| Ipc (pays the shared characteristic polynomial) | 26 |
+| Fragments | 27 |
 | SPS (pays the shared stereo perception) | 26 |
-| FpDensityMorgan | 25 |
-| LogP (pays the shared Crippen typing) | 14 |
-| FCFP4 | 14 |
-| Autocorrelation | 14 |
+| Ipc (pays the shared characteristic polynomial) | 26 |
+| FpDensityMorgan | 26 |
 
 When several descriptors share an intermediate result (distance matrices,
 characteristic polynomial, path tables, stereo perception, Crippen and

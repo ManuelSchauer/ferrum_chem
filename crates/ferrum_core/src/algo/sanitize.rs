@@ -829,14 +829,25 @@ fn back_track(
     *done = tdone;
 }
 
+/// `kekulizeWorker`. With `ranks` (RDKit 2026.03 `Kekulize(canonical =
+/// true)`), the start atoms are taken in rank order and the neighbours of
+/// each atom are queued and tried in rank order; without, the atoms follow
+/// the ring order and the neighbours are queued in reverse bond order.
 fn kekulize_worker(
     mol: &mut Molecule,
     all_atms: &[usize],
     mut dbnd_cands: Vec<bool>,
     mut dbnd_adds: Vec<bool>,
     mut done: Vec<usize>,
+    ranks: Option<&[u32]>,
 ) -> bool {
     let n = mol.num_atoms();
+    let mut sorted_atms = all_atms.to_vec();
+    if let Some(r) = ranks {
+        sorted_atms.sort_by_key(|&a| (r[a], a));
+    }
+    let all_atms = &sorted_atms[..];
+    let mut nbr_buf: Vec<(usize, usize)> = Vec::new();
     let mut in_all = vec![false; n];
     for &a in all_atms {
         in_all[a] = true;
@@ -871,14 +882,24 @@ fn kekulize_worker(
         } else {
             opts = VecDeque::new();
             let mut lstack: VecDeque<usize> = VecDeque::new();
+            nbr_buf.clear();
             for k in 0..mol.adjacency[curr].len() {
                 let bi = mol.adjacency[curr][k] as usize;
                 let nbr = other_atom(mol, bi, curr);
-                if done_mask[nbr] || !in_all[nbr] {
-                    continue;
+                if !done_mask[nbr] && in_all[nbr] {
+                    nbr_buf.push((nbr, bi));
                 }
+            }
+            if let Some(r) = ranks {
+                nbr_buf.sort_by_key(|&(a, _)| (r[a], a));
+            }
+            for &(nbr, bi) in &nbr_buf {
                 if !astack.contains(&nbr) {
-                    lstack.push_front(nbr);
+                    if ranks.is_some() {
+                        lstack.push_back(nbr);
+                    } else {
+                        lstack.push_front(nbr);
+                    }
                 }
                 if c_cand
                     && dbnd_cands[nbr]
@@ -937,13 +958,18 @@ fn kekulize_worker(
     true
 }
 
-fn kekulize_fused(mol: &mut Molecule, cache: &ValenceCache, frings: &[&[AtomIdx]]) -> Result<()> {
+fn kekulize_fused(
+    mol: &mut Molecule,
+    cache: &ValenceCache,
+    frings: &[&[AtomIdx]],
+    ranks: Option<&[u32]>,
+) -> Result<()> {
     let all_atms = union_atoms(frings);
     let mut done = Vec::new();
     let mut dbnd_cands = vec![false; mol.num_atoms()];
     let dbnd_adds = vec![false; mol.num_bonds()];
     mark_dbond_cands(mol, cache, &all_atms, &mut dbnd_cands, &mut done);
-    if !kekulize_worker(mol, &all_atms, dbnd_cands.clone(), dbnd_adds, done) {
+    if !kekulize_worker(mol, &all_atms, dbnd_cands.clone(), dbnd_adds, done, ranks) {
         let bad: Vec<String> =
             (0..mol.num_atoms()).filter(|&a| dbnd_cands[a]).map(|a| a.to_string()).collect();
         return Err(FerrumError::ParseError(format!(
@@ -956,6 +982,11 @@ fn kekulize_fused(mol: &mut Molecule, cache: &ValenceCache, frings: &[&[AtomIdx]
 
 /// Port of `MolOps::Kekulize` (with `markAtomsBonds = true`).
 fn kekulize(mol: &mut Molecule, cache: &mut ValenceCache) -> Result<()> {
+    kekulize_ranked(mol, cache, None)
+}
+
+/// [`kekulize`] with optional canonical atom ranks (see [`kekulize_worker`]).
+fn kekulize_ranked(mol: &mut Molecule, cache: &mut ValenceCache, ranks: Option<&[u32]>) -> Result<()> {
     let found_aromatic = mol.bonds.iter().any(|b| b.is_aromatic())
         || (0..mol.num_atoms()).any(|a| is_aromatic_atom(mol, a));
     if !found_aromatic {
@@ -975,7 +1006,7 @@ fn kekulize(mol: &mut Molecule, cache: &mut ValenceCache) -> Result<()> {
         let mut fused = Vec::new();
         pick_fused_rings(curr, &neigh, &mut fused, &mut fus_done);
         let frings: Vec<&[AtomIdx]> = fused.iter().map(|&k| info.atom_rings[ring_ok[k]].as_slice()).collect();
-        kekulize_fused(mol, cache, &frings)?;
+        kekulize_fused(mol, cache, &frings, ranks)?;
         match (0..cnrs).find(|&r| !fus_done[r]) {
             Some(r) => curr = r,
             None => break,
@@ -1491,6 +1522,21 @@ fn set_hybridization(mol: &mut Molecule, cache: &ValenceCache) {
         };
         mol.atoms[a].hybridization = hyb;
     }
+}
+
+/// Kekulé bond types RDKit's `Chem.Kekulize` assigns to a sanitized
+/// (aromatic) molecule, one per bond; `None` if the molecule cannot be
+/// kekulized. Bonds outside aromatic systems keep their type. `ranks` are the
+/// canonical atom ranks of RDKit 2026.03 `Kekulize(canonical = true)` (one per
+/// atom of `mol`), `None` for the atom-order kekulization of sanitization.
+pub(crate) fn kekule_bond_types(mol: &Molecule, ranks: Option<&[u32]>) -> Option<Vec<BondType>> {
+    if !mol.bonds.iter().any(|b| b.is_aromatic() || b.bond_type == BondType::Aromatic) {
+        return Some(mol.bonds.iter().map(|b| b.bond_type).collect());
+    }
+    let mut work = mol.clone();
+    let mut cache = update_property_cache(&mut work, false).ok()?;
+    kekulize_ranked(&mut work, &mut cache, ranks).ok()?;
+    Some(work.bonds.iter().map(|b| b.bond_type).collect())
 }
 
 // ---------------------------------------------------------------------------

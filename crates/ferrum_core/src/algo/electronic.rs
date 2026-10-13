@@ -407,6 +407,83 @@ pub(crate) fn compute_gasteiger_charges_cached(mol: &Molecule) -> Vec<f64> {
     compute_gasteiger_charges_uncached(mol)
 }
 
+/// RDKit `computeGasteigerCharges` (12 iterations) returning `(charges, h_charges)`,
+/// the atom properties `_GasteigerCharge` and `_GasteigerHCharge` Mordred reads.
+///
+/// - `explicit_h == false`: the molecule as is; `h_charges[i]` is the total
+///   charge of the implicit hydrogens of atom `i` (`_GasteigerHCharge`).
+/// - `explicit_h == true`: the molecule after RDKit `Chem.AddHs`, i.e. the
+///   `total_h()` hydrogens of every atom become graph atoms bonded to it
+///   (after its other neighbours, as `AddHs` appends them). `h_charges[i]` is
+///   the charge of each of these hydrogens (they are equivalent, so one value
+///   per parent is tracked) and `charges[i]` the charge of atom `i`; the
+///   iteration is RDKit's on that graph, operation by operation.
+pub(crate) fn gasteiger_charges_with_hydrogens(mol: &Molecule, explicit_h: bool) -> (Vec<f64>, Vec<f64>) {
+    let n = mol.num_atoms();
+    let mut charges = vec![0.0f64; n];
+    let mut h_chrg = vec![0.0f64; n];
+    if n == 0 {
+        return (charges, h_chrg);
+    }
+    split_charge_conjugated(mol, &mut charges);
+
+    let zero = ENParams { a: 0.0, b: 0.0, c: 0.0 };
+    let params: Vec<ENParams> = (0..n).map(|i| get_params(mol, i).unwrap_or(zero)).collect();
+    let ion_x: Vec<f64> = (0..n)
+        .map(|i| if mol.atoms[i].atomic_number == 1 { IONXH } else { params[i].a + params[i].b + params[i].c })
+        .collect();
+    let mut energ = vec![0.0f64; n];
+    let mut energ_h = vec![0.0f64; n];
+    let mut damp = DAMP;
+
+    for _ in 0..N_ITER {
+        for aix in 0..n {
+            let p = &params[aix];
+            energ[aix] = p.a + charges[aix] * (p.b + p.c * charges[aix]);
+            if explicit_h {
+                let q = h_chrg[aix];
+                energ_h[aix] = H.a + q * (H.b + H.c * q);
+            }
+        }
+        for aix in 0..n {
+            let mut dq = 0.0f64;
+            for &bi in &mol.adjacency[aix] {
+                let bond = &mol.bonds[bi as usize];
+                let nbr = if bond.source as usize == aix { bond.target as usize } else { bond.source as usize };
+                let dx = energ[nbr] - energ[aix];
+                let sgn = if dx < 0.0 { 0.0 } else { 1.0 };
+                dq += dx / ((sgn * (ion_x[aix] - ion_x[nbr])) + ion_x[nbr]);
+            }
+            let n_hs = mol.atoms[aix].total_h();
+            if n_hs > 0 && explicit_h {
+                // the added hydrogens as graph neighbours of `aix` ...
+                let dx = energ_h[aix] - energ[aix];
+                let sgn = if dx < 0.0 { 0.0 } else { 1.0 };
+                let dq_h = dx / ((sgn * (ion_x[aix] - IONXH)) + IONXH);
+                for _ in 0..n_hs {
+                    dq += dq_h;
+                }
+                // ... and as atoms of their own with `aix` as only neighbour
+                let dx = energ[aix] - energ_h[aix];
+                let sgn = if dx < 0.0 { 0.0 } else { 1.0 };
+                h_chrg[aix] += damp * (dx / ((sgn * (IONXH - ion_x[aix])) + ion_x[aix]));
+            } else if n_hs > 0 {
+                let ni_hs = n_hs as f64;
+                let q_hs = h_chrg[aix] / ni_hs;
+                let enr = H.a + q_hs * (H.b + H.c * q_hs);
+                let dx = enr - energ[aix];
+                let sgn = if dx < 0.0 { 0.0 } else { 1.0 };
+                let dq_h = dx / ((sgn * (ion_x[aix] - IONXH)) + IONXH);
+                dq += ni_hs * dq_h;
+                h_chrg[aix] -= ni_hs * dq_h * damp;
+            }
+            charges[aix] += damp * dq;
+        }
+        damp *= DAMP_SCALE;
+    }
+    (charges, h_chrg)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
