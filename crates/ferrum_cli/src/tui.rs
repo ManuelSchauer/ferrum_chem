@@ -28,6 +28,9 @@ const DEFAULT_EXPORT_PATH: &str = "/tmp/ferrum_descriptors.csv";
 /// Records shown in the dataset preview.
 const DATASET_PREVIEW: usize = 15;
 
+/// `(identifier, heavy atoms)` of the first records of a dataset.
+type Preview = Vec<(String, String)>;
+
 /// The full results of the last calculation (streamed to disk, so memory does
 /// not grow with the dataset); export copies this file.
 fn results_path() -> PathBuf {
@@ -304,14 +307,13 @@ impl App {
                     KeyCode::Char(c) => {
                         self.export_path_input.push(c);
                     }
-                    KeyCode::Enter => {
-                        if self.matrix.is_some() {
+                    KeyCode::Enter
+                        if self.matrix.is_some() => {
                             let path = PathBuf::from(&self.export_path_input);
                             self.popup = PopupMode::Computing;
                             self.status_message = format!("Exporting to '{}'...", path.display());
                             let _ = self.req_tx.send(WorkerRequest::ExportMatrix { path });
                         }
-                    }
                     _ => {}
                 }
                 return false;
@@ -364,11 +366,10 @@ impl App {
                     }
                 }
                 KeyCode::Char(' ') => {
-                    if let Some(sel) = self.desc_list_state.selected() {
-                        if let Some((_, state)) = self.descriptors.get_mut(sel) {
+                    if let Some(sel) = self.desc_list_state.selected()
+                        && let Some((_, state)) = self.descriptors.get_mut(sel) {
                             *state = !*state;
                         }
-                    }
                 }
                 KeyCode::Char('a') => {
                     for (_, state) in self.descriptors.iter_mut() {
@@ -454,13 +455,11 @@ pub fn run_tui() -> Result<(), Box<dyn std::error::Error>> {
     loop {
         terminal.draw(|f| ui(f, &mut app))?;
 
-        if event::poll(Duration::from_millis(50))? {
-            if let Event::Key(key) = event::read()? {
-                if app.handle_key(key) {
+        if event::poll(Duration::from_millis(50))?
+            && let Event::Key(key) = event::read()?
+                && app.handle_key(key) {
                     break;
                 }
-            }
-        }
         app.handle_tick();
     }
 
@@ -523,7 +522,7 @@ fn worker_thread(
 }
 
 /// Streams a dataset once: number of records, unparseable records and a preview.
-fn count_records(path: &std::path::Path) -> Result<(usize, usize, Vec<(String, String)>), String> {
+fn count_records(path: &std::path::Path) -> Result<(usize, usize, Preview), String> {
     let mut reader = MoleculeReader::open(path).map_err(|e| format!("Failed to open '{}': {}", path.display(), e))?;
     let (mut records, mut failed, mut preview) = (0usize, 0usize, Vec::new());
     while let Some(chunk) = reader.next_chunk().map_err(|e| format!("Failed to read '{}': {}", path.display(), e))? {

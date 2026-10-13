@@ -106,9 +106,9 @@ impl Descriptor for ChiNIndices {
         let nv = n_vals(mol);
         let chi0: f64 = nv.iter().sum();
         let chi1: f64 = mol.bonds.iter().map(|b| nv[b.source as usize] * nv[b.target as usize]).sum();
-        let mut out = vec![chi0 as f64, chi1];
+        let mut out = vec![chi0, chi1];
         for n in 2..=4 {
-            out.push(chi_path_sum(mol, ctx, &nv, n) as f64);
+            out.push(chi_path_sum(mol, ctx, &nv, n));
         }
         DescriptorValue::FloatVec(out)
     }
@@ -132,7 +132,7 @@ impl Descriptor for EStateAbs {
         }
         let max = es.iter().map(|x| x.abs()).fold(f64::NEG_INFINITY, f64::max);
         let min = es.iter().map(|x| x.abs()).fold(f64::INFINITY, f64::min);
-        DescriptorValue::FloatVec(vec![max as f64, min as f64])
+        DescriptorValue::FloatVec(vec![max, min])
     }
 }
 
@@ -391,7 +391,7 @@ impl Descriptor for FpDensityMorgan {
             let mut ids = crate::desc::fingerprint::ECFP::new(radius, 2048).raw_features(mol);
             ids.sort_unstable();
             ids.dedup();
-            out.push((ids.len() as f64 / heavy as f64) as f64);
+            out.push(ids.len() as f64 / heavy as f64);
         }
         DescriptorValue::FloatVec(out)
     }
@@ -442,18 +442,6 @@ impl Descriptor for Fragments {
                 .map(|q| crate::algo::iso::count_matches_target(&target, q) as u32)
                 .collect(),
         )
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn all_fragment_smarts_parse() {
-        let failed: Vec<_> = crate::desc::rdkit_fragments_data::FRAGMENTS
-            .iter()
-            .filter(|(_, s)| crate::io::smarts::parse_smarts(s).is_err())
-            .collect();
-        assert!(failed.is_empty(), "unparseable fragment SMARTS: {failed:?}");
     }
 }
 
@@ -569,5 +557,17 @@ impl Descriptor for Sps {
     }
     fn calculate(&self, mol: &Molecule, ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
         DescriptorValue::Float(crate::algo::stereo::spacial_score_with_context(mol, ctx))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn all_fragment_smarts_parse() {
+        let failed: Vec<_> = crate::desc::rdkit_fragments_data::FRAGMENTS
+            .iter()
+            .filter(|(_, s)| crate::io::smarts::parse_smarts(s).is_err())
+            .collect();
+        assert!(failed.is_empty(), "unparseable fragment SMARTS: {failed:?}");
     }
 }

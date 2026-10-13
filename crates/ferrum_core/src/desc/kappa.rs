@@ -8,39 +8,6 @@
 //! Reference: Kier, L.B. (1985) "A Shape Index from Molecular Graphs"
 //!            Quant. Struct.-Act. Relat. 4, 109-116.
 
-//! ## File guide: Kappa
-//!
-//! This file belongs to FerrumChem's **descriptor/fingerprint feature layer**.
-//!
-//! What to learn here:
-//! - Which chemistry/ML concern this file owns in the pipeline.
-//! - How Rust types and control-flow encode that concern.
-//! - Which public symbols are the best entry points for reading/debugging.
-//!
-//! Key symbols in this file:
-//! - `struct KappaIndices`
-//! - `fn name`
-//! - `fn calculate`
-//! - `mod tests`
-//! - `fn calc_kappa`
-//!
-//! Suggested reading workflow:
-//! 1. Read top-level type definitions and public APIs.
-//! 2. Trace helper functions used in hot/critical paths.
-//! 3. Cross-reference tests/examples that exercise this file.
-
-//!
-//! ### Algorithmic assumptions for this file
-//! - `Kappa` assumes molecule preprocessing (implicit hydrogens, aromaticity flags, and ring annotations) is current before calculation.
-//! - `Kappa` remains deterministic for identical atom/bond indexing so batch and single-molecule runs agree bit-for-bit.
-//! - Typed `DescriptorValue` output is part of the contract; downstream ML code should not rely on ad-hoc coercions.
-//! - Specific scope anchor: `crates/ferrum_core/src/desc/kappa.rs` defines kappa behavior and should be updated together with its direct tests.
-//! ### Chemistry/ML references
-//! - Todeschini & Consonni. Handbook of Molecular Descriptors (general descriptor taxonomy).
-//! - RDKit descriptor/fingerprint APIs used as practical parity baselines for `Kappa` workflows.
-//! - Repository unit and parity tests covering `Kappa` behavior and edge molecules.
-//! - Code-local source of truth: symbols and tests declared in `crates/ferrum_core/src/desc/kappa.rs`.
-
 use super::typed::{Descriptor, DescriptorValue};
 use crate::mol::molecule::Molecule;
 
@@ -61,18 +28,10 @@ use crate::mol::molecule::Molecule;
 pub struct KappaIndices;
 
 impl Descriptor for KappaIndices {
-    /// Implements the behavior encoded by this function.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/kappa.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn name(&self) -> &str {
         "KappaIndices"
     }
 
-    /// Calculates the behavior encoded by this function.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/kappa.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn calculate(
         &self,
         mol: &Molecule,
@@ -208,7 +167,7 @@ fn cdk_kier(mol: &Molecule) -> [f64; 3] {
     let kier2 = ratio((n - 1.0) * (n - 2.0) * (n - 2.0), p2);
     let kier3 = if n == 3.0 {
         0.0
-    } else if n as u64 % 2 != 0 {
+    } else if !(n as u64).is_multiple_of(2) {
         ratio((n - 1.0) * (n - 3.0) * (n - 3.0), p3)
     } else {
         ratio((n - 3.0) * (n - 2.0) * (n - 2.0), p3)
@@ -217,10 +176,6 @@ fn cdk_kier(mol: &Molecule) -> [f64; 3] {
 }
 
 const _: () = {
-    /// Asserts send sync to guard invariants.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/kappa.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     const fn assert_send_sync<T: Send + Sync>() {}
     let _ = assert_send_sync::<KappaIndices>;
 };
@@ -230,14 +185,10 @@ mod tests {
     use super::*;
     use crate::io::smiles::parse_smiles;
 
-    /// Implements kappa.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/kappa.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn calc_kappa(smiles: &str) -> Vec<f64> {
-        let mut mol = parse_smiles(smiles).expect("valid SMILES");
+        let mol = parse_smiles(smiles).expect("valid SMILES");
         match KappaIndices.calculate(
-            &mut mol,
+            &mol,
             &mut crate::desc::context::CalculationContext::new(),
         ) {
             DescriptorValue::FloatVec(v) => v,
@@ -246,10 +197,6 @@ mod tests {
     }
 
     #[test]
-    /// Runs regression test for kappa methane.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/kappa.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_kappa_methane() {
         let k = calc_kappa("C");
         assert_eq!(k[0], 0.0);
@@ -258,10 +205,6 @@ mod tests {
     }
 
     #[test]
-    /// Runs regression test for kappa ethane.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/kappa.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_kappa_ethane() {
         let k = calc_kappa("CC");
         assert!((k[0] - 2.0).abs() < 0.01, "κ₁ of ethane = {}", k[0]);
@@ -270,10 +213,6 @@ mod tests {
     }
 
     #[test]
-    /// Runs regression test for kappa propane.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/kappa.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_kappa_propane() {
         let k = calc_kappa("CCC");
         assert!((k[0] - 3.0).abs() < 0.01, "κ₁ = {}", k[0]);
@@ -281,10 +220,6 @@ mod tests {
     }
 
     #[test]
-    /// Runs regression test for kappa butane vs isobutane.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/kappa.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_kappa_butane_vs_isobutane() {
         let k_linear = calc_kappa("CCCC");
         let k_branched = calc_kappa("CC(C)C");
@@ -298,20 +233,12 @@ mod tests {
     }
 
     #[test]
-    /// Runs regression test for kappa pentane linear.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/kappa.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_kappa_pentane_linear() {
         let k = calc_kappa("CCCCC");
         assert!((k[0] - 5.0).abs() < 0.01, "κ₁ = {}", k[0]);
     }
 
     #[test]
-    /// Runs regression test for kappa benzene.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/kappa.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_kappa_benzene() {
         let k = calc_kappa("c1ccccc1");
         assert!(k[0] > 3.0 && k[0] < 6.0, "κ₁ = {}", k[0]);
@@ -320,20 +247,12 @@ mod tests {
     }
 
     #[test]
-    /// Runs regression test for kappa3 epoxide regression matches rdkit.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/kappa.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_kappa3_epoxide_regression_matches_rdkit() {
         let k = calc_kappa("CC1OC1");
         assert!((k[2] - 0.20616508).abs() < 1e-5, "κ₃ = {}", k[2]);
     }
 
     #[test]
-    /// Runs regression test for kappa size.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/kappa.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_kappa_size() {
         let k = calc_kappa("C");
         assert_eq!(k.len(), 3);
@@ -353,9 +272,9 @@ mod tests {
     }
 
     fn calc_cdk_kier(smiles: &str) -> Vec<f64> {
-        let mut mol = crate::io::smiles::parse_smiles(smiles).unwrap();
+        let mol = crate::io::smiles::parse_smiles(smiles).unwrap();
         let mut ctx = crate::desc::context::CalculationContext::new();
-        match CdkKappaShapeIndices.calculate(&mut mol, &mut ctx) {
+        match CdkKappaShapeIndices.calculate(&mol, &mut ctx) {
             DescriptorValue::FloatVec(v) => v,
             other => panic!("{other:?}"),
         }

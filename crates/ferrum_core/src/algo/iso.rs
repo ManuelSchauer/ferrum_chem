@@ -7,37 +7,9 @@
 //! Learning focus:
 //! - Graph traversal and indexing patterns over atom/bond adjacency.
 //! - Performance-oriented Rust design in numerically heavy code paths.
-
-//! ## File guide: Iso
 //!
-//! This file belongs to FerrumChem's **cheminformatics algorithm layer**.
-//!
-//! What to learn here:
-//! - Which chemistry/ML concern this file owns in the pipeline.
-//! - How Rust types and control-flow encode that concern.
-//! - Which public symbols are the best entry points for reading/debugging.
-//!
-//! Key symbols in this file:
-//! - `fn has_substruct_match`
-//! - `fn find_first_match`
-//! - `fn count_matches`
-//! - `fn has_at_least_matches`
-//!
-//! Suggested reading workflow:
-//! 1. Read top-level type definitions and public APIs.
-//! 2. Trace helper functions used in hot/critical paths.
-//! 3. Cross-reference tests/examples that exercise this file.
-
-//!
-//! ### Algorithmic assumptions for this file
-//! - VF2 feasibility checks rely on aromatic flags, atom degree, and bond compatibility being precomputed consistently.
-//! - Small-target cache paths (<=64 atoms) assume dense bit-level adjacency checks are faster than repeated linear scans.
-//! - Match enumeration is deterministic for a fixed molecule/query ordering, which is required by parity diagnostics.
-//! ### Chemistry/ML references
+//! References:
 //! - Cordella et al. (2001/2004). VF2 graph/subgraph isomorphism algorithm.
-//! - RDKit substructure matching behavior for aromatic, valence, and ring-query compatibility baselines.
-//! - Ullmann/VF-family feasibility-pruning literature for chemical graph matching.
-
 
 use crate::io::smarts::{
     AtomPrimitive, QueryAtom, QueryBond, QueryGraph, SmartsRingContext, query_atom_matches_target,
@@ -589,7 +561,6 @@ impl CompiledQuery {
                 .filter(|&(b, _)| bond_in_cycle[b])
                 .map(|(_, bond)| (bond.source as usize, bond.target as usize)),
         );
-
 
         let bond_mask: Vec<u16> = pattern
             .bonds
@@ -1662,7 +1633,6 @@ struct AtomFastFilter {
     required_charge: Option<i8>,
 }
 
-
 fn target_element_counts(target: &Molecule) -> [u16; 119] {
     let mut target_counts = [0u16; 119];
     for atom in &target.atoms {
@@ -1890,10 +1860,6 @@ fn fixed_atomic_number_primitive(primitive: &AtomPrimitive, recursive: bool) -> 
     }
 }
 
-/// Implements atom required charge.
-///
-/// Function context: `crates/ferrum_core/src/algo/iso.rs`.
-/// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
 fn query_atom_required_charge(query_atom: &QueryAtom) -> Option<i8> {
     let mut required_charge: Option<i8> = None;
     for primitive in &query_atom.primitives {
@@ -1909,10 +1875,6 @@ fn query_atom_required_charge(query_atom: &QueryAtom) -> Option<i8> {
     required_charge
 }
 
-/// Implements charge from primitive.
-///
-/// Function context: `crates/ferrum_core/src/algo/iso.rs`.
-/// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
 fn required_charge_from_primitive(primitive: &AtomPrimitive) -> Option<i8> {
     match primitive {
         AtomPrimitive::Charge(c) => Some(*c),
@@ -1952,10 +1914,6 @@ fn required_charge_from_primitive(primitive: &AtomPrimitive) -> Option<i8> {
     }
 }
 
-/// Implements contains charge.
-///
-/// Function context: `crates/ferrum_core/src/algo/iso.rs`.
-/// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
 fn primitive_contains_charge(primitive: &AtomPrimitive) -> bool {
     match primitive {
         AtomPrimitive::Charge(_) => true,
@@ -1967,10 +1925,6 @@ fn primitive_contains_charge(primitive: &AtomPrimitive) -> bool {
     }
 }
 
-/// Implements atom requires aromatic.
-///
-/// Function context: `crates/ferrum_core/src/algo/iso.rs`.
-/// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
 fn query_atom_requires_aromatic(query_atom: &QueryAtom) -> bool {
     query_atom
         .primitives
@@ -1978,10 +1932,6 @@ fn query_atom_requires_aromatic(query_atom: &QueryAtom) -> bool {
         .any(atom_primitive_requires_aromatic)
 }
 
-/// Implements atom requires aliphatic.
-///
-/// Function context: `crates/ferrum_core/src/algo/iso.rs`.
-/// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
 fn query_atom_requires_aliphatic(query_atom: &QueryAtom) -> bool {
     query_atom
         .primitives
@@ -1989,10 +1939,6 @@ fn query_atom_requires_aliphatic(query_atom: &QueryAtom) -> bool {
         .any(atom_primitive_requires_aliphatic)
 }
 
-/// Implements primitive requires aromatic.
-///
-/// Function context: `crates/ferrum_core/src/algo/iso.rs`.
-/// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
 fn atom_primitive_requires_aromatic(primitive: &AtomPrimitive) -> bool {
     match primitive {
         AtomPrimitive::AnyAromatic | AtomPrimitive::Aromatic(_) => true,
@@ -2007,10 +1953,6 @@ fn atom_primitive_requires_aromatic(primitive: &AtomPrimitive) -> bool {
     }
 }
 
-/// Implements primitive requires aliphatic.
-///
-/// Function context: `crates/ferrum_core/src/algo/iso.rs`.
-/// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
 fn atom_primitive_requires_aliphatic(primitive: &AtomPrimitive) -> bool {
     match primitive {
         AtomPrimitive::AnyAliphatic | AtomPrimitive::Aliphatic(_) => true,
@@ -2025,10 +1967,6 @@ fn atom_primitive_requires_aliphatic(primitive: &AtomPrimitive) -> bool {
     }
 }
 
-/// Implements bond requires ring.
-///
-/// Function context: `crates/ferrum_core/src/algo/iso.rs`.
-/// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
 fn query_bond_requires_ring(query_bond: &QueryBond) -> bool {
     match query_bond {
         QueryBond::Ring => true,
@@ -2038,10 +1976,6 @@ fn query_bond_requires_ring(query_bond: &QueryBond) -> bool {
     }
 }
 
-/// Implements bond requires aromatic.
-///
-/// Function context: `crates/ferrum_core/src/algo/iso.rs`.
-/// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
 fn query_bond_requires_aromatic(query_bond: &QueryBond) -> bool {
     match query_bond {
         QueryBond::Aromatic => true,
@@ -2089,10 +2023,6 @@ mod tests {
     use crate::io::smiles::parse_smiles;
 
     #[test]
-    /// Runs regression test for single atom match.
-    ///
-    /// Function context: `crates/ferrum_core/src/algo/iso.rs`.
-    /// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
     fn test_single_atom_match() {
         let mol = parse_smiles("CCO").unwrap();
 
@@ -2112,10 +2042,6 @@ mod tests {
     }
 
     #[test]
-    /// Runs regression test for no match.
-    ///
-    /// Function context: `crates/ferrum_core/src/algo/iso.rs`.
-    /// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
     fn test_no_match() {
         let mol = parse_smiles("CCO").unwrap();
 
@@ -2125,10 +2051,6 @@ mod tests {
     }
 
     #[test]
-    /// Runs regression test for two atom match.
-    ///
-    /// Function context: `crates/ferrum_core/src/algo/iso.rs`.
-    /// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
     fn test_two_atom_match() {
         let mol = parse_smiles("CCO").unwrap();
 
@@ -2142,10 +2064,6 @@ mod tests {
     }
 
     #[test]
-    /// Runs regression test for count matches.
-    ///
-    /// Function context: `crates/ferrum_core/src/algo/iso.rs`.
-    /// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
     fn test_count_matches() {
         let mol = parse_smiles("CCCC").unwrap(); // Butane
 
@@ -2159,10 +2077,6 @@ mod tests {
     }
 
     #[test]
-    /// Runs regression test for has at least matches thresholds.
-    ///
-    /// Function context: `crates/ferrum_core/src/algo/iso.rs`.
-    /// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
     fn test_has_at_least_matches_thresholds() {
         let mol = parse_smiles("CCCC").unwrap();
         let carbon = QueryGraph::single_atom(6);
@@ -2177,10 +2091,6 @@ mod tests {
     }
 
     #[test]
-    /// Runs regression test for visit matches early stop.
-    ///
-    /// Function context: `crates/ferrum_core/src/algo/iso.rs`.
-    /// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
     fn test_visit_matches_early_stop() {
         let mol = parse_smiles("CCCC").unwrap();
         let pattern = QueryGraph::single_atom(6);
@@ -2195,10 +2105,6 @@ mod tests {
     }
 
     #[test]
-    /// Runs regression test for visit matches empty pattern once.
-    ///
-    /// Function context: `crates/ferrum_core/src/algo/iso.rs`.
-    /// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
     fn test_visit_matches_empty_pattern_once() {
         let mol = parse_smiles("CC").unwrap();
         let empty = QueryGraph {
@@ -2219,10 +2125,6 @@ mod tests {
     }
 
     #[test]
-    /// Runs regression test for double bond match.
-    ///
-    /// Function context: `crates/ferrum_core/src/algo/iso.rs`.
-    /// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
     fn test_double_bond_match() {
         let mol = parse_smiles("C=C").unwrap(); // Ethene
 
@@ -2236,10 +2138,6 @@ mod tests {
     }
 
     #[test]
-    /// Runs regression test for aromatic pattern.
-    ///
-    /// Function context: `crates/ferrum_core/src/algo/iso.rs`.
-    /// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
     fn test_aromatic_pattern() {
 
         let mol = parse_smiles("c1ccccc1").unwrap(); // Benzene
@@ -2258,10 +2156,6 @@ mod tests {
     }
 
     #[test]
-    /// Runs regression test for complex pattern.
-    ///
-    /// Function context: `crates/ferrum_core/src/algo/iso.rs`.
-    /// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
     fn test_complex_pattern() {
         let mol = parse_smiles("CCO").unwrap(); // Ethanol
 
@@ -2280,13 +2174,9 @@ mod tests {
     }
 
     #[test]
-    /// Runs regression test for ring size and membership primitives.
-    ///
-    /// Function context: `crates/ferrum_core/src/algo/iso.rs`.
-    /// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
     fn test_ring_size_and_membership_primitives() {
-        let mut mol = parse_smiles("C1CCCCC1").unwrap();
-        crate::algo::rings::find_sssr(&mut mol);
+        let mol = parse_smiles("C1CCCCC1").unwrap();
+        crate::algo::rings::find_sssr(&mol);
 
         let membership = parse_smarts("[CR1]").unwrap();
         assert_eq!(count_matches(&mol, &membership), 6);
@@ -2296,10 +2186,6 @@ mod tests {
     }
 
     #[test]
-    /// Runs regression test for or charge fast filter does not reject neutral branches.
-    ///
-    /// Function context: `crates/ferrum_core/src/algo/iso.rs`.
-    /// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
     fn test_or_charge_fast_filter_does_not_reject_neutral_branches() {
         // This pattern includes an OR branch (`[N+]=C`) where the Charge primitive
         // is nested under an AND node. Prefilter charge extraction must remain

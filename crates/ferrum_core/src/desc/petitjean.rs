@@ -16,39 +16,6 @@
 //!
 //! Reference: Petitjean (1992) J. Chem. Inf. Comput. Sci.
 
-//! ## File guide: Petitjean
-//!
-//! This file belongs to FerrumChem's **descriptor/fingerprint feature layer**.
-//!
-//! What to learn here:
-//! - Which chemistry/ML concern this file owns in the pipeline.
-//! - How Rust types and control-flow encode that concern.
-//! - Which public symbols are the best entry points for reading/debugging.
-//!
-//! Key symbols in this file:
-//! - `fn _compute_distance_matrix_unused`
-//! - `fn calculate`
-//! - `struct PetitjeanIndex`
-//! - `fn name`
-//! - `fn calculate`
-//!
-//! Suggested reading workflow:
-//! 1. Read top-level type definitions and public APIs.
-//! 2. Trace helper functions used in hot/critical paths.
-//! 3. Cross-reference tests/examples that exercise this file.
-
-//!
-//! ### Algorithmic assumptions for this file
-//! - `Petitjean` assumes molecule preprocessing (implicit hydrogens, aromaticity flags, and ring annotations) is current before calculation.
-//! - `Petitjean` remains deterministic for identical atom/bond indexing so batch and single-molecule runs agree bit-for-bit.
-//! - Typed `DescriptorValue` output is part of the contract; downstream ML code should not rely on ad-hoc coercions.
-//! - Specific scope anchor: `crates/ferrum_core/src/desc/petitjean.rs` defines petitjean behavior and should be updated together with its direct tests.
-//! ### Chemistry/ML references
-//! - Todeschini & Consonni. Handbook of Molecular Descriptors (general descriptor taxonomy).
-//! - RDKit descriptor/fingerprint APIs used as practical parity baselines for `Petitjean` workflows.
-//! - Repository unit and parity tests covering `Petitjean` behavior and edge molecules.
-//! - Code-local source of truth: symbols and tests declared in `crates/ferrum_core/src/desc/petitjean.rs`.
-
 use super::typed::{Descriptor, DescriptorValue};
 use crate::mol::molecule::Molecule;
 use super::cdk_graph::CDK_UNREACHABLE;
@@ -174,18 +141,10 @@ pub fn calculate(
 pub struct PetitjeanIndex;
 
 impl Descriptor for PetitjeanIndex {
-    /// Implements the behavior encoded by this function.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/petitjean.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn name(&self) -> &str {
         "PetitjeanIndex"
     }
 
-    /// Calculates the behavior encoded by this function.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/petitjean.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn calculate(
         &self,
         mol: &Molecule,
@@ -201,10 +160,6 @@ impl Descriptor for PetitjeanIndex {
 }
 
 const _: () = {
-    /// Asserts send sync to guard invariants.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/petitjean.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     const fn assert_send_sync<T: Send + Sync>() {}
     let _ = assert_send_sync::<PetitjeanIndex>;
 };
@@ -214,23 +169,15 @@ mod tests {
     use super::*;
     use crate::io::smiles::parse_smiles;
 
-    /// Parses the behavior encoded by this function.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/petitjean.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn parse(smiles: &str) -> Molecule {
         parse_smiles(smiles).unwrap()
     }
 
     #[test]
-    /// Runs regression test for petitjean methane.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/petitjean.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_petitjean_methane() {
-        let mut mol = parse("C");
+        let mol = parse("C");
         let (r, d, p) = calculate(
-            &mut mol,
+            &mol,
             &mut crate::desc::context::CalculationContext::new(),
         );
         assert_eq!(r, 0);
@@ -239,14 +186,10 @@ mod tests {
     }
 
     #[test]
-    /// Runs regression test for petitjean ethane.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/petitjean.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_petitjean_ethane() {
-        let mut mol = parse("CC");
+        let mol = parse("CC");
         let (r, d, p) = calculate(
-            &mut mol,
+            &mol,
             &mut crate::desc::context::CalculationContext::new(),
         );
         assert_eq!(r, 1); // Both atoms have eccentricity 1
@@ -255,14 +198,10 @@ mod tests {
     }
 
     #[test]
-    /// Runs regression test for petitjean propane.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/petitjean.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_petitjean_propane() {
-        let mut mol = parse("CCC");
+        let mol = parse("CCC");
         let (r, d, p) = calculate(
-            &mut mol,
+            &mol,
             &mut crate::desc::context::CalculationContext::new(),
         );
         assert_eq!(r, 1); // Center atom has eccentricity 1
@@ -271,20 +210,16 @@ mod tests {
     }
 
     #[test]
-    /// Runs regression test for petitjean linear vs branched.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/petitjean.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_petitjean_linear_vs_branched() {
-        let mut linear = parse("CCCCC"); // Pentane
-        let mut branched = parse("CC(C)CC"); // Isopentane
+        let linear = parse("CCCCC"); // Pentane
+        let branched = parse("CC(C)CC"); // Isopentane
 
         let (_r_lin, d_lin, p_lin) = calculate(
-            &mut linear,
+            &linear,
             &mut crate::desc::context::CalculationContext::new(),
         );
         let (_r_bra, d_bra, p_bra) = calculate(
-            &mut branched,
+            &branched,
             &mut crate::desc::context::CalculationContext::new(),
         );
 
@@ -296,14 +231,10 @@ mod tests {
     }
 
     #[test]
-    /// Runs regression test for petitjean benzene.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/petitjean.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_petitjean_benzene() {
-        let mut mol = parse("c1ccccc1");
+        let mol = parse("c1ccccc1");
         let (r, d, p) = calculate(
-            &mut mol,
+            &mol,
             &mut crate::desc::context::CalculationContext::new(),
         );
 
@@ -313,14 +244,10 @@ mod tests {
     }
 
     #[test]
-    /// Runs regression test for petitjean cyclohexane.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/petitjean.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_petitjean_cyclohexane() {
-        let mut mol = parse("C1CCCCC1");
+        let mol = parse("C1CCCCC1");
         let (r, d, p) = calculate(
-            &mut mol,
+            &mol,
             &mut crate::desc::context::CalculationContext::new(),
         );
 
@@ -330,14 +257,10 @@ mod tests {
     }
 
     #[test]
-    /// Runs regression test for petitjean naphthalene.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/petitjean.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_petitjean_naphthalene() {
-        let mut mol = parse("c1ccc2ccccc2c1");
+        let mol = parse("c1ccc2ccccc2c1");
         let (_r, d, p) = calculate(
-            &mut mol,
+            &mol,
             &mut crate::desc::context::CalculationContext::new(),
         );
 
@@ -347,14 +270,10 @@ mod tests {
     }
 
     #[test]
-    /// Runs regression test for petitjean long chain.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/petitjean.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_petitjean_long_chain() {
-        let mut mol = parse("CCCCCCCCCC"); // Decane
+        let mol = parse("CCCCCCCCCC"); // Decane
         let (r, d, p) = calculate(
-            &mut mol,
+            &mol,
             &mut crate::desc::context::CalculationContext::new(),
         );
 
@@ -370,8 +289,8 @@ mod tests {
 
     #[test]
     fn test_petitjean_disconnected_matches_cdk_and_mordred() {
-        let mut mol = parse("CC.O");
-        let (r, d, p) = calculate(&mut mol, &mut crate::desc::context::CalculationContext::new());
+        let mol = parse("CC.O");
+        let (r, d, p) = calculate(&mol, &mut crate::desc::context::CalculationContext::new());
         assert!((p - (999_999_999.0 - 999_999.0) / 999_999_999.0).abs() < 1e-12);
         // Mordred Radius / Diameter see RDKit's 1e8 "unreachable" distance
         assert_eq!((r, d), (100_000_000, 100_000_000));

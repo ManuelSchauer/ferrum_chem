@@ -8,39 +8,6 @@
 //! - Data-oriented Rust struct design for scientific computing.
 //! - Graph-centric chemistry representations.
 
-//! ## File guide: Molecule
-//!
-//! This file belongs to FerrumChem's **molecular graph model layer**.
-//!
-//! What to learn here:
-//! - Which chemistry/ML concern this file owns in the pipeline.
-//! - How Rust types and control-flow encode that concern.
-//! - Which public symbols are the best entry points for reading/debugging.
-//!
-//! Key symbols in this file:
-//! - `struct MoleculeCache`
-//! - `struct CachedLabuteContribs`
-//! - `struct Molecule`
-//! - `fn new`
-//! - `fn with_capacity`
-//!
-//! Suggested reading workflow:
-//! 1. Read top-level type definitions and public APIs.
-//! 2. Trace helper functions used in hot/critical paths.
-//! 3. Cross-reference tests/examples that exercise this file.
-
-//!
-//! ### Algorithmic assumptions for this file
-//! - `Molecule` encodes graph primitives with compact integer indices to keep memory predictable on large CSV batches.
-//! - `Molecule` expects topology invariants (bond endpoints, adjacency symmetry) to hold after all mutating operations.
-//! - Bitflag/state fields in `Molecule` are treated as cached derivations and must be invalidated after structural edits.
-//! - Specific scope anchor: `crates/ferrum_core/src/mol/molecule.rs` defines molecule behavior and should be updated together with its direct tests.
-//! ### Chemistry/ML references
-//! - Graph-based cheminformatics data-model conventions for atom/bond/molecule containers.
-//! - IUPAC element/valence background relevant to `Molecule` typed fields.
-//! - Rust ownership/borrowing patterns for safe high-performance molecular graph manipulation.
-//! - Code-local source of truth: symbols and tests declared in `crates/ferrum_core/src/mol/molecule.rs`.
-
 use crate::mol::{atom::Atom, bond::Bond};
 use crate::types::{AtomIdx, BondIdx};
 use smallvec::SmallVec;
@@ -65,9 +32,6 @@ struct MoleculeCache {
 
 #[derive(Debug, Clone)]
 /// Implements CachedLabuteContribs.
-///
-/// Function context: `crates/ferrum_core/src/mol/molecule.rs`.
-/// Mol-layer note: core graph data structure component.
 struct CachedLabuteContribs {
     atom_vsa: Vec<f64>,
     h_contrib: f64,
@@ -126,27 +90,15 @@ impl RingInfo {
 
 // Static assertion: Molecule must be Send + Sync for parallel processing
 const _: () = {
-    /// Asserts send sync to guard invariants.
-    ///
-    /// Function context: `crates/ferrum_core/src/mol/molecule.rs`.
-    /// Molecule-model note: preserve atom/bond index invariants and cached-property invalidation rules.
     const fn assert_send_sync<T: Send + Sync>() {}
     let _ = assert_send_sync::<Molecule>;
 };
 
 impl Molecule {
-    /// Creates a new value with the defaults and invariants required by this module.
-    ///
-    /// Function context: `crates/ferrum_core/src/mol/molecule.rs`.
-    /// Molecule-model note: preserve atom/bond index invariants and cached-property invalidation rules.
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// Implements capacity.
-    ///
-    /// Function context: `crates/ferrum_core/src/mol/molecule.rs`.
-    /// Molecule-model note: preserve atom/bond index invariants and cached-property invalidation rules.
     pub fn with_capacity(n_atoms: usize) -> Self {
         Self {
             atoms: Vec::with_capacity(n_atoms),
@@ -159,9 +111,6 @@ impl Molecule {
     }
 
     /// Constructs parts between representations.
-    ///
-    /// Function context: `crates/ferrum_core/src/mol/molecule.rs`.
-    /// Molecule-model note: preserve atom/bond index invariants and cached-property invalidation rules.
     pub(crate) fn from_parts(
         atoms: Vec<Atom>,
         bonds: Vec<Bond>,
@@ -200,33 +149,17 @@ impl Molecule {
         self.ring_info = OnceLock::from(Box::new(info));
     }
 
-    /// Implements atoms.
-    ///
-    /// Function context: `crates/ferrum_core/src/mol/molecule.rs`.
-    /// Molecule-model note: preserve atom/bond index invariants and cached-property invalidation rules.
     pub fn num_atoms(&self) -> usize {
         self.atoms.len()
     }
-    /// Implements bonds.
-    ///
-    /// Function context: `crates/ferrum_core/src/mol/molecule.rs`.
-    /// Molecule-model note: preserve atom/bond index invariants and cached-property invalidation rules.
     pub fn num_bonds(&self) -> usize {
         self.bonds.len()
     }
 
-    /// Returns degree.
-    ///
-    /// Function context: `crates/ferrum_core/src/mol/molecule.rs`.
-    /// Molecule-model note: preserve atom/bond index invariants and cached-property invalidation rules.
     pub fn get_degree(&self, atom: AtomIdx) -> usize {
         self.adjacency[atom as usize].len()
     }
 
-    /// Implements cached properties.
-    ///
-    /// Function context: `crates/ferrum_core/src/mol/molecule.rs`.
-    /// Molecule-model note: preserve atom/bond index invariants and cached-property invalidation rules.
     pub fn invalidate_cached_properties(&mut self) {
         self.cache = MoleculeCache::default();
         self.ring_info = OnceLock::new();

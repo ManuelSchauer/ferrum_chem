@@ -161,7 +161,6 @@ impl<'a> PathSums<'a> {
         sum
     }
 
-
     /// Core atoms reachable from `v` inside `mask` (bitset).
     fn component(&self, mask: &[u64], v: usize) -> Vec<u64> {
         let mut comp = vec![0u64; mask.len()];

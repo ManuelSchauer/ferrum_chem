@@ -93,12 +93,11 @@ pub(crate) fn permutation_is_odd(from: &[usize], to: &[usize]) -> bool {
     let mut probe: SmallVec<[usize; 8]> = from.iter().copied().collect();
     let mut swaps = 0usize;
     for (i, &want) in to.iter().enumerate() {
-        if probe[i] != want {
-            if let Some(j) = (i + 1..probe.len()).find(|&j| probe[j] == want) {
+        if probe[i] != want
+            && let Some(j) = (i + 1..probe.len()).find(|&j| probe[j] == want) {
                 probe.swap(i, j);
                 swaps += 1;
             }
-        }
     }
     swaps % 2 == 1
 }
@@ -473,7 +472,7 @@ fn is_atom_potential_chiral_center(
     let h = ctx.total_h[a];
     let tnz = nz + h;
     let z = ctx.anum(a);
-    if tnz > 4 || tnz < 3 {
+    if !(3..=4).contains(&tnz) {
         legal = false;
     } else if nz < 3 && z != 15 && z != 33 {
         legal = false;
@@ -1397,7 +1396,7 @@ fn rank_fragment_atoms(ctx: &Ctx, atom_syms: &[String], bond_syms: &[String]) ->
     let activeset = activate_partitions(&order, &count, &mut next, &mut changed);
     refine_partitions(&mut canon, false, &mut order, &mut count, activeset, &mut next, &mut changed, &mut touched);
 
-    let ties = count.iter().any(|&c| c == 0);
+    let ties = count.contains(&0);
     let mut sym_ring_atoms = 0i64;
     let mut ring_atoms = 0i64;
     let mut branching = false;
@@ -1995,11 +1994,10 @@ fn update_atoms(
                         n_here += (prsa[ra as usize] > 0) as u32;
                     }
                     if n_here <= 1 {
-                        if n_here == 1 {
-                            if let Some(&ra) = aring.iter().find(|&&ra| prsa[ra as usize] > 0) {
+                        if n_here == 1
+                            && let Some(&ra) = aring.iter().find(|&&ra| prsa[ra as usize] > 0) {
                                 prsa[ra as usize] -= 1;
                             }
-                        }
                         for &rb in &ctx.ri.bond_rings[ridx] {
                             let rb = rb as usize;
                             if prsb[rb] > 0 {

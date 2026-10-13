@@ -244,7 +244,7 @@ fn run(label: &str, sdf_file: Option<&str>, reference_file: &str, baseline_file:
             }
             None => parse_smiles(smiles),
         };
-        let mut mol = match parsed {
+        let mol = match parsed {
             Ok(m) if !rdkit_failed => m,
             Ok(_) => {
                 note("perception", "RDKit rejects, FerrumChem accepts".into());
@@ -260,7 +260,7 @@ fn run(label: &str, sdf_file: Option<&str>, reference_file: &str, baseline_file:
         let values: Vec<Option<Vec<f64>>> = descriptors
             .iter()
             .enumerate()
-            .map(|(di, d)| needed[di].then(|| to_f64s(d.calculate(&mut mol, &mut ctx))))
+            .map(|(di, d)| needed[di].then(|| to_f64s(d.calculate(&mol, &mut ctx))))
             .collect();
 
         for (ci, (col, check)) in checks.iter().enumerate() {

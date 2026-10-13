@@ -12,46 +12,8 @@
 //!
 //! Reference: Balaban, A.T. (1982) Chemical Applications of Graph Theory
 
-//! ## File guide: Balaban
-//!
-//! This file belongs to FerrumChem's **descriptor/fingerprint feature layer**.
-//!
-//! What to learn here:
-//! - Which chemistry/ML concern this file owns in the pipeline.
-//! - How Rust types and control-flow encode that concern.
-//! - Which public symbols are the best entry points for reading/debugging.
-//!
-//! Key symbols in this file:
-//! - `type WeightedNeighbors`
-//! - `fn compute_distance_matrix`
-//! - `fn bond_weight`
-//! - `fn build_weighted_neighbors`
-//! - `fn compute_distance_matrix_small`
-//!
-//! Suggested reading workflow:
-//! 1. Read top-level type definitions and public APIs.
-//! 2. Trace helper functions used in hot/critical paths.
-//! 3. Cross-reference tests/examples that exercise this file.
-
-//!
-//! ### Algorithmic assumptions for this file
-//! - `Balaban` assumes molecule preprocessing (implicit hydrogens, aromaticity flags, and ring annotations) is current before calculation.
-//! - `Balaban` remains deterministic for identical atom/bond indexing so batch and single-molecule runs agree bit-for-bit.
-//! - Typed `DescriptorValue` output is part of the contract; downstream ML code should not rely on ad-hoc coercions.
-//! - Specific scope anchor: `crates/ferrum_core/src/desc/balaban.rs` defines balaban behavior and should be updated together with its direct tests.
-//! ### Chemistry/ML references
-//! - Todeschini & Consonni. Handbook of Molecular Descriptors (general descriptor taxonomy).
-//! - RDKit descriptor/fingerprint APIs used as practical parity baselines for `Balaban` workflows.
-//! - Repository unit and parity tests covering `Balaban` behavior and edge molecules.
-//! - Code-local source of truth: symbols and tests declared in `crates/ferrum_core/src/desc/balaban.rs`.
-
 use super::typed::{Descriptor, DescriptorValue};
 use crate::mol::molecule::Molecule;
-
-
-
-
-
 
 /// Balaban J from the bond-order weighted distances in sixths
 /// ([`crate::algo::distance_matrix::bond_order_distances_sixths`]).
@@ -137,18 +99,10 @@ pub(crate) fn calculate_with_context(mol: &Molecule, ctx: &mut crate::desc::cont
 pub struct BalabanIndex;
 
 impl Descriptor for BalabanIndex {
-    /// Implements the behavior encoded by this function.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/balaban.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn name(&self) -> &str {
         "BalabanJ"
     }
 
-    /// Calculates the behavior encoded by this function.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/balaban.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn calculate(
         &self,
         mol: &Molecule,
@@ -159,10 +113,6 @@ impl Descriptor for BalabanIndex {
 }
 
 const _: () = {
-    /// Asserts send sync to guard invariants.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/balaban.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     const fn assert_send_sync<T: Send + Sync>() {}
     let _ = assert_send_sync::<BalabanIndex>;
 };
@@ -172,19 +122,11 @@ mod tests {
     use super::*;
     use crate::io::smiles::parse_smiles;
 
-    /// Parses the behavior encoded by this function.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/balaban.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn parse(smiles: &str) -> Molecule {
         parse_smiles(smiles).unwrap()
     }
 
     #[test]
-    /// Runs regression test for balaban methane.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/balaban.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_balaban_methane() {
         let mol = parse("C");
         let j = calculate(&mol);
@@ -193,10 +135,6 @@ mod tests {
     }
 
     #[test]
-    /// Runs regression test for balaban ethane.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/balaban.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_balaban_ethane() {
         let mol = parse("CC");
         let j = calculate(&mol);
@@ -207,10 +145,6 @@ mod tests {
     }
 
     #[test]
-    /// Runs regression test for balaban propane.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/balaban.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_balaban_propane() {
         let mol = parse("CCC");
         let j = calculate(&mol);
@@ -219,10 +153,6 @@ mod tests {
     }
 
     #[test]
-    /// Runs regression test for balaban isobutane.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/balaban.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_balaban_isobutane() {
         let mol = parse("CC(C)C");
         let j = calculate(&mol);
@@ -232,10 +162,6 @@ mod tests {
     }
 
     #[test]
-    /// Runs regression test for balaban benzene.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/balaban.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_balaban_benzene() {
         let mol = parse("c1ccccc1");
         let j = calculate(&mol);
@@ -244,10 +170,6 @@ mod tests {
     }
 
     #[test]
-    /// Runs regression test for balaban cyclohexane.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/balaban.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_balaban_cyclohexane() {
         let mol = parse("C1CCCCC1");
         let j = calculate(&mol);
@@ -256,10 +178,6 @@ mod tests {
     }
 
     #[test]
-    /// Runs regression test for balaban naphthalene.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/balaban.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_balaban_naphthalene() {
         let mol = parse("c1ccc2ccccc2c1");
         let j = calculate(&mol);
@@ -268,10 +186,6 @@ mod tests {
     }
 
     #[test]
-    /// Runs regression test for balaban disconnected.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/balaban.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_balaban_disconnected() {
         // Two separate methane molecules
         let mol = parse("C.C");

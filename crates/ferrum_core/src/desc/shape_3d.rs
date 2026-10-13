@@ -219,20 +219,20 @@ mod tests {
             0.0000    0.0000    0.0000 C   0  0  0  0  0  0  0  0  0  0  0  0\n    \
             1.1600    0.0000    0.0000 O   0  0  0  0  0  0  0  0  0  0  0  0\n  \
             1  2  2  0\n  2  3  2  0\nM  END\n";
-        let mut mol = parse_mol_block(block).expect("valid mol block");
+        let mol = parse_mol_block(block).expect("valid mol block");
         let o = atom_mass(8, 0);
         let expected = 2.0 * o * 1.16 * 1.16;
-        assert!(calc(&Pmi1, &mut mol).abs() < 1e-12);
-        assert!((calc(&Pmi2, &mut mol) - expected).abs() < 1e-9);
-        assert!((calc(&Pmi3, &mut mol) - expected).abs() < 1e-9);
+        assert!(calc(&Pmi1, &mol).abs() < 1e-12);
+        assert!((calc(&Pmi2, &mol) - expected).abs() < 1e-9);
+        assert!((calc(&Pmi3, &mol) - expected).abs() < 1e-9);
         // linear: one non-zero gyration eigenvalue -> asphericity 1
-        assert!((calc(&Asphericity, &mut mol) - 1.0).abs() < 1e-12);
+        assert!((calc(&Asphericity, &mol) - 1.0).abs() < 1e-12);
     }
 
     #[test]
     fn no_conformer_gives_nan() {
-        let mut mol = crate::io::smiles::parse_smiles("CCO").unwrap();
-        assert!(calc(&Pmi1, &mut mol).is_nan());
-        assert!(calc(&Asphericity, &mut mol).is_nan());
+        let mol = crate::io::smiles::parse_smiles("CCO").unwrap();
+        assert!(calc(&Pmi1, &mol).is_nan());
+        assert!(calc(&Asphericity, &mol).is_nan());
     }
 }

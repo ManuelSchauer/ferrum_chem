@@ -17,39 +17,6 @@
 //! Reference: Kier, L.B. & Hall, L.H. (1999) "Molecular Structure
 //!            Description: The Electrotopological State", Academic Press.
 
-//! ## File guide: Estate
-//!
-//! This file belongs to FerrumChem's **descriptor/fingerprint feature layer**.
-//!
-//! What to learn here:
-//! - Which chemistry/ML concern this file owns in the pipeline.
-//! - How Rust types and control-flow encode that concern.
-//! - Which public symbols are the best entry points for reading/debugging.
-//!
-//! Key symbols in this file:
-//! - `fn intrinsic_states`
-//! - `fn compute_estates`
-//! - `fn principal_quantum_number`
-//! - `fn _compute_distance_matrix_unused`
-//! - `fn estate_type_sums`
-//!
-//! Suggested reading workflow:
-//! 1. Read top-level type definitions and public APIs.
-//! 2. Trace helper functions used in hot/critical paths.
-//! 3. Cross-reference tests/examples that exercise this file.
-
-//!
-//! ### Algorithmic assumptions for this file
-//! - `Estate` assumes molecule preprocessing (implicit hydrogens, aromaticity flags, and ring annotations) is current before calculation.
-//! - `Estate` remains deterministic for identical atom/bond indexing so batch and single-molecule runs agree bit-for-bit.
-//! - Typed `DescriptorValue` output is part of the contract; downstream ML code should not rely on ad-hoc coercions.
-//! - Specific scope anchor: `crates/ferrum_core/src/desc/estate.rs` defines estate behavior and should be updated together with its direct tests.
-//! ### Chemistry/ML references
-//! - Todeschini & Consonni. Handbook of Molecular Descriptors (general descriptor taxonomy).
-//! - RDKit descriptor/fingerprint APIs used as practical parity baselines for `Estate` workflows.
-//! - Repository unit and parity tests covering `Estate` behavior and edge molecules.
-//! - Code-local source of truth: symbols and tests declared in `crates/ferrum_core/src/desc/estate.rs`.
-
 use super::typed::{Descriptor, DescriptorValue};
 use crate::mol::elements::outer_electrons;
 use crate::mol::molecule::Molecule;
@@ -137,10 +104,6 @@ fn compute_estates_uncached(
     estates
 }
 
-/// Implements quantum number.
-///
-/// Function context: `crates/ferrum_core/src/desc/estate.rs`.
-/// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
 fn principal_quantum_number(atomic_number: u8) -> u8 {
     match atomic_number {
         0..=2 => 1,
@@ -154,10 +117,6 @@ fn principal_quantum_number(atomic_number: u8) -> u8 {
 }
 
 #[allow(dead_code)]
-/// Computes distance matrix unused.
-///
-/// Function context: `crates/ferrum_core/src/desc/estate.rs`.
-/// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
 fn _compute_distance_matrix_unused(mol: &Molecule) -> Vec<u32> {
     let n = mol.num_atoms();
     let mut distances = vec![u32::MAX; n * n];
@@ -501,7 +460,7 @@ fn types_by_element_and_degree() -> &'static [[SmallVec<[u8; 6]>; 7]; 119] {
                 if ty
                     .alts
                     .iter()
-                    .any(|a| a.degree.map_or(true, |x| d < 6 && x as usize == d))
+                    .any(|a| a.degree.is_none_or(|x| d < 6 && x as usize == d))
                 {
                     bucket.push(ti as u8);
                 }
@@ -679,6 +638,58 @@ fn estate_type_sums(mol: &Molecule, estates: &[f64]) -> [f64; NUM_ESTATE_TYPES] 
     sums
 }
 
+// ===========================================================================
+// Typed API: E-State Indices
+// ===========================================================================
+
+/// E-State indices.
+///
+/// Returns FloatVec with 82 values:
+/// - [0-2]: Summary (sum, min, max), RDKit `EStateIndices`
+/// - [3-81]: sums per RDKit E-State atom type ([`ESTATE_TYPE_NAMES`]),
+///   RDKit `Fingerprinter.FingerprintMol(mol)[1]`
+pub struct EStateIndices;
+
+impl Descriptor for EStateIndices {
+    fn name(&self) -> &str {
+        "EStateIndices"
+    }
+
+    fn calculate(
+        &self,
+        mol: &Molecule,
+        ctx: &mut crate::desc::context::CalculationContext,
+    ) -> DescriptorValue {
+        let mut values = Vec::with_capacity(3 + NUM_ESTATE_TYPES);
+
+        let estates = compute_estates(mol, ctx);
+
+        // Summary (3 values)
+        if estates.is_empty() {
+            values.push(0.0);
+            values.push(0.0);
+            values.push(0.0);
+        } else {
+            let sum: f64 = estates.iter().sum();
+            let min = estates.iter().cloned().fold(f64::MAX, f64::min);
+            let max = estates.iter().cloned().fold(f64::MIN, f64::max);
+            values.push(sum);
+            values.push(min);
+            values.push(max);
+        }
+
+        // RDKit E-State atom-type sums (79 values)
+        values.extend(estate_type_sums(mol, &estates));
+
+        DescriptorValue::FloatVec(values)
+    }
+}
+
+const _: () = {
+    const fn assert_send_sync<T: Send + Sync>() {}
+    let _ = assert_send_sync::<EStateIndices>;
+};
+
 // ---------------------------------------------------------------------------
 // Descriptors
 // ---------------------------------------------------------------------------
@@ -690,14 +701,10 @@ mod tests {
     use super::*;
     use crate::io::smiles::parse_smiles;
 
-    /// Implements estate.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/estate.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn calc_estate(smiles: &str) -> Vec<f64> {
-        let mut mol = parse_smiles(smiles).expect("valid SMILES");
+        let mol = parse_smiles(smiles).expect("valid SMILES");
         match EStateIndices.calculate(
-            &mut mol,
+            &mol,
             &mut crate::desc::context::CalculationContext::new(),
         ) {
             DescriptorValue::FloatVec(v) => v,
@@ -705,10 +712,6 @@ mod tests {
         }
     }
 
-    /// Implements raw.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/estate.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn type_idx(name: &str) -> usize {
         ESTATE_TYPE_NAMES
             .iter()
@@ -795,11 +798,11 @@ mod tests {
             .filter(|l| !l.is_empty())
             .chain(extra)
         {
-            let Ok(mut mol) = parse_smiles(smi) else {
+            let Ok(mol) = parse_smiles(smi) else {
                 continue;
             };
             let estates = compute_estates(
-                &mut mol,
+                &mol,
                 &mut crate::desc::context::CalculationContext::new(),
             );
             let got = estate_type_sums(&mol, &estates);
@@ -834,18 +837,14 @@ mod tests {
     }
 
     fn estates_raw(smiles: &str) -> Vec<f64> {
-        let mut mol = parse_smiles(smiles).expect("valid SMILES");
+        let mol = parse_smiles(smiles).expect("valid SMILES");
         compute_estates(
-            &mut mol,
+            &mol,
             &mut crate::desc::context::CalculationContext::new(),
         )
     }
 
     #[test]
-    /// Runs regression test for estate ethane.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/estate.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_estate_ethane() {
         let e = estates_raw("CC");
         assert_eq!(e.len(), 2);
@@ -858,10 +857,6 @@ mod tests {
     }
 
     #[test]
-    /// Runs regression test for estate summary ethane.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/estate.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_estate_summary_ethane() {
         let v = calc_estate("CC");
         // v[0]=sum, v[1]=min, v[2]=max
@@ -870,24 +865,16 @@ mod tests {
     }
 
     #[test]
-    /// Runs regression test for estate ethanol.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/estate.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_estate_ethanol() {
         let e = estates_raw("CCO");
         assert!(e[2] > e[0], "O E-State={} > C E-State={}", e[2], e[0]);
     }
 
     #[test]
-    /// Runs regression test for estate sum conservation.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/estate.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_estate_sum_conservation() {
-        let mut mol = parse_smiles("CCCC").expect("valid");
+        let mol = parse_smiles("CCCC").expect("valid");
         let estates = compute_estates(
-            &mut mol,
+            &mol,
             &mut crate::desc::context::CalculationContext::new(),
         );
         let n = mol.num_atoms();
@@ -914,10 +901,6 @@ mod tests {
     }
 
     #[test]
-    /// Runs regression test for estate atom types ethanol.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/estate.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_estate_atom_types_ethanol() {
         let v = calc_estate("CCO");
         // v[3 + ESTATE_sCH3] and v[3 + ESTATE_sOH] should be nonzero
@@ -926,10 +909,6 @@ mod tests {
     }
 
     #[test]
-    /// Runs regression test for estate atom types benzene.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/estate.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_estate_atom_types_benzene() {
         let v = calc_estate("c1ccccc1");
         assert!(
@@ -940,20 +919,12 @@ mod tests {
     }
 
     #[test]
-    /// Runs regression test for estate size.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/estate.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_estate_size() {
         let v = calc_estate("CCO");
         assert_eq!(v.len(), 82, "E-State has 82 values");
     }
 
     #[test]
-    /// Runs regression test for estate benzene symmetry.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/estate.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_estate_benzene_symmetry() {
         let e = estates_raw("c1ccccc1");
         let first = e[0];
@@ -968,77 +939,9 @@ mod tests {
     }
 
     #[test]
-    /// Runs regression test for estate aspirin.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/estate.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_estate_aspirin() {
         let v = calc_estate("CC(=O)Oc1ccccc1C(=O)O");
         assert!(v[0] > 0.0, "aspirin E-State sum = {}", v[0]);
         assert!(v[2] > v[1], "max > min for complex mol");
     }
 }
-
-// ===========================================================================
-// Typed API: E-State Indices
-// ===========================================================================
-
-/// E-State indices.
-///
-/// Returns FloatVec with 82 values:
-/// - [0-2]: Summary (sum, min, max), RDKit `EStateIndices`
-/// - [3-81]: sums per RDKit E-State atom type ([`ESTATE_TYPE_NAMES`]),
-///   RDKit `Fingerprinter.FingerprintMol(mol)[1]`
-pub struct EStateIndices;
-
-impl Descriptor for EStateIndices {
-    /// Implements the behavior encoded by this function.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/estate.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-    fn name(&self) -> &str {
-        "EStateIndices"
-    }
-
-    /// Calculates the behavior encoded by this function.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/estate.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-    fn calculate(
-        &self,
-        mol: &Molecule,
-        ctx: &mut crate::desc::context::CalculationContext,
-    ) -> DescriptorValue {
-        let mut values = Vec::with_capacity(3 + NUM_ESTATE_TYPES);
-
-        let estates = compute_estates(mol, ctx);
-
-        // Summary (3 values)
-        if estates.is_empty() {
-            values.push(0.0);
-            values.push(0.0);
-            values.push(0.0);
-        } else {
-            let sum: f64 = estates.iter().sum();
-            let min = estates.iter().cloned().fold(f64::MAX, f64::min);
-            let max = estates.iter().cloned().fold(f64::MIN, f64::max);
-            values.push(sum as f64);
-            values.push(min as f64);
-            values.push(max as f64);
-        }
-
-        // RDKit E-State atom-type sums (79 values)
-        values.extend(estate_type_sums(mol, &estates));
-
-        DescriptorValue::FloatVec(values)
-    }
-}
-
-const _: () = {
-    /// Asserts send sync to guard invariants.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/estate.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-    const fn assert_send_sync<T: Send + Sync>() {}
-    let _ = assert_send_sync::<EStateIndices>;
-};

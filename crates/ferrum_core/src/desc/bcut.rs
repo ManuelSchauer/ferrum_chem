@@ -22,24 +22,8 @@
 //!
 //! Reference: Pearlman, R.S. & Smith, K.M. (1999) "Metric Validation and
 //!            the Receptor-Relevant Subspace Concept", JCICS 39, 28-35.
-
-//! ## File guide: Bcut
 //!
-//! This file belongs to FerrumChem's **descriptor/fingerprint feature layer**.
-//!
-//! Key symbols in this file:
-//! - `fn cdk_bcut_matrices` (CDK part) / `fn mordred_bcut_matrices` (Mordred part)
-//! - `fn bcut_values` (batched eigen-solve of all Burden matrices)
-//! - `struct BCUT`
-//!
-//! ### Algorithmic assumptions for this file
-//! - Only the extreme eigenvalues are needed: `crate::algo::linalg::burden_extremes`
-//!   (Householder tridiagonalization + certified Laguerre/Sturm iteration,
-//!   backward stable like the dense solvers of CDK/JAMA and numpy, agreeing
-//!   to ~1e-14), two matrices at a time in SIMD lanes.
-//! - The off-diagonal Burden template is built once per flavour and reused
-//!   for every atomic property.
-//! ### Chemistry/ML references
+//! References:
 //! - Burden, F. (1989). Molecular identification number for substructure searches (Burden eigenvalues).
 //! - Pearlman et al. BCUT descriptor literature for weighted adjacency eigenvalue descriptors.
 //! - Moriwaki et al. (2018) Mordred: a molecular descriptor calculator, J. Cheminform. 10, 4.
@@ -247,9 +231,9 @@ mod tests {
     use crate::io::smiles::parse_smiles;
 
     fn calc_bcut(smiles: &str) -> Vec<f64> {
-        let mut mol = parse_smiles(smiles).expect("valid SMILES");
+        let mol = parse_smiles(smiles).expect("valid SMILES");
         match BCUT.calculate(
-            &mut mol,
+            &mol,
             &mut crate::desc::context::CalculationContext::new(),
         ) {
             DescriptorValue::FloatVec(v) => v,
@@ -323,7 +307,7 @@ mod tests {
     fn assert_cdk(smiles: &str, expected: [f64; 6]) {
         let b = calc_bcut(smiles);
         for (k, e) in expected.into_iter().enumerate() {
-            assert!((b[k] as f64 - e).abs() < 1e-4, "{smiles} BCUT[{k}] = {} expected {e}", b[k]);
+            assert!((b[k] - e).abs() < 1e-4, "{smiles} BCUT[{k}] = {} expected {e}", b[k]);
         }
     }
 

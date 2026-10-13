@@ -6,39 +6,6 @@
 //! Reference: Bickerton et al. (2012) "Quantifying the chemical beauty of drugs"
 //! Nature Chemistry 4, 90-98.
 
-//! ## File guide: Qed
-//!
-//! This file belongs to FerrumChem's **descriptor/fingerprint feature layer**.
-//!
-//! What to learn here:
-//! - Which chemistry/ML concern this file owns in the pipeline.
-//! - How Rust types and control-flow encode that concern.
-//! - Which public symbols are the best entry points for reading/debugging.
-//!
-//! Key symbols in this file:
-//! - `struct QedParam`
-//! - `fn ads`
-//! - `struct QueryScreen`
-//! - `struct RequiredElementSet`
-//! - `struct ScreenedQuery`
-//!
-//! Suggested reading workflow:
-//! 1. Read top-level type definitions and public APIs.
-//! 2. Trace helper functions used in hot/critical paths.
-//! 3. Cross-reference tests/examples that exercise this file.
-
-//!
-//! ### Algorithmic assumptions for this file
-//! - `Qed` assumes molecule preprocessing (implicit hydrogens, aromaticity flags, and ring annotations) is current before calculation.
-//! - `Qed` remains deterministic for identical atom/bond indexing so batch and single-molecule runs agree bit-for-bit.
-//! - Typed `DescriptorValue` output is part of the contract; downstream ML code should not rely on ad-hoc coercions.
-//! - Specific scope anchor: `crates/ferrum_core/src/desc/qed.rs` defines qed behavior and should be updated together with its direct tests.
-//! ### Chemistry/ML references
-//! - Todeschini & Consonni. Handbook of Molecular Descriptors (general descriptor taxonomy).
-//! - RDKit descriptor/fingerprint APIs used as practical parity baselines for `Qed` workflows.
-//! - Repository unit and parity tests covering `Qed` behavior and edge molecules.
-//! - Code-local source of truth: symbols and tests declared in `crates/ferrum_core/src/desc/qed.rs`.
-
 use super::typed::{Descriptor, DescriptorValue};
 use crate::algo::iso::{count_matches_target, has_substruct_match_target, IsoTarget};
 use crate::desc::bond_count::{compute_rotatable_bond_count, compute_rotatable_bond_count_cached};
@@ -176,8 +143,8 @@ fn ads(x: f64, params: &[f64; 7]) -> f64 {
     let f = params[5];
     let dmax = params[6];
 
-    let numerator = a + b / (1.0 + (-1.0 * (x - c + d / 2.0) / e).exp())
-        * (1.0 - 1.0 / (1.0 + (-1.0 * (x - c - d / 2.0) / f).exp()));
+    let numerator = a + b / (1.0 + (-(x - c + d / 2.0) / e).exp())
+        * (1.0 - 1.0 / (1.0 + (-(x - c - d / 2.0) / f).exp()));
     numerator / dmax
 }
 
@@ -196,7 +163,6 @@ static QED_ACCEPTOR_SMARTS: &[&str] = &[
     "[$([N;+0;X3;v3]);!$(N[C,S]=O)]",
 ];
 
-
 struct ScreenedQuery {
     query: QueryGraph,
     screen: crate::algo::iso::QueryScreen,
@@ -213,10 +179,6 @@ static QED_ACCEPTOR_PATTERNS: Lazy<Vec<ScreenedQuery>> = Lazy::new(|| {
         .collect()
 });
 
-/// Computes qed hbond acceptors.
-///
-/// Function context: `crates/ferrum_core/src/desc/qed.rs`.
-/// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
 fn compute_qed_hbond_acceptors(mol: &Molecule) -> u32 {
     let iso_target = IsoTarget::new(mol);
     compute_qed_hbond_acceptors_target(&iso_target)
@@ -288,7 +250,7 @@ fn compute_qed_aromatic_ring_count_cached(mol: &Molecule) -> u32 {
 fn compute_qed(mol: &Molecule) -> f64 {
     let iso_target = IsoTarget::new(mol);
     let mw = compute_molecular_weight(mol);
-    let logp = compute_logp(mol).0 as f64;
+    let logp = compute_logp(mol).0;
     let hba = compute_qed_hbond_acceptors_target(&iso_target) as f64;
     let hbd = compute_hbond_donors(mol) as f64;
     let psa = compute_tpsa(mol, false);
@@ -314,13 +276,9 @@ fn compute_qed(mol: &Molecule) -> f64 {
     }
 }
 
-/// Computes qed cached.
-///
-/// Function context: `crates/ferrum_core/src/desc/qed.rs`.
-/// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
 fn compute_qed_cached(mol: &Molecule) -> f64 {
     let mw = compute_molecular_weight(mol);
-    let logp = compute_logp_cached(mol).0 as f64;
+    let logp = compute_logp_cached(mol).0;
     let hbd = compute_hbond_donors_cached(mol) as f64;
     let psa = compute_tpsa_cached(mol, false);
     let rotb = compute_rotatable_bond_count_cached(mol) as f64;
@@ -569,18 +527,10 @@ fn compute_structural_alerts_target(target: &IsoTarget) -> u32 {
 pub struct Qed;
 
 impl Descriptor for Qed {
-    /// Implements the behavior encoded by this function.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/qed.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn name(&self) -> &str {
         "QED"
     }
 
-    /// Calculates the behavior encoded by this function.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/qed.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn calculate(
         &self,
         mol: &Molecule,
@@ -591,10 +541,6 @@ impl Descriptor for Qed {
 }
 
 const _: () = {
-    /// Asserts send sync to guard invariants.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/qed.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     const fn assert_send_sync<T: Send + Sync>() {}
     let _ = assert_send_sync::<Qed>;
 };
@@ -604,74 +550,46 @@ mod tests {
     use super::*;
     use crate::io::smiles::parse_smiles;
 
-    /// Implements qed.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/qed.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn calc_qed(smiles: &str) -> f64 {
-        let mut mol = parse_smiles(smiles).expect("valid SMILES");
+        let mol = parse_smiles(smiles).expect("valid SMILES");
         Qed.calculate(
-            &mut mol,
+            &mol,
             &mut crate::desc::context::CalculationContext::new(),
         )
         .as_float()
     }
 
     #[test]
-    /// Runs regression test for qed range.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/qed.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_qed_range() {
         let qed = calc_qed("c1ccccc1");
-        assert!(qed >= 0.0 && qed <= 1.0, "QED should be 0-1, got {}", qed);
+        assert!((0.0..=1.0).contains(&qed), "QED should be 0-1, got {}", qed);
     }
 
     #[test]
-    /// Runs regression test for qed aspirin.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/qed.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_qed_aspirin() {
         let qed = calc_qed("CC(=O)Oc1ccccc1C(=O)O");
         assert!(qed > 0.2 && qed < 0.9, "Aspirin QED={}", qed);
     }
 
     #[test]
-    /// Runs regression test for qed caffeine.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/qed.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_qed_caffeine() {
         let qed = calc_qed("CN1C=NC2=C1C(=O)N(C(=O)N2C)C");
         assert!(qed > 0.1 && qed < 0.8, "Caffeine QED={}", qed);
     }
 
     #[test]
-    /// Runs regression test for qed drug like.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/qed.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_qed_drug_like() {
         let qed = calc_qed("CC(C)Cc1ccc(cc1)C(C)C(=O)O");
         assert!(qed > 0.2 && qed < 0.9);
     }
 
     #[test]
-    /// Runs regression test for qed methane low.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/qed.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_qed_methane_low() {
         let qed = calc_qed("C");
         assert!(qed < 0.5, "Methane should have low QED: {}", qed);
     }
 
     #[test]
-    /// Runs regression test for qed large molecule lower.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/qed.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_qed_large_molecule_lower() {
         let qed_small = calc_qed("c1ccc(CC(=O)O)cc1");
         let qed_large = calc_qed("CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC");
@@ -679,10 +597,6 @@ mod tests {
     }
 
     #[test]
-    /// Runs regression test for qed aromatic ring count matches rdkit style.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/qed.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_qed_aromatic_ring_count_matches_rdkit_style() {
         let benzene = parse_smiles("c1ccccc1").unwrap();
         assert_eq!(compute_qed_aromatic_ring_count(&benzene), 1);
@@ -692,10 +606,6 @@ mod tests {
     }
 
     #[test]
-    /// Runs regression test for qed matches rdkit cnp0298191.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/qed.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_qed_matches_rdkit_cnp0298191() {
         let mol =
             parse_smiles("CCOCC1=C2/C(=C\\[C@@]3(C)CC[C@](O)(O3)[C@@](C)(O)C[C@H]2OC(C)=O)OC1=O")
@@ -707,10 +617,6 @@ mod tests {
     }
 
     #[test]
-    /// Runs regression test for qed matches rdkit cnp0554779.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/qed.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_qed_matches_rdkit_cnp0554779() {
         let mol = parse_smiles("CC12C=CC(=O)C=C1CCC1C2CCC2(C)C(OC(=O)CCC3CCCC3)CCC12").unwrap();
         assert_eq!(compute_structural_alerts(&mol), 1);
@@ -718,10 +624,6 @@ mod tests {
     }
 
     #[test]
-    /// Runs regression test for qed structural alerts match rdkit cluster cases.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/qed.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_qed_structural_alerts_match_rdkit_cluster_cases() {
         // These molecules were scalar QED parity outliers caused by alert
         // undercounting in pre-screened SMARTS matching.
@@ -757,8 +659,8 @@ mod tests {
     #[test]
     fn test_anthraquinone() {
         use crate::algo::rings::find_sssr;
-        let mut mol = parse_smiles("O=C1C2=CC=CC=C2C(=O)C3=CC=CC=C13").unwrap();
-        let sssr = find_sssr(&mut mol);
+        let mol = parse_smiles("O=C1C2=CC=CC=C2C(=O)C3=CC=CC=C13").unwrap();
+        let sssr = find_sssr(&mol);
         println!("Anthraquinone SSSR length: {}", sssr.len());
     }
 

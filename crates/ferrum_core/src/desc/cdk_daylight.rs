@@ -205,11 +205,10 @@ impl CdkMol {
         }
         for &v in &subset {
             let w = mate[v];
-            if w != u32::MAX && (w as usize) > v {
-                if let Some(bi) = self.bond(v, w as usize) {
+            if w != u32::MAX && (w as usize) > v
+                && let Some(bi) = self.bond(v, w as usize) {
                     self.order[bi] = 2;
                 }
-            }
         }
     }
 
@@ -885,13 +884,10 @@ pub(crate) fn daylight_model_contrib(m: &CdkMol) -> Vec<i32> {
                         -1
                     }
                 }
-                16 => {
-                    if q == 0 && other == 8 {
+                16
+                    if q == 0 && other == 8 => {
                         2
-                    } else {
-                        -1
                     }
-                }
                 _ => -1,
             }
         } else if n_cyclic_pi == 1 {

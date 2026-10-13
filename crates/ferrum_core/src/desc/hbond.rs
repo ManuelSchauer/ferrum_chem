@@ -8,39 +8,6 @@
 //! - Implementing stateless descriptor structs in Rust.
 //! - Mapping chemistry concepts to reproducible numeric features.
 
-//! ## File guide: Hbond
-//!
-//! This file belongs to FerrumChem's **descriptor/fingerprint feature layer**.
-//!
-//! What to learn here:
-//! - Which chemistry/ML concern this file owns in the pipeline.
-//! - How Rust types and control-flow encode that concern.
-//! - Which public symbols are the best entry points for reading/debugging.
-//!
-//! Key symbols in this file:
-//! - `fn compute_hbond_donors`
-//! - `fn compute_hbond_acceptors`
-//! - `struct HBondDonor`
-//! - `fn name`
-//! - `fn calculate`
-//!
-//! Suggested reading workflow:
-//! 1. Read top-level type definitions and public APIs.
-//! 2. Trace helper functions used in hot/critical paths.
-//! 3. Cross-reference tests/examples that exercise this file.
-
-//!
-//! ### Algorithmic assumptions for this file
-//! - `Hbond` assumes molecule preprocessing (implicit hydrogens, aromaticity flags, and ring annotations) is current before calculation.
-//! - `Hbond` remains deterministic for identical atom/bond indexing so batch and single-molecule runs agree bit-for-bit.
-//! - Typed `DescriptorValue` output is part of the contract; downstream ML code should not rely on ad-hoc coercions.
-//! - Specific scope anchor: `crates/ferrum_core/src/desc/hbond.rs` defines hbond behavior and should be updated together with its direct tests.
-//! ### Chemistry/ML references
-//! - Todeschini & Consonni. Handbook of Molecular Descriptors (general descriptor taxonomy).
-//! - RDKit descriptor/fingerprint APIs used as practical parity baselines for `Hbond` workflows.
-//! - Repository unit and parity tests covering `Hbond` behavior and edge molecules.
-//! - Code-local source of truth: symbols and tests declared in `crates/ferrum_core/src/desc/hbond.rs`.
-
 use super::typed::{Descriptor, DescriptorValue};
 use crate::mol::molecule::Molecule;
 
@@ -79,18 +46,10 @@ pub fn compute_hbond_acceptors(mol: &Molecule) -> u32 {
     count_matches(mol, &HBA_SMARTS) as u32
 }
 
-/// Computes hbond donors cached.
-///
-/// Function context: `crates/ferrum_core/src/desc/hbond.rs`.
-/// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
 pub(crate) fn compute_hbond_donors_cached(mol: &Molecule) -> u32 {
     mol.hbond_donor_count_or_init(|| compute_hbond_donors(mol))
 }
 
-/// Computes hbond acceptors cached.
-///
-/// Function context: `crates/ferrum_core/src/desc/hbond.rs`.
-/// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
 pub(crate) fn compute_hbond_acceptors_cached(mol: &Molecule) -> u32 {
     mol.hbond_acceptor_count_or_init(|| compute_hbond_acceptors(mol))
 }
@@ -101,18 +60,10 @@ pub(crate) fn compute_hbond_acceptors_cached(mol: &Molecule) -> u32 {
 pub struct HBondDonor;
 
 impl Descriptor for HBondDonor {
-    /// Implements the behavior encoded by this function.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/hbond.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn name(&self) -> &str {
         "HBondDonor"
     }
 
-    /// Calculates the behavior encoded by this function.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/hbond.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn calculate(
         &self,
         mol: &Molecule,
@@ -128,18 +79,10 @@ impl Descriptor for HBondDonor {
 pub struct HBondAcceptor;
 
 impl Descriptor for HBondAcceptor {
-    /// Implements the behavior encoded by this function.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/hbond.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn name(&self) -> &str {
         "HBondAcceptor"
     }
 
-    /// Calculates the behavior encoded by this function.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/hbond.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn calculate(
         &self,
         mol: &Molecule,
@@ -150,10 +93,6 @@ impl Descriptor for HBondAcceptor {
 }
 
 const _: () = {
-    /// Asserts send sync to guard invariants.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/hbond.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     const fn assert_send_sync<T: Send + Sync>() {}
     let _ = assert_send_sync::<HBondDonor>;
     let _ = assert_send_sync::<HBondAcceptor>;
@@ -167,10 +106,6 @@ mod tests {
     // HBondDonor Tests
 
     #[test]
-    /// Runs regression test for hbond donor water.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/hbond.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_hbond_donor_water() {
         let mol = parse_smiles("O").unwrap();
         // Water O has 2H, Lipinski HBD requires exactly H1 for O
@@ -178,90 +113,54 @@ mod tests {
     }
 
     #[test]
-    /// Runs regression test for hbond donor ammonia.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/hbond.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_hbond_donor_ammonia() {
         let mol = parse_smiles("N").unwrap();
         assert_eq!(compute_hbond_donors(&mol), 1);
     }
 
     #[test]
-    /// Runs regression test for hbond donor ethanol.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/hbond.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_hbond_donor_ethanol() {
         let mol = parse_smiles("CCO").unwrap();
         assert_eq!(compute_hbond_donors(&mol), 1);
     }
 
     #[test]
-    /// Runs regression test for hbond donor urea.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/hbond.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_hbond_donor_urea() {
         let mol = parse_smiles("NC(=O)N").unwrap();
         assert_eq!(compute_hbond_donors(&mol), 2);
     }
 
     #[test]
-    /// Runs regression test for hbond donor methane.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/hbond.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_hbond_donor_methane() {
         let mol = parse_smiles("C").unwrap();
         assert_eq!(compute_hbond_donors(&mol), 0);
     }
 
     #[test]
-    /// Runs regression test for hbond donor acetone.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/hbond.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_hbond_donor_acetone() {
         let mol = parse_smiles("CC(=O)C").unwrap();
         assert_eq!(compute_hbond_donors(&mol), 0);
     }
 
     #[test]
-    /// Runs regression test for hbond donor ethylamine.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/hbond.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_hbond_donor_ethylamine() {
         let mol = parse_smiles("CCN").unwrap();
         assert_eq!(compute_hbond_donors(&mol), 1);
     }
 
     #[test]
-    /// Runs regression test for hbond donor glycine.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/hbond.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_hbond_donor_glycine() {
         let mol = parse_smiles("NCC(=O)O").unwrap();
         assert_eq!(compute_hbond_donors(&mol), 2);
     }
 
     #[test]
-    /// Runs regression test for hbond donor phenol.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/hbond.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_hbond_donor_phenol() {
         let mol = parse_smiles("c1ccc(cc1)O").unwrap();
         assert_eq!(compute_hbond_donors(&mol), 1);
     }
 
     #[test]
-    /// Runs regression test for hbond donor aspirin.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/hbond.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_hbond_donor_aspirin() {
         let mol = parse_smiles("CC(=O)Oc1ccccc1C(=O)O").unwrap();
         assert_eq!(compute_hbond_donors(&mol), 1);
@@ -270,10 +169,6 @@ mod tests {
     // HBondAcceptor Tests (Lipinski definition)
 
     #[test]
-    /// Runs regression test for hbond acceptor water.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/hbond.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_hbond_acceptor_water() {
         let mol = parse_smiles("O").unwrap();
         // Water is not an HBA in Lipinski definition (no heavy-atom neighbor)
@@ -281,40 +176,24 @@ mod tests {
     }
 
     #[test]
-    /// Runs regression test for hbond acceptor ammonia.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/hbond.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_hbond_acceptor_ammonia() {
         let mol = parse_smiles("N").unwrap();
         assert_eq!(compute_hbond_acceptors(&mol), 1);
     }
 
     #[test]
-    /// Runs regression test for hbond acceptor ethanol.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/hbond.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_hbond_acceptor_ethanol() {
         let mol = parse_smiles("CCO").unwrap();
         assert_eq!(compute_hbond_acceptors(&mol), 1);
     }
 
     #[test]
-    /// Runs regression test for hbond acceptor acetone.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/hbond.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_hbond_acceptor_acetone() {
         let mol = parse_smiles("CC(=O)C").unwrap();
         assert_eq!(compute_hbond_acceptors(&mol), 1);
     }
 
     #[test]
-    /// Runs regression test for hbond acceptor urea.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/hbond.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_hbond_acceptor_urea() {
         let mol = parse_smiles("NC(=O)N").unwrap();
         // N-C(=O)-N: the 2 N are v3 but adjacent to C=O → excluded; O is H0,v2 → 1
@@ -322,30 +201,18 @@ mod tests {
     }
 
     #[test]
-    /// Runs regression test for hbond acceptor methane.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/hbond.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_hbond_acceptor_methane() {
         let mol = parse_smiles("C").unwrap();
         assert_eq!(compute_hbond_acceptors(&mol), 0);
     }
 
     #[test]
-    /// Runs regression test for hbond acceptor diethyl ether.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/hbond.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_hbond_acceptor_diethyl_ether() {
         let mol = parse_smiles("CCOCC").unwrap();
         assert_eq!(compute_hbond_acceptors(&mol), 1);
     }
 
     #[test]
-    /// Runs regression test for hbond acceptor glycine.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/hbond.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_hbond_acceptor_glycine() {
         let mol = parse_smiles("NCC(=O)O").unwrap();
         // N(v3) + C=O(H0,v2) = 2 HBA; OH adjacent to C=O excluded
@@ -353,20 +220,12 @@ mod tests {
     }
 
     #[test]
-    /// Runs regression test for hbond acceptor phenol.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/hbond.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_hbond_acceptor_phenol() {
         let mol = parse_smiles("c1ccc(cc1)O").unwrap();
         assert_eq!(compute_hbond_acceptors(&mol), 1);
     }
 
     #[test]
-    /// Runs regression test for hbond acceptor aspirin.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/hbond.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_hbond_acceptor_aspirin() {
         let mol = parse_smiles("CC(=O)Oc1ccccc1C(=O)O").unwrap();
         // 2 C=O (H0,v2) + ester O (H0,v2) = 3; COOH's OH excluded
@@ -374,17 +233,13 @@ mod tests {
     }
 
     #[test]
-    /// Runs regression test for hbond donor descriptor.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/hbond.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_hbond_donor_descriptor() {
-        let mut mol = parse_smiles("CCO").unwrap();
+        let mol = parse_smiles("CCO").unwrap();
         let desc = HBondDonor;
         assert_eq!(desc.name(), "HBondDonor");
         assert_eq!(
             desc.calculate(
-                &mut mol,
+                &mol,
                 &mut crate::desc::context::CalculationContext::new()
             ),
             DescriptorValue::Int(1)
@@ -392,17 +247,13 @@ mod tests {
     }
 
     #[test]
-    /// Runs regression test for hbond acceptor descriptor.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/hbond.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_hbond_acceptor_descriptor() {
-        let mut mol = parse_smiles("CCO").unwrap();
+        let mol = parse_smiles("CCO").unwrap();
         let desc = HBondAcceptor;
         assert_eq!(desc.name(), "HBondAcceptor");
         assert_eq!(
             desc.calculate(
-                &mut mol,
+                &mol,
                 &mut crate::desc::context::CalculationContext::new()
             ),
             DescriptorValue::Int(1)

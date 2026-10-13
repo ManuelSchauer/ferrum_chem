@@ -16,38 +16,6 @@
 //!
 //! Reference: Moreau, G. & Broto, P. (1980) Nouv. J. Chim. 4, 359-360.
 
-//! ## File guide: Autocorrelation
-//!
-//! This file belongs to FerrumChem's **descriptor/fingerprint feature layer**.
-//!
-//! What to learn here:
-//! - Which chemistry/ML concern this file owns in the pipeline.
-//! - How Rust types and control-flow encode that concern.
-//! - Which public symbols are the best entry points for reading/debugging.
-//!
-//! Key symbols in this file:
-//! - `fn cdk_ats` / `fn mordred_ats`
-//! - `struct Autocorrelation`
-//! - `fn name`
-//! - `fn calculate`
-//!
-//! Suggested reading workflow:
-//! 1. Read top-level type definitions and public APIs.
-//! 2. Trace helper functions used in hot/critical paths.
-//! 3. Cross-reference tests/examples that exercise this file.
-
-//!
-//! ### Algorithmic assumptions for this file
-//! - `Autocorrelation` assumes molecule preprocessing (implicit hydrogens, aromaticity flags, and ring annotations) is current before calculation.
-//! - `Autocorrelation` remains deterministic for identical atom/bond indexing so batch and single-molecule runs agree bit-for-bit.
-//! - Typed `DescriptorValue` output is part of the contract; downstream ML code should not rely on ad-hoc coercions.
-//! - Specific scope anchor: `crates/ferrum_core/src/desc/autocorrelation.rs` defines autocorrelation behavior and should be updated together with its direct tests.
-//! ### Chemistry/ML references
-//! - Todeschini & Consonni. Handbook of Molecular Descriptors (general descriptor taxonomy).
-//! - RDKit descriptor/fingerprint APIs used as practical parity baselines for `Autocorrelation` workflows.
-//! - Repository unit and parity tests covering `Autocorrelation` behavior and edge molecules.
-//! - Code-local source of truth: symbols and tests declared in `crates/ferrum_core/src/desc/autocorrelation.rs`.
-
 use super::cdk_perception::{CdkView, NATURAL_MASS};
 use super::mordred_data::{MORDRED_PAULING_EN, MORDRED_VDW_VOLUME};
 use super::typed::{Descriptor, DescriptorValue};
@@ -225,9 +193,9 @@ fn autocorrelation_values(mol: &Molecule, view: &CdkView, ctx: &mut crate::desc:
     };
 
     for k in 0..CDK_LAGS {
-        values[k] = ats_m[k] as f64;
-        values[CDK_LAGS + k] = ats_p[k] as f64;
-        values[2 * CDK_LAGS + k] = ats_c[k] as f64;
+        values[k] = ats_m[k];
+        values[CDK_LAGS + k] = ats_p[k];
+        values[2 * CDK_LAGS + k] = ats_c[k];
     }
 
     // Mordred ATS{0..8}pe / ATS{0..8}v.
@@ -245,9 +213,9 @@ mod tests {
     use crate::io::smiles::parse_smiles;
 
     fn calc_ats(smiles: &str) -> Vec<f64> {
-        let mut mol = parse_smiles(smiles).expect("valid SMILES");
+        let mol = parse_smiles(smiles).expect("valid SMILES");
         match Autocorrelation.calculate(
-            &mut mol,
+            &mol,
             &mut crate::desc::context::CalculationContext::new(),
         ) {
             DescriptorValue::FloatVec(v) => v,
@@ -256,7 +224,7 @@ mod tests {
     }
 
     fn close(a: f64, b: f64) -> bool {
-        (a as f64 - b).abs() <= 1e-4 + 1e-5 * b.abs()
+        (a - b).abs() <= 1e-4 + 1e-5 * b.abs()
     }
 
     #[test]

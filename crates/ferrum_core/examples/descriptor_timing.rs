@@ -39,18 +39,18 @@ fn main() {
     for line in reader.lines() {
         let line = line.expect("read error");
         let t = Instant::now();
-        let Ok(mut mol) = parse_smiles(&line) else { continue };
+        let Ok(mol) = parse_smiles(&line) else { continue };
         parse += t.elapsed();
         n += 1;
         ctx.reset_for_new_molecule();
         for (i, d) in descriptors.iter().enumerate() {
             let t = Instant::now();
-            std::hint::black_box(d.calculate(&mut mol, &mut ctx));
+            std::hint::black_box(d.calculate(&mol, &mut ctx));
             let dt = t.elapsed();
             times[i] += dt;
             if slowest.len() < 10 || dt > slowest[slowest.len() - 1].0 {
                 slowest.push((dt, d.name(), line.clone()));
-                slowest.sort_by(|a, b| b.0.cmp(&a.0));
+                slowest.sort_by_key(|s| std::cmp::Reverse(s.0));
                 slowest.truncate(10);
             }
         }

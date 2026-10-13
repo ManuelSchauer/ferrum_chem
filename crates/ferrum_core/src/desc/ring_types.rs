@@ -5,57 +5,16 @@
 //! - Aliphatic rings: non-aromatic
 //! - Aromatic rings: marked as aromatic
 
-//! ## File guide: Ring Types
-//!
-//! This file belongs to FerrumChem's **descriptor/fingerprint feature layer**.
-//!
-//! What to learn here:
-//! - Which chemistry/ML concern this file owns in the pipeline.
-//! - How Rust types and control-flow encode that concern.
-//! - Which public symbols are the best entry points for reading/debugging.
-//!
-//! Key symbols in this file:
-//! - `fn ring_bonds_all_single`
-//! - `fn ring_bonds_all_aromatic`
-//! - `fn num_saturated_rings`
-//! - `fn num_aliphatic_rings`
-//! - `fn num_aromatic_rings`
-//!
-//! Suggested reading workflow:
-//! 1. Read top-level type definitions and public APIs.
-//! 2. Trace helper functions used in hot/critical paths.
-//! 3. Cross-reference tests/examples that exercise this file.
-
-//!
-//! ### Algorithmic assumptions for this file
-//! - `Ring Types` assumes molecule preprocessing (implicit hydrogens, aromaticity flags, and ring annotations) is current before calculation.
-//! - `Ring Types` remains deterministic for identical atom/bond indexing so batch and single-molecule runs agree bit-for-bit.
-//! - Typed `DescriptorValue` output is part of the contract; downstream ML code should not rely on ad-hoc coercions.
-//! - Specific scope anchor: `crates/ferrum_core/src/desc/ring_types.rs` defines ring types behavior and should be updated together with its direct tests.
-//! ### Chemistry/ML references
-//! - Todeschini & Consonni. Handbook of Molecular Descriptors (general descriptor taxonomy).
-//! - RDKit descriptor/fingerprint APIs used as practical parity baselines for `Ring Types` workflows.
-//! - Repository unit and parity tests covering `Ring Types` behavior and edge molecules.
-//! - Code-local source of truth: symbols and tests declared in `crates/ferrum_core/src/desc/ring_types.rs`.
-
 use crate::algo::rings::{cached_symmetrized_sssr_bonds_ref, ensure_symmetrized_sssr_bonds_cached};
 use crate::desc::typed::{Descriptor, DescriptorValue};
 use crate::mol::molecule::Molecule;
 use crate::types::BondType;
 
-/// Implements bonds all single.
-///
-/// Function context: `crates/ferrum_core/src/desc/ring_types.rs`.
-/// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
 fn ring_bonds_all_single(mol: &Molecule, ring: &[u16]) -> bool {
     ring.iter()
         .all(|&bond_idx| mol.bonds[bond_idx as usize].bond_type == BondType::Single)
 }
 
-/// Implements bonds all aromatic.
-///
-/// Function context: `crates/ferrum_core/src/desc/ring_types.rs`.
-/// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
 fn ring_bonds_all_aromatic(mol: &Molecule, ring: &[u16]) -> bool {
     ring.iter()
         .all(|&bond_idx| mol.bonds[bond_idx as usize].is_aromatic())
@@ -121,143 +80,6 @@ pub fn num_aromatic_rings(mol: &Molecule) -> u32 {
         .count() as u32
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::io::smiles::parse_smiles;
-
-    /// Parses the behavior encoded by this function.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/ring_types.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-    fn parse(smiles: &str) -> Molecule {
-        parse_smiles(smiles).unwrap()
-    }
-
-    #[test]
-    /// Runs regression test for saturated cyclohexane.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/ring_types.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-    fn test_saturated_cyclohexane() {
-        let mut mol = parse("C1CCCCC1");
-        assert_eq!(num_saturated_rings(&mut mol), 1);
-        assert_eq!(num_aliphatic_rings(&mut mol), 1);
-        assert_eq!(num_aromatic_rings(&mut mol), 0);
-    }
-
-    #[test]
-    /// Runs regression test for aromatic benzene.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/ring_types.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-    fn test_aromatic_benzene() {
-        let mut mol = parse("c1ccccc1");
-        assert_eq!(num_saturated_rings(&mut mol), 0);
-        assert_eq!(num_aliphatic_rings(&mut mol), 0);
-        assert_eq!(num_aromatic_rings(&mut mol), 1);
-    }
-
-    #[test]
-    /// Runs regression test for cyclohexene.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/ring_types.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-    fn test_cyclohexene() {
-        let mut mol = parse("C1=CCCCC1");
-        assert_eq!(num_saturated_rings(&mut mol), 0); // Has double bond
-        assert_eq!(num_aliphatic_rings(&mut mol), 1); // Not aromatic
-        assert_eq!(num_aromatic_rings(&mut mol), 0);
-    }
-
-    #[test]
-    /// Runs regression test for naphthalene.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/ring_types.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-    fn test_naphthalene() {
-        let mut mol = parse("c1ccc2ccccc2c1");
-        assert_eq!(num_saturated_rings(&mut mol), 0);
-        assert_eq!(num_aliphatic_rings(&mut mol), 0);
-        assert_eq!(num_aromatic_rings(&mut mol), 2); // Two fused aromatic rings
-    }
-
-    #[test]
-    /// Runs regression test for pyridine.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/ring_types.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-    fn test_pyridine() {
-        let mut mol = parse("c1ccncc1");
-        assert_eq!(num_saturated_rings(&mut mol), 0);
-        assert_eq!(num_aliphatic_rings(&mut mol), 0);
-        assert_eq!(num_aromatic_rings(&mut mol), 1);
-    }
-
-    #[test]
-    /// Runs regression test for decalin.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/ring_types.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-    fn test_decalin() {
-        // Two fused saturated rings
-        let mut mol = parse("C1CCC2CCCCC2C1");
-        assert_eq!(num_saturated_rings(&mut mol), 2);
-        assert_eq!(num_aliphatic_rings(&mut mol), 2);
-        assert_eq!(num_aromatic_rings(&mut mol), 0);
-    }
-
-    #[test]
-    /// Runs regression test for cubane uses symmetrized ring count.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/ring_types.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-    fn test_cubane_uses_symmetrized_ring_count() {
-        let mut mol = parse("C12C3C4C1C5C2C3C45");
-        assert_eq!(num_saturated_rings(&mut mol), 6);
-        assert_eq!(num_aliphatic_rings(&mut mol), 6);
-        assert_eq!(num_aromatic_rings(&mut mol), 0);
-    }
-
-    #[test]
-    /// Runs regression test for adamantane uses symmetrized ring count.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/ring_types.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-    fn test_adamantane_uses_symmetrized_ring_count() {
-        let mut mol = parse("C1C2CC3CC1CC(C2)C3");
-        assert_eq!(num_saturated_rings(&mut mol), 4);
-        assert_eq!(num_aliphatic_rings(&mut mol), 4);
-        assert_eq!(num_aromatic_rings(&mut mol), 0);
-    }
-
-    #[test]
-    /// Runs regression test for acyclic.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/ring_types.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-    fn test_acyclic() {
-        let mut mol = parse("CCCCCC"); // Hexane
-        assert_eq!(num_saturated_rings(&mut mol), 0);
-        assert_eq!(num_aliphatic_rings(&mut mol), 0);
-        assert_eq!(num_aromatic_rings(&mut mol), 0);
-    }
-
-    #[test]
-    /// Runs regression test for rdkit like ring counts for fused heterocycle.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/ring_types.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-    fn test_rdkit_like_ring_counts_for_fused_heterocycle() {
-        let mut mol = parse(
-            "CC1=CC2=C(C=C1C)N(C[C@H](O)[C@H](O)[C@H](O)COP(=O)(O)OP(=O)(O)OC[C@H]1O[C@@H](N3C=NC4=C(N)N=CN=C43)[C@H](O)[C@@H]1O)C1=NC(=O)N=C(O)C1=N2",
-        );
-        assert_eq!(num_saturated_rings(&mut mol), 1);
-        assert_eq!(num_aliphatic_rings(&mut mol), 3);
-        assert_eq!(num_aromatic_rings(&mut mol), 3);
-    }
-}
-
 // ===========================================================================
 // Typed API: Ring Types
 // ===========================================================================
@@ -271,18 +93,10 @@ mod tests {
 pub struct RingTypeCounts;
 
 impl Descriptor for RingTypeCounts {
-    /// Implements the behavior encoded by this function.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/ring_types.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn name(&self) -> &str {
         "RingTypeCounts"
     }
 
-    /// Calculates the behavior encoded by this function.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/ring_types.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn calculate(
         &self,
         mol: &Molecule,
@@ -315,10 +129,99 @@ impl Descriptor for RingTypeCounts {
 }
 
 const _: () = {
-    /// Asserts send sync to guard invariants.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/ring_types.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     const fn assert_send_sync<T: Send + Sync>() {}
     let _ = assert_send_sync::<RingTypeCounts>;
 };
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::io::smiles::parse_smiles;
+
+    fn parse(smiles: &str) -> Molecule {
+        parse_smiles(smiles).unwrap()
+    }
+
+    #[test]
+    fn test_saturated_cyclohexane() {
+        let mol = parse("C1CCCCC1");
+        assert_eq!(num_saturated_rings(&mol), 1);
+        assert_eq!(num_aliphatic_rings(&mol), 1);
+        assert_eq!(num_aromatic_rings(&mol), 0);
+    }
+
+    #[test]
+    fn test_aromatic_benzene() {
+        let mol = parse("c1ccccc1");
+        assert_eq!(num_saturated_rings(&mol), 0);
+        assert_eq!(num_aliphatic_rings(&mol), 0);
+        assert_eq!(num_aromatic_rings(&mol), 1);
+    }
+
+    #[test]
+    fn test_cyclohexene() {
+        let mol = parse("C1=CCCCC1");
+        assert_eq!(num_saturated_rings(&mol), 0); // Has double bond
+        assert_eq!(num_aliphatic_rings(&mol), 1); // Not aromatic
+        assert_eq!(num_aromatic_rings(&mol), 0);
+    }
+
+    #[test]
+    fn test_naphthalene() {
+        let mol = parse("c1ccc2ccccc2c1");
+        assert_eq!(num_saturated_rings(&mol), 0);
+        assert_eq!(num_aliphatic_rings(&mol), 0);
+        assert_eq!(num_aromatic_rings(&mol), 2); // Two fused aromatic rings
+    }
+
+    #[test]
+    fn test_pyridine() {
+        let mol = parse("c1ccncc1");
+        assert_eq!(num_saturated_rings(&mol), 0);
+        assert_eq!(num_aliphatic_rings(&mol), 0);
+        assert_eq!(num_aromatic_rings(&mol), 1);
+    }
+
+    #[test]
+    fn test_decalin() {
+        // Two fused saturated rings
+        let mol = parse("C1CCC2CCCCC2C1");
+        assert_eq!(num_saturated_rings(&mol), 2);
+        assert_eq!(num_aliphatic_rings(&mol), 2);
+        assert_eq!(num_aromatic_rings(&mol), 0);
+    }
+
+    #[test]
+    fn test_cubane_uses_symmetrized_ring_count() {
+        let mol = parse("C12C3C4C1C5C2C3C45");
+        assert_eq!(num_saturated_rings(&mol), 6);
+        assert_eq!(num_aliphatic_rings(&mol), 6);
+        assert_eq!(num_aromatic_rings(&mol), 0);
+    }
+
+    #[test]
+    fn test_adamantane_uses_symmetrized_ring_count() {
+        let mol = parse("C1C2CC3CC1CC(C2)C3");
+        assert_eq!(num_saturated_rings(&mol), 4);
+        assert_eq!(num_aliphatic_rings(&mol), 4);
+        assert_eq!(num_aromatic_rings(&mol), 0);
+    }
+
+    #[test]
+    fn test_acyclic() {
+        let mol = parse("CCCCCC"); // Hexane
+        assert_eq!(num_saturated_rings(&mol), 0);
+        assert_eq!(num_aliphatic_rings(&mol), 0);
+        assert_eq!(num_aromatic_rings(&mol), 0);
+    }
+
+    #[test]
+    fn test_rdkit_like_ring_counts_for_fused_heterocycle() {
+        let mol = parse(
+            "CC1=CC2=C(C=C1C)N(C[C@H](O)[C@H](O)[C@H](O)COP(=O)(O)OP(=O)(O)OC[C@H]1O[C@@H](N3C=NC4=C(N)N=CN=C43)[C@H](O)[C@@H]1O)C1=NC(=O)N=C(O)C1=N2",
+        );
+        assert_eq!(num_saturated_rings(&mol), 1);
+        assert_eq!(num_aliphatic_rings(&mol), 3);
+        assert_eq!(num_aromatic_rings(&mol), 3);
+    }
+}

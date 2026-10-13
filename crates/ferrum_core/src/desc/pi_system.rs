@@ -9,39 +9,6 @@
 //! - Aromatic stability
 //! - Reactivity prediction
 
-//! ## File guide: Pi System
-//!
-//! This file belongs to FerrumChem's **descriptor/fingerprint feature layer**.
-//!
-//! What to learn here:
-//! - Which chemistry/ML concern this file owns in the pipeline.
-//! - How Rust types and control-flow encode that concern.
-//! - Which public symbols are the best entry points for reading/debugging.
-//!
-//! Key symbols in this file:
-//! - `fn is_pi_atom`
-//! - `fn dfs_pi_system`
-//! - `struct PiSystemCounts`
-//! - `fn name`
-//! - `fn calculate`
-//!
-//! Suggested reading workflow:
-//! 1. Read top-level type definitions and public APIs.
-//! 2. Trace helper functions used in hot/critical paths.
-//! 3. Cross-reference tests/examples that exercise this file.
-
-//!
-//! ### Algorithmic assumptions for this file
-//! - `Pi System` assumes molecule preprocessing (implicit hydrogens, aromaticity flags, and ring annotations) is current before calculation.
-//! - `Pi System` remains deterministic for identical atom/bond indexing so batch and single-molecule runs agree bit-for-bit.
-//! - Typed `DescriptorValue` output is part of the contract; downstream ML code should not rely on ad-hoc coercions.
-//! - Specific scope anchor: `crates/ferrum_core/src/desc/pi_system.rs` defines pi system behavior and should be updated together with its direct tests.
-//! ### Chemistry/ML references
-//! - Todeschini & Consonni. Handbook of Molecular Descriptors (general descriptor taxonomy).
-//! - RDKit descriptor/fingerprint APIs used as practical parity baselines for `Pi System` workflows.
-//! - Repository unit and parity tests covering `Pi System` behavior and edge molecules.
-//! - Code-local source of truth: symbols and tests declared in `crates/ferrum_core/src/desc/pi_system.rs`.
-
 use super::typed::{Descriptor, DescriptorValue};
 use crate::mol::molecule::Molecule;
 use crate::types::{AtomIdx, BondType};
@@ -109,18 +76,10 @@ fn dfs_pi_system(
 pub struct PiSystemCounts;
 
 impl Descriptor for PiSystemCounts {
-    /// Implements the behavior encoded by this function.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/pi_system.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn name(&self) -> &str {
         "PiSystemCounts"
     }
 
-    /// Calculates the behavior encoded by this function.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/pi_system.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn calculate(
         &self,
         mol: &Molecule,
@@ -234,10 +193,6 @@ pub(crate) fn cdk_largest_pi_system(mol: &Molecule) -> u32 {
 }
 
 const _: () = {
-    /// Asserts send sync to guard invariants.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/pi_system.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     const fn assert_send_sync<T: Send + Sync>() {}
     let _ = assert_send_sync::<PiSystemCounts>;
     let _ = assert_send_sync::<LargestPiSystem>;
@@ -283,22 +238,18 @@ mod tests {
 
     #[test]
     fn test_largest_pi_system_descriptor() {
-        let mut mol = parse_and_prepare("c1ccccc1");
+        let mol = parse_and_prepare("c1ccccc1");
         assert_eq!(
-            LargestPiSystem.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()),
+            LargestPiSystem.calculate(&mol, &mut crate::desc::context::CalculationContext::new()),
             DescriptorValue::Int(6)
         );
     }
 
     #[test]
-    /// Runs regression test for pi system counts benzene.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/pi_system.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_pi_system_counts_benzene() {
-        let mut mol = parse_and_prepare("c1ccccc1");
+        let mol = parse_and_prepare("c1ccccc1");
         let value = PiSystemCounts.calculate(
-            &mut mol,
+            &mol,
             &mut crate::desc::context::CalculationContext::new(),
         );
         match value {
@@ -311,10 +262,6 @@ mod tests {
     }
 
     #[test]
-    /// Runs regression test for descriptor names.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/pi_system.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_descriptor_names() {
         assert_eq!(LargestPiSystem.name(), "LargestPiSystem");
         assert_eq!(PiSystemCounts.name(), "PiSystemCounts");

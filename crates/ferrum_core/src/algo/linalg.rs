@@ -156,7 +156,7 @@ pub fn extreme_eigenvalues_pair(
     for i in 0..n {
         let row = &mut buf[2 * i * n..2 * i * n + 2 * (i + 1)];
         for ((dst, &x), &y) in row
-            .chunks_exact_mut(2)
+            .as_chunks_mut::<2>().0.iter_mut()
             .zip(&a[i * n..i * n + i + 1])
             .zip(&b[i * n..i * n + i + 1])
         {
@@ -307,7 +307,7 @@ pub fn burden_extremes(n: usize, jobs: &[BurdenMatrix]) -> Vec<(f64, f64)> {
             if let [m0, m1] = chunk {
                 for i in 0..n {
                     let row = &mut buf[2 * i * n..2 * i * n + 2 * (i + 1)];
-                    for c in row.chunks_exact_mut(2) {
+                    for c in row.as_chunks_mut::<2>().0 {
                         c[0] = m0.fill;
                         c[1] = m1.fill;
                     }
@@ -1156,7 +1156,7 @@ mod tests {
                 let mut a = vec![0.001f64; n * n];
                 for i in 1..n {
                     let j = (lcg(&mut st) * i as f64) as usize;
-                    let w = [0.1, 0.15, 0.2, 0.3, 1.0, 0.7071][(lcg(&mut st) * 6.0) as usize];
+                    let w = [0.1, 0.15, 0.2, 0.3, 1.0, 0.7][(lcg(&mut st) * 6.0) as usize];
                     a[i * n + j] = w;
                     a[j * n + i] = w;
                 }

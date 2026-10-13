@@ -128,7 +128,7 @@ impl FingerprintBlock {
     /// (`numpy.packbits(..., bitorder="little")` layout).
     pub fn to_bytes(&self) -> Vec<u8> {
         let bpr = self.bytes_per_row();
-        let rows = if self.words_per_row == 0 { 0 } else { self.data.len() / self.words_per_row };
+        let rows = self.data.len().checked_div(self.words_per_row).unwrap_or(0);
         let mut out = Vec::with_capacity(rows * bpr);
         for r in 0..rows {
             out.extend(self.row(r).iter().flat_map(|w| w.to_le_bytes()).take(bpr));
@@ -488,9 +488,9 @@ mod tests {
         assert_eq!(ecfp.words_per_row, 32);
 
         // same bits as the descriptor itself
-        let mut mol = parse_smiles("c1ccccc1O").unwrap();
+        let mol = parse_smiles("c1ccccc1O").unwrap();
         let mut ctx = CalculationContext::new();
-        let expected: Vec<usize> = BatchDescriptor::MaccsKeys.calculate(&mut mol, &mut ctx).as_binary().iter_ones().collect();
+        let expected: Vec<usize> = BatchDescriptor::MaccsKeys.calculate(&mol, &mut ctx).as_binary().iter_ones().collect();
         assert!(!expected.is_empty());
         assert_eq!(maccs.on_bits(0).collect::<Vec<_>>(), expected);
         assert_eq!(maccs.count_ones(0) as usize, expected.len());
@@ -566,9 +566,9 @@ mod tests {
         ];
         let mut ctx = CalculationContext::new();
         for s in torture {
-            let mut mol = parse_smiles(s).unwrap();
+            let mol = parse_smiles(s).unwrap();
             for &d in BatchDescriptor::all() {
-                assert_eq!(d.calculate(&mut mol, &mut ctx).len(), d.feature_len(), "{} on {s}", d.name());
+                assert_eq!(d.calculate(&mol, &mut ctx).len(), d.feature_len(), "{} on {s}", d.name());
             }
         }
         let t = table_for(&torture, BatchDescriptor::all());

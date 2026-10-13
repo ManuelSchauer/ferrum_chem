@@ -110,9 +110,9 @@ mod tests {
             ("C12C3C4C1C5C2C3C45", 6),
             ("C1CCCCC1.C1CC1", 2),
         ] {
-            let mut mol = parse_smiles(smiles).unwrap();
+            let mol = parse_smiles(smiles).unwrap();
             assert_eq!(count_rings(&mol), n, "{smiles}");
-            assert_eq!(find_sssr(&mut mol).len(), n, "{smiles}");
+            assert_eq!(find_sssr(&mol).len(), n, "{smiles}");
             assert_eq!(find_symmetrized_sssr_bonds(&mol).len(), n, "{smiles}");
         }
     }

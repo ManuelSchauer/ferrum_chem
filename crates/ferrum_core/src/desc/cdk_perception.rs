@@ -441,11 +441,10 @@ impl Env<'_> {
             }
             -1 => {
                 if maxo == 1 && deg <= 3 {
-                    if self.both_neighbors_sp2(a) && self.ring(a) {
-                        if let Some(t) = self.ok(a, &C_MINUS_PLANAR) {
+                    if self.both_neighbors_sp2(a) && self.ring(a)
+                        && let Some(t) = self.ok(a, &C_MINUS_PLANAR) {
                             return Some(t);
                         }
-                    }
                     return self.ok(a, &C_MINUS_SP3);
                 } else if maxo == 2 && deg <= 3 {
                     return self.ok(a, &C_MINUS_SP2);
@@ -473,11 +472,9 @@ impl Env<'_> {
                 if self.mol.adjacency[a]
                     .iter()
                     .any(|&b| self.mol.bonds[b as usize].is_aromatic())
-                {
-                    if let Some(t) = self.ok(a, &C_SP2) {
+                    && let Some(t) = self.ok(a, &C_SP2) {
                         return Some(t);
                     }
-                }
                 self.ok(a, &C_SP3)
             }
             _ => None,
@@ -497,11 +494,10 @@ impl Env<'_> {
             }
             -2 if deg == 0 => return self.ok(a, &O_MINUS2),
             1 => {
-                if deg == 0 {
-                    if let Some(t) = self.ok(a, &O_PLUS) {
+                if deg == 0
+                    && let Some(t) = self.ok(a, &O_PLUS) {
                         return Some(t);
                     }
-                }
                 return match self.max_order(a) {
                     2 => self.ok(a, &O_PLUS_SP2),
                     3 => self.ok(a, &O_PLUS_SP1),
@@ -529,11 +525,10 @@ impl Env<'_> {
                     .iter()
                     .filter(|&&b| self.mol.atoms[other(self.mol, b as usize, a)].atomic_number == 1)
                     .count();
-                if deg - n_h == 2 && self.both_neighbors_sp2(a) && self.ring(a) {
-                    if let Some(t) = self.ok(a, &O_PLANAR3) {
+                if deg - n_h == 2 && self.both_neighbors_sp2(a) && self.ring(a)
+                    && let Some(t) = self.ok(a, &O_PLANAR3) {
                         return Some(t);
                     }
-                }
                 self.ok(a, &O_SP3)
             }
             _ => None,
@@ -587,11 +582,10 @@ impl Env<'_> {
                     if let Some(t) = self.ok(a, &N_AMIDE) {
                         return Some(t);
                     }
-                } else if self.is_amide(a, 16) {
-                    if let Some(t) = self.ok(a, &N_THIOAMIDE) {
+                } else if self.is_amide(a, 16)
+                    && let Some(t) = self.ok(a, &N_THIOAMIDE) {
                         return Some(t);
                     }
-                }
                 match deg {
                     2 => {
                         let arom = self.mol.adjacency[a]
@@ -616,11 +610,10 @@ impl Env<'_> {
                         }
                     }
                     3 => {
-                        if self.both_neighbors_sp2(a) && self.ring(a) {
-                            if let Some(t) = self.ok(a, &N_PLANAR3) {
+                        if self.both_neighbors_sp2(a) && self.ring(a)
+                            && let Some(t) = self.ok(a, &N_PLANAR3) {
                                 return Some(t);
                             }
-                        }
                         self.ok(a, &N_SP3)
                     }
                     _ => self.ok(a, &N_SP3),
@@ -631,11 +624,10 @@ impl Env<'_> {
                     if let Some(t) = self.ok(a, &N_NITRO) {
                         return Some(t);
                     }
-                } else if deg == 3 && self.has_double(a) {
-                    if let Some(t) = self.ok(a, &N_SP2_3) {
+                } else if deg == 3 && self.has_double(a)
+                    && let Some(t) = self.ok(a, &N_SP2_3) {
                         return Some(t);
                     }
-                }
                 self.ok(a, &N_SP2)
             }
             3 => {
@@ -728,11 +720,10 @@ impl Env<'_> {
         match self.charge[a] {
             1 if deg <= 4 => self.ok(a, &AS_PLUS),
             0 => {
-                if deg == 4 {
-                    if let Some(t) = self.ok(a, &AS_5) {
+                if deg == 4
+                    && let Some(t) = self.ok(a, &AS_5) {
                         return Some(t);
                     }
-                }
                 if deg == 2 {
                     match self.max_order(a) {
                         2 => {

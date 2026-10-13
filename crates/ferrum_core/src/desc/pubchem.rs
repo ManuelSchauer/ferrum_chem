@@ -252,9 +252,9 @@ mod tests {
 
     #[test]
     fn size_is_881() {
-        let mut mol = parse_smiles("C").unwrap();
+        let mol = parse_smiles("C").unwrap();
         let fp = PubChem881.calculate(
-            &mut mol,
+            &mol,
             &mut crate::desc::context::CalculationContext::new(),
         );
         assert_eq!(fp.as_binary().len(), 881);

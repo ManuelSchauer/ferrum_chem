@@ -25,6 +25,18 @@
 //! - compute descriptors (`desc::Descriptor`)
 //! - convert to vectors / flat batch matrices (`desc::build_ml_vector` / batch APIs)
 
+// Much of this crate is a line-by-line port of RDKit (C++) and CDK (Java)
+// algorithms; keeping their structure (index loops over parallel arrays,
+// separate if/else branches with equal bodies, wide argument lists) makes the
+// ports reviewable against the originals.
+#![allow(
+    clippy::needless_range_loop,
+    clippy::if_same_then_else,
+    clippy::too_many_arguments,
+    clippy::type_complexity,
+    clippy::enum_variant_names
+)]
+
 pub mod algo;
 pub mod desc;
 pub mod error;

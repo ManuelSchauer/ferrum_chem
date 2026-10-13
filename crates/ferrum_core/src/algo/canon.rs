@@ -8,39 +8,6 @@
 //! - Graph traversal and indexing patterns over atom/bond adjacency.
 //! - Performance-oriented Rust design in numerically heavy code paths.
 
-//! ## File guide: Canon
-//!
-//! This file belongs to FerrumChem's **cheminformatics algorithm layer**.
-//!
-//! What to learn here:
-//! - Which chemistry/ML concern this file owns in the pipeline.
-//! - How Rust types and control-flow encode that concern.
-//! - Which public symbols are the best entry points for reading/debugging.
-//!
-//! Key symbols in this file:
-//! - `fn rank_atoms`
-//! - `fn reorder_molecule`
-//! - `mod tests`
-//! - `fn test_rank_atoms_methane`
-//! - `fn test_rank_atoms_ethane`
-//!
-//! Suggested reading workflow:
-//! 1. Read top-level type definitions and public APIs.
-//! 2. Trace helper functions used in hot/critical paths.
-//! 3. Cross-reference tests/examples that exercise this file.
-
-//!
-//! ### Algorithmic assumptions for this file
-//! - `Canon` operates on 2D molecular graphs (atoms/bonds) and does not consume conformer geometry.
-//! - `Canon` relies on stable `AtomIdx`/`BondIdx` semantics and adjacency invariants from `mol::molecule`.
-//! - Performance paths in `Canon` prefer deterministic pruning/caching over probabilistic heuristics.
-//! - Specific scope anchor: `crates/ferrum_core/src/algo/canon.rs` defines canon behavior and should be updated together with its direct tests.
-//! ### Chemistry/ML references
-//! - Core graph algorithm literature relevant to `Canon` (traversal, cycle, isomorphism, or canonicalization topics).
-//! - Cheminformatics toolkit conventions (RDKit/CDK/OpenBabel) mirrored by `Canon` decisions.
-//! - FerrumChem regression tests that pin `Canon` behavior on representative molecules.
-//! - Code-local source of truth: symbols and tests declared in `crates/ferrum_core/src/algo/canon.rs`.
-
 use crate::mol::molecule::Molecule;
 
 /// Morgan algorithm for atom ranking.
@@ -126,13 +93,13 @@ pub fn reorder_molecule(mol: Molecule, new_order: &[usize]) -> Molecule {
     // Reorder atoms
     let mut new_atoms = Vec::with_capacity(n);
     for &old_i in &perm {
-        new_atoms.push(mol.atoms[old_i].clone());
+        new_atoms.push(mol.atoms[old_i]);
     }
 
     // Remap bonds
     let mut new_bonds = Vec::with_capacity(mol.bonds.len());
     for b in &mol.bonds {
-        let mut nb = b.clone();
+        let mut nb = *b;
         nb.source = inv[b.source as usize] as u16;
         nb.target = inv[b.target as usize] as u16;
         new_bonds.push(nb);
@@ -154,10 +121,6 @@ mod tests {
     use crate::io::smiles::parse_smiles;
 
     #[test]
-    /// Runs regression test for rank atoms methane.
-    ///
-    /// Function context: `crates/ferrum_core/src/algo/canon.rs`.
-    /// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
     fn test_rank_atoms_methane() {
         let mol = parse_smiles("C").unwrap();
         let ranks = rank_atoms(&mol);
@@ -165,10 +128,6 @@ mod tests {
     }
 
     #[test]
-    /// Runs regression test for rank atoms ethane.
-    ///
-    /// Function context: `crates/ferrum_core/src/algo/canon.rs`.
-    /// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
     fn test_rank_atoms_ethane() {
         let mol = parse_smiles("CC").unwrap();
         let ranks = rank_atoms(&mol);
@@ -176,10 +135,6 @@ mod tests {
     }
 
     #[test]
-    /// Runs regression test for rank atoms propane.
-    ///
-    /// Function context: `crates/ferrum_core/src/algo/canon.rs`.
-    /// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
     fn test_rank_atoms_propane() {
         let mol = parse_smiles("CCC").unwrap();
         let ranks = rank_atoms(&mol);
@@ -189,10 +144,6 @@ mod tests {
     }
 
     #[test]
-    /// Runs regression test for rank atoms ethanol.
-    ///
-    /// Function context: `crates/ferrum_core/src/algo/canon.rs`.
-    /// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
     fn test_rank_atoms_ethanol() {
         let mol = parse_smiles("CCO").unwrap();
         let ranks = rank_atoms(&mol);
@@ -203,10 +154,6 @@ mod tests {
     }
 
     #[test]
-    /// Runs regression test for reorder preserves structure.
-    ///
-    /// Function context: `crates/ferrum_core/src/algo/canon.rs`.
-    /// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
     fn test_reorder_preserves_structure() {
         let mol = parse_smiles("CCO").unwrap();
         let ranks = rank_atoms(&mol);
@@ -220,10 +167,6 @@ mod tests {
     }
 
     #[test]
-    /// Runs regression test for reorder benzene.
-    ///
-    /// Function context: `crates/ferrum_core/src/algo/canon.rs`.
-    /// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
     fn test_reorder_benzene() {
         let mol = parse_smiles("c1ccccc1").unwrap();
         let ranks = rank_atoms(&mol);

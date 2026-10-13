@@ -72,17 +72,13 @@ fn write_smiles_with_order(mol: &Molecule, order: Option<&[usize]>) -> String {
             if !out.is_empty() {
                 out.push('.');
             }
-            write_tree(mol, start_atom, None, &tree_edges, &node_ring_closures, &mut out, order);
+            write_tree(mol, start_atom, None, &tree_edges, &node_ring_closures, &mut out);
         }
     }
 
     out
 }
 
-/// Implements build spanning tree.
-///
-/// Function context: `crates/ferrum_core/src/io/smiles_writer.rs`.
-/// I/O-layer note: parsing/ingestion should surface explicit errors instead of silently repairing malformed input.
 fn build_spanning_tree(
     mol: &Molecule,
     u: usize,
@@ -132,10 +128,6 @@ fn build_spanning_tree(
     }
 }
 
-/// Implements get bond type.
-///
-/// Function context: `crates/ferrum_core/src/io/smiles_writer.rs`.
-/// I/O-layer note: parsing/ingestion should surface explicit errors instead of silently repairing malformed input.
 fn get_bond_type(mol: &Molecule, u: usize, v: usize) -> BondType {
     mol.bonds
         .iter()
@@ -144,10 +136,6 @@ fn get_bond_type(mol: &Molecule, u: usize, v: usize) -> BondType {
         .bond_type
 }
 
-/// Implements write tree.
-///
-/// Function context: `crates/ferrum_core/src/io/smiles_writer.rs`.
-/// I/O-layer note: parsing/ingestion should surface explicit errors instead of silently repairing malformed input.
 fn write_tree(
     mol: &Molecule,
     u: usize,
@@ -155,7 +143,6 @@ fn write_tree(
     tree_edges: &[Vec<usize>],
     node_ring_closures: &[Vec<(Option<BondType>, usize)>],
     out: &mut String,
-    order: Option<&[usize]>,
 ) {
     // Write incident bond from parent
     if let Some(bt) = parent_bond {
@@ -192,18 +179,14 @@ fn write_tree(
 
         if i < children.len() - 1 {
             out.push('(');
-            write_tree(mol, v, pb, tree_edges, node_ring_closures, out, order);
+            write_tree(mol, v, pb, tree_edges, node_ring_closures, out);
             out.push(')');
         } else {
-            write_tree(mol, v, pb, tree_edges, node_ring_closures, out, order);
+            write_tree(mol, v, pb, tree_edges, node_ring_closures, out);
         }
     }
 }
 
-/// Implements write bond.
-///
-/// Function context: `crates/ferrum_core/src/io/smiles_writer.rs`.
-/// I/O-layer note: parsing/ingestion should surface explicit errors instead of silently repairing malformed input.
 fn write_bond(bt: BondType, out: &mut String) {
     match bt {
         BondType::Single => out.push('-'),
@@ -215,10 +198,6 @@ fn write_bond(bt: BondType, out: &mut String) {
     }
 }
 
-/// Implements write atom.
-///
-/// Function context: `crates/ferrum_core/src/io/smiles_writer.rs`.
-/// I/O-layer note: parsing/ingestion should surface explicit errors instead of silently repairing malformed input.
 fn write_atom(mol: &Molecule, u: usize, out: &mut String) {
     let atom = &mol.atoms[u];
     let symbol = if (atom.atomic_number as usize) < ELEMENT_SYMBOLS.len() {
@@ -285,10 +264,6 @@ mod tests {
     use crate::io::smiles::parse_smiles;
 
     #[test]
-    /// Implements test write smiles basic.
-    ///
-    /// Function context: `crates/ferrum_core/src/io/smiles_writer.rs`.
-    /// I/O-layer note: parsing/ingestion should surface explicit errors instead of silently repairing malformed input.
     fn test_write_smiles_basic() {
         let mol = parse_smiles("CCO").unwrap();
         let s = write_smiles(&mol);
@@ -299,10 +274,6 @@ mod tests {
     }
 
     #[test]
-    /// Implements test write canonical smiles benzene.
-    ///
-    /// Function context: `crates/ferrum_core/src/io/smiles_writer.rs`.
-    /// I/O-layer note: parsing/ingestion should surface explicit errors instead of silently repairing malformed input.
     fn test_write_canonical_smiles_benzene() {
         let mol = parse_smiles("c1ccccc1").unwrap();
         let s = write_canonical_smiles(&mol);
@@ -310,10 +281,6 @@ mod tests {
     }
 
     #[test]
-    /// Implements test write canonical smiles aspirin.
-    ///
-    /// Function context: `crates/ferrum_core/src/io/smiles_writer.rs`.
-    /// I/O-layer note: parsing/ingestion should surface explicit errors instead of silently repairing malformed input.
     fn test_write_canonical_smiles_aspirin() {
         let mol = parse_smiles("CC(=O)Oc1ccccc1C(=O)O").unwrap();
         let s = write_canonical_smiles(&mol);

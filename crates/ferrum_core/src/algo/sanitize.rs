@@ -901,18 +901,21 @@ fn kekulize_worker(
             dbnd_cands[ncnd] = false;
             dbnd_adds[bi] = true;
             local_added[bi] = true;
-            if options.contains_key(&curr) {
-                if opts.is_empty() {
-                    options.remove(&curr);
-                    btmoves.pop_back();
-                    last_opt = btmoves.back().copied();
-                } else {
-                    options.insert(curr, opts);
+            match options.entry(curr) {
+                std::collections::btree_map::Entry::Occupied(mut e) => {
+                    if opts.is_empty() {
+                        options.remove(&curr);
+                        btmoves.pop_back();
+                        last_opt = btmoves.back().copied();
+                    } else {
+                        e.insert(opts);
+                    }
                 }
-            } else if !opts.is_empty() {
-                last_opt = Some(curr);
-                btmoves.push_back(curr);
-                options.insert(curr, opts);
+                std::collections::btree_map::Entry::Vacant(e) => if !opts.is_empty() {
+                    last_opt = Some(curr);
+                    btmoves.push_back(curr);
+                    e.insert(opts);
+                }
             }
         } else if mol.atoms[curr].atomic_number != 0 {
             match last_opt {
@@ -1160,11 +1163,10 @@ fn donor_type(mol: &Molecule, cache: &ValenceCache, ri: &RingInfo, a: usize) -> 
             Edon::No
         }
     } else {
-        if let Some(who) = incident_non_cyclic_multiple_bond(mol, ri, a) {
-            if more_electronegative(mol.atoms[who].atomic_number as usize, z) {
+        if let Some(who) = incident_non_cyclic_multiple_bond(mol, ri, a)
+            && more_electronegative(mol.atoms[who].atomic_number as usize, z) {
                 nelec -= 1;
             }
-        }
         if nelec % 2 == 1 { Edon::One } else { Edon::Two }
     }
 }

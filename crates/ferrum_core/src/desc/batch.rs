@@ -8,36 +8,6 @@
 //! - Implementing stateless descriptor structs in Rust.
 //! - Mapping chemistry concepts to reproducible numeric features.
 
-//! ## File guide: Batch
-//!
-//! This file belongs to FerrumChem's **descriptor/fingerprint feature layer**.
-//!
-//! What to learn here:
-//! - Which chemistry/ML concern this file owns in the pipeline.
-//! - How Rust types and control-flow encode that concern.
-//! - Which public symbols are the best entry points for reading/debugging.
-//!
-//! Key symbols in this file:
-//! - `enum BatchDescriptor` (registry: names, lengths, dispatch)
-//! - `fn feature_names`
-//!
-//! Suggested reading workflow:
-//! 1. Read top-level type definitions and public APIs.
-//! 2. Trace helper functions used in hot/critical paths.
-//! 3. Cross-reference tests/examples that exercise this file.
-
-//!
-//! ### Algorithmic assumptions for this file
-//! - `Batch` assumes molecule preprocessing (implicit hydrogens, aromaticity flags, and ring annotations) is current before calculation.
-//! - `Batch` remains deterministic for identical atom/bond indexing so batch and single-molecule runs agree bit-for-bit.
-//! - Typed `DescriptorValue` output is part of the contract; downstream ML code should not rely on ad-hoc coercions.
-//! - Specific scope anchor: `crates/ferrum_core/src/desc/batch.rs` defines batch behavior and should be updated together with its direct tests.
-//! ### Chemistry/ML references
-//! - Todeschini & Consonni. Handbook of Molecular Descriptors (general descriptor taxonomy).
-//! - RDKit descriptor/fingerprint APIs used as practical parity baselines for `Batch` workflows.
-//! - Repository unit and parity tests covering `Batch` behavior and edge molecules.
-//! - Code-local source of truth: symbols and tests declared in `crates/ferrum_core/src/desc/batch.rs`.
-
 use super::aromatic_ring_count::AromaticRingCount;
 use super::atom_count::{AromaticAtomCount, AtomCount, ElementCounts, HeavyAtomCount};
 use super::autocorrelation::Autocorrelation;
@@ -183,10 +153,6 @@ pub enum BatchDescriptor {
 }
 
 impl BatchDescriptor {
-    /// Implements the behavior encoded by this function.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/batch.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     pub fn all() -> &'static [Self] {
         const ALL: [BatchDescriptor; 88] = [
             BatchDescriptor::MolecularWeight,
@@ -282,9 +248,6 @@ impl BatchDescriptor {
     }
 
     /// Returns a curated descriptor subset for fast, broad-coverage ML featurization.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/batch.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     pub fn fast_ml_preset() -> &'static [Self] {
         const FAST_ML: [BatchDescriptor; 46] = [
             BatchDescriptor::MolecularWeight,
@@ -337,10 +300,6 @@ impl BatchDescriptor {
         &FAST_ML
     }
 
-    /// Implements the behavior encoded by this function.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/batch.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     pub fn name(self) -> &'static str {
         match self {
             Self::MolecularWeight => "MolecularWeight",
@@ -434,10 +393,6 @@ impl BatchDescriptor {
         }
     }
 
-    /// Calculates the behavior encoded by this function.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/batch.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     pub fn calculate(
         self,
         mol: &Molecule,
@@ -537,10 +492,6 @@ impl BatchDescriptor {
         }
     }
 
-    /// Implements len.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/batch.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     pub fn feature_len(self) -> usize {
         match self {
             Self::ElementCounts => 12,
@@ -762,10 +713,6 @@ impl BatchDescriptor {
         self.fingerprint_name().is_some()
     }
 
-    /// Writes into.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/batch.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     pub fn write_into(
         self,
         mol: &Molecule,
@@ -821,15 +768,7 @@ pub fn feature_names(descriptors: &[BatchDescriptor]) -> Vec<String> {
 mod tests {
     use super::*;
 
-
-
-
-
     #[test]
-    /// Runs regression test for fast ml preset descriptor list consistency.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/batch.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_fast_ml_preset_is_valid_subset_and_excludes_heavy_fingerprints() {
         let preset = BatchDescriptor::fast_ml_preset();
         assert!(!preset.is_empty(), "Fast ML preset must not be empty");
@@ -863,9 +802,6 @@ mod tests {
             "Fast ML preset should avoid high-dimensional fingerprint families"
         );
     }
-
-
-
 
     #[test]
     fn feature_names_match_lengths_and_are_unique() {

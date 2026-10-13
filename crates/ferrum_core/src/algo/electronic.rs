@@ -20,39 +20,6 @@
 //! **Validation**: Cross-validated against RDKit `rdPartialCharges.ComputeGasteigerCharges`
 //! for 17 molecules (±0.05 per atom). See tests at the bottom of this file.
 
-//! ## File guide: Electronic
-//!
-//! This file belongs to FerrumChem's **cheminformatics algorithm layer**.
-//!
-//! What to learn here:
-//! - Which chemistry/ML concern this file owns in the pipeline.
-//! - How Rust types and control-flow encode that concern.
-//! - Which public symbols are the best entry points for reading/debugging.
-//!
-//! Key symbols in this file:
-//! - `struct ENParams`
-//! - `fn effective_hybridization`
-//! - `fn outer_shell_electrons`
-//! - `fn default_valence_for_conjugation`
-//! - `fn total_degree_with_h`
-//!
-//! Suggested reading workflow:
-//! 1. Read top-level type definitions and public APIs.
-//! 2. Trace helper functions used in hot/critical paths.
-//! 3. Cross-reference tests/examples that exercise this file.
-
-//!
-//! ### Algorithmic assumptions for this file
-//! - `Electronic` operates on 2D molecular graphs (atoms/bonds) and does not consume conformer geometry.
-//! - `Electronic` relies on stable `AtomIdx`/`BondIdx` semantics and adjacency invariants from `mol::molecule`.
-//! - Performance paths in `Electronic` prefer deterministic pruning/caching over probabilistic heuristics.
-//! - Specific scope anchor: `crates/ferrum_core/src/algo/electronic.rs` defines electronic behavior and should be updated together with its direct tests.
-//! ### Chemistry/ML references
-//! - Core graph algorithm literature relevant to `Electronic` (traversal, cycle, isomorphism, or canonicalization topics).
-//! - Cheminformatics toolkit conventions (RDKit/CDK/OpenBabel) mirrored by `Electronic` decisions.
-//! - FerrumChem regression tests that pin `Electronic` behavior on representative molecules.
-//! - Code-local source of truth: symbols and tests declared in `crates/ferrum_core/src/algo/electronic.rs`.
-
 use crate::mol::molecule::Molecule;
 use crate::types::Hybridization;
 use once_cell::sync::Lazy;
@@ -422,28 +389,16 @@ pub fn compute_gasteiger_charges(mol: &Molecule) -> Vec<f64> {
     compute_gasteiger_charges_uncached(mol)
 }
 
-/// Implements gasteiger charges cached.
-///
-/// Function context: `crates/ferrum_core/src/algo/electronic.rs`.
-/// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
 pub(crate) fn ensure_gasteiger_charges_cached(mol: &Molecule) {
     if *GASTEIGER_CACHE_ENABLED {
         mol.gasteiger_charges_or_init(|| compute_gasteiger_charges_uncached(mol));
     }
 }
 
-/// Implements gasteiger charges ref.
-///
-/// Function context: `crates/ferrum_core/src/algo/electronic.rs`.
-/// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
 pub(crate) fn cached_gasteiger_charges_ref(mol: &Molecule) -> Option<&[f64]> {
     mol.cached_gasteiger_charges()
 }
 
-/// Computes gasteiger charges cached.
-///
-/// Function context: `crates/ferrum_core/src/algo/electronic.rs`.
-/// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
 pub(crate) fn compute_gasteiger_charges_cached(mol: &Molecule) -> Vec<f64> {
     ensure_gasteiger_charges_cached(mol);
     if let Some(cached) = cached_gasteiger_charges_ref(mol) {
@@ -457,10 +412,6 @@ mod tests {
     use super::*;
     use crate::io::smiles::parse_smiles;
 
-    /// Implements the behavior encoded by this function.
-    ///
-    /// Function context: `crates/ferrum_core/src/algo/electronic.rs`.
-    /// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
     fn charges(smiles: &str) -> Vec<f64> {
         let mol = parse_smiles(smiles).unwrap();
         compute_gasteiger_charges(&mol)
@@ -475,10 +426,6 @@ mod tests {
     }
 
     #[test]
-    /// Runs regression test for empty molecule.
-    ///
-    /// Function context: `crates/ferrum_core/src/algo/electronic.rs`.
-    /// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
     fn test_empty_molecule() {
         let mol = Molecule::new();
         let q = compute_gasteiger_charges(&mol);
@@ -486,10 +433,6 @@ mod tests {
     }
 
     #[test]
-    /// Runs regression test for methane.
-    ///
-    /// Function context: `crates/ferrum_core/src/algo/electronic.rs`.
-    /// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
     fn test_methane() {
         // [CH4] — single C with 4 implicit H; charge transferred to H.
         // RDKit: C = -0.077558
@@ -498,10 +441,6 @@ mod tests {
     }
 
     #[test]
-    /// Runs regression test for water.
-    ///
-    /// Function context: `crates/ferrum_core/src/algo/electronic.rs`.
-    /// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
     fn test_water() {
         // O with 2 implicit H; O pulls electron density from H.
         // RDKit: O = -0.41151
@@ -510,10 +449,6 @@ mod tests {
     }
 
     #[test]
-    /// Runs regression test for formaldehyde.
-    ///
-    /// Function context: `crates/ferrum_core/src/algo/electronic.rs`.
-    /// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
     fn test_formaldehyde() {
         // C=O: C should be positive, O negative
         let mol = parse_smiles("C=O").unwrap();
@@ -533,10 +468,6 @@ mod tests {
     }
 
     #[test]
-    /// Runs regression test for ethanol.
-    ///
-    /// Function context: `crates/ferrum_core/src/algo/electronic.rs`.
-    /// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
     fn test_ethanol() {
         // CCO: two carbons and an oxygen
         let q = charges("CCO");
@@ -550,10 +481,6 @@ mod tests {
     }
 
     #[test]
-    /// Runs regression test for acetic acid.
-    ///
-    /// Function context: `crates/ferrum_core/src/algo/electronic.rs`.
-    /// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
     fn test_acetic_acid() {
         // CC(=O)O
         let mol = parse_smiles("CC(=O)O").unwrap();
@@ -576,10 +503,6 @@ mod tests {
     }
 
     #[test]
-    /// Runs regression test for benzene.
-    ///
-    /// Function context: `crates/ferrum_core/src/algo/electronic.rs`.
-    /// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
     fn test_benzene() {
         let mol = parse_smiles("c1ccccc1").unwrap();
         let q = compute_gasteiger_charges(&mol);
@@ -598,10 +521,6 @@ mod tests {
     }
 
     #[test]
-    /// Runs regression test for aniline.
-    ///
-    /// Function context: `crates/ferrum_core/src/algo/electronic.rs`.
-    /// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
     fn test_aniline() {
         let mol = parse_smiles("c1ccc(N)cc1").unwrap();
         let q = compute_gasteiger_charges(&mol);
@@ -614,10 +533,6 @@ mod tests {
     }
 
     #[test]
-    /// Runs regression test for methylamine.
-    ///
-    /// Function context: `crates/ferrum_core/src/algo/electronic.rs`.
-    /// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
     fn test_methylamine() {
         let mol = parse_smiles("CN").unwrap();
         let q = compute_gasteiger_charges(&mol);
@@ -630,10 +545,6 @@ mod tests {
     }
 
     #[test]
-    /// Runs regression test for charge conservation.
-    ///
-    /// Function context: `crates/ferrum_core/src/algo/electronic.rs`.
-    /// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
     fn test_charge_conservation() {
         // Total charge (heavy + implicit H) should equal sum of formal charges.
         // Our q[] only has heavy atoms, so we check that q_sum is reasonable
@@ -652,10 +563,6 @@ mod tests {
     }
 
     #[test]
-    /// Runs regression test for halogens.
-    ///
-    /// Function context: `crates/ferrum_core/src/algo/electronic.rs`.
-    /// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
     fn test_halogens() {
         // Fluoromethane: F should be negative, C positive
         let mol = parse_smiles("CF").unwrap();
@@ -671,10 +578,6 @@ mod tests {
     }
 
     #[test]
-    /// Runs regression test for chloroform.
-    ///
-    /// Function context: `crates/ferrum_core/src/algo/electronic.rs`.
-    /// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
     fn test_chloroform() {
         // ClC(Cl)Cl
         let mol = parse_smiles("ClC(Cl)Cl").unwrap();
@@ -722,130 +625,78 @@ mod tests {
     }
 
     #[test]
-    /// Runs regression test for rdkit formaldehyde.
-    ///
-    /// Function context: `crates/ferrum_core/src/algo/electronic.rs`.
-    /// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
     fn test_rdkit_formaldehyde() {
         // C=O → C: +0.1064, O: -0.3071
         assert_charges("C=O", &[0.1064, -0.3071]);
     }
 
     #[test]
-    /// Runs regression test for rdkit ethanol.
-    ///
-    /// Function context: `crates/ferrum_core/src/algo/electronic.rs`.
-    /// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
     fn test_rdkit_ethanol() {
         // CCO → C: -0.0418, C: +0.0402, O: -0.3967
         assert_charges("CCO", &[-0.0418, 0.0402, -0.3967]);
     }
 
     #[test]
-    /// Runs regression test for rdkit acetic acid.
-    ///
-    /// Function context: `crates/ferrum_core/src/algo/electronic.rs`.
-    /// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
     fn test_rdkit_acetic_acid() {
         // CC(=O)O → C: +0.0338, C: +0.2997, O: -0.2528, O: -0.4814
         assert_charges("CC(=O)O", &[0.0338, 0.2997, -0.2528, -0.4814]);
     }
 
     #[test]
-    /// Runs regression test for rdkit benzene.
-    ///
-    /// Function context: `crates/ferrum_core/src/algo/electronic.rs`.
-    /// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
     fn test_rdkit_benzene() {
         // c1ccccc1 → all C: -0.0623
         assert_charges("c1ccccc1", &[-0.0623; 6]);
     }
 
     #[test]
-    /// Runs regression test for rdkit methylamine.
-    ///
-    /// Function context: `crates/ferrum_core/src/algo/electronic.rs`.
-    /// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
     fn test_rdkit_methylamine() {
         // CN → C: -0.0195, N: -0.3333
         assert_charges("CN", &[-0.0195, -0.3333]);
     }
 
     #[test]
-    /// Runs regression test for rdkit fluoromethane.
-    ///
-    /// Function context: `crates/ferrum_core/src/algo/electronic.rs`.
-    /// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
     fn test_rdkit_fluoromethane() {
         // CF → C: +0.0785, F: -0.2547
         assert_charges("CF", &[0.0785, -0.2547]);
     }
 
     #[test]
-    /// Runs regression test for rdkit chloromethane.
-    ///
-    /// Function context: `crates/ferrum_core/src/algo/electronic.rs`.
-    /// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
     fn test_rdkit_chloromethane() {
         // CCl → C: +0.0108, Cl: -0.1304
         assert_charges("CCl", &[0.0108, -0.1304]);
     }
 
     #[test]
-    /// Runs regression test for rdkit bromomethane.
-    ///
-    /// Function context: `crates/ferrum_core/src/algo/electronic.rs`.
-    /// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
     fn test_rdkit_bromomethane() {
         // CBr → C: -0.0085, Br: -0.0966
         assert_charges("CBr", &[-0.0085, -0.0966]);
     }
 
     #[test]
-    /// Runs regression test for rdkit iodomethane.
-    ///
-    /// Function context: `crates/ferrum_core/src/algo/electronic.rs`.
-    /// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
     fn test_rdkit_iodomethane() {
         // CI → C: -0.0121, I: -0.0901
         assert_charges("CI", &[-0.0121, -0.0901]);
     }
 
     #[test]
-    /// Runs regression test for rdkit acetone.
-    ///
-    /// Function context: `crates/ferrum_core/src/algo/electronic.rs`.
-    /// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
     fn test_rdkit_acetone() {
         // CC(=O)C → C: -0.0060, C: +0.1263, O: -0.3003, C: -0.0060
         assert_charges("CC(=O)C", &[-0.0060, 0.1263, -0.3003, -0.0060]);
     }
 
     #[test]
-    /// Runs regression test for rdkit dimethyl ether.
-    ///
-    /// Function context: `crates/ferrum_core/src/algo/electronic.rs`.
-    /// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
     fn test_rdkit_dimethyl_ether() {
         // COC → C: +0.0351, O: -0.3879, C: +0.0351
         assert_charges("COC", &[0.0351, -0.3879, 0.0351]);
     }
 
     #[test]
-    /// Runs regression test for rdkit ethane.
-    ///
-    /// Function context: `crates/ferrum_core/src/algo/electronic.rs`.
-    /// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
     fn test_rdkit_ethane() {
         // CC → C: -0.0683, C: -0.0683
         assert_charges("CC", &[-0.0683, -0.0683]);
     }
 
     #[test]
-    /// Runs regression test for rdkit phenol.
-    ///
-    /// Function context: `crates/ferrum_core/src/algo/electronic.rs`.
-    /// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
     fn test_rdkit_phenol() {
         // c1ccc(O)cc1 → 7 atoms
         // RDKit: C -0.062, C -0.0586, C -0.0202, C +0.1151, O -0.5080, C -0.0202, C -0.0586
@@ -856,10 +707,6 @@ mod tests {
     }
 
     #[test]
-    /// Runs regression test for rdkit pyridine.
-    ///
-    /// Function context: `crates/ferrum_core/src/algo/electronic.rs`.
-    /// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
     fn test_rdkit_pyridine() {
         // c1ccncc1 → 6 atoms
         // RDKit: C -0.0592, C -0.0438, C +0.0267, N -0.2647, C +0.0267, C -0.0438
@@ -870,10 +717,6 @@ mod tests {
     }
 
     #[test]
-    /// Runs regression test for rdkit aniline.
-    ///
-    /// Function context: `crates/ferrum_core/src/algo/electronic.rs`.
-    /// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
     fn test_rdkit_aniline() {
         // c1ccc(N)cc1 → 7 atoms
         // RDKit: C -0.0621, C -0.0602, C -0.0392, C +0.0313, N -0.3987, C -0.0392, C -0.0602
@@ -884,10 +727,6 @@ mod tests {
     }
 
     #[test]
-    /// Runs regression test for rdkit phosphate oxyanion charges.
-    ///
-    /// Function context: `crates/ferrum_core/src/algo/electronic.rs`.
-    /// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
     fn test_rdkit_phosphate_oxyanion_charges() {
         assert_charges(
             "COP(=O)([O-])O",
@@ -896,10 +735,6 @@ mod tests {
     }
 
     #[test]
-    /// Runs regression test for rdkit sulfate oxyanion charges.
-    ///
-    /// Function context: `crates/ferrum_core/src/algo/electronic.rs`.
-    /// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
     fn test_rdkit_sulfate_oxyanion_charges() {
         assert_charges(
             "CS(=O)(=O)[O-]",
@@ -908,10 +743,6 @@ mod tests {
     }
 
     #[test]
-    /// Runs regression test for split charge conjugated splits carboxylate oxygens.
-    ///
-    /// Function context: `crates/ferrum_core/src/algo/electronic.rs`.
-    /// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
     fn test_split_charge_conjugated_splits_carboxylate_oxygens() {
         let mol = parse_smiles("CC(=O)[O-]").unwrap();
         let mut q = vec![0.0; mol.num_atoms()];
@@ -921,10 +752,6 @@ mod tests {
     }
 
     #[test]
-    /// Runs regression test for split charge conjugated does not cross nonconjugated bridge.
-    ///
-    /// Function context: `crates/ferrum_core/src/algo/electronic.rs`.
-    /// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
     fn test_split_charge_conjugated_does_not_cross_nonconjugated_bridge() {
         let mol = parse_smiles("[N+]1=CC=NC(C)1").unwrap();
         let mut q = vec![0.0; mol.num_atoms()];
@@ -944,10 +771,6 @@ mod tests {
     }
 
     #[test]
-    /// Runs regression test for rdkit scalar descriptors.
-    ///
-    /// Function context: `crates/ferrum_core/src/algo/electronic.rs`.
-    /// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
     fn test_rdkit_scalar_descriptors() {
         // Test MaxPartialCharge, MinPartialCharge, etc. against RDKit for ethanol
         // RDKit: MaxPartialCharge=0.0402, MinPartialCharge=-0.3967
@@ -960,10 +783,6 @@ mod tests {
     }
 
     #[test]
-    /// Runs regression test for cyclopentadienyl charges.
-    ///
-    /// Function context: `crates/ferrum_core/src/algo/electronic.rs`.
-    /// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
     fn test_cyclopentadienyl_charges() {
         let mol = parse_smiles("[CH-]1C=CC=C1").unwrap();
         let q = compute_gasteiger_charges(&mol);
@@ -974,10 +793,6 @@ mod tests {
     }
 
     #[test]
-    /// Runs regression test for nitrobenzene charges.
-    ///
-    /// Function context: `crates/ferrum_core/src/algo/electronic.rs`.
-    /// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
     fn test_nitrobenzene_charges() {
         let mol = parse_smiles("c1ccc(cc1)[N+](=O)[O-]").unwrap();
         let q = compute_gasteiger_charges(&mol);
@@ -985,10 +800,6 @@ mod tests {
     }
 
     #[test]
-    /// Runs regression test for grignard charges.
-    ///
-    /// Function context: `crates/ferrum_core/src/algo/electronic.rs`.
-    /// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
     fn test_grignard_charges() {
         let mol = parse_smiles("[Mg](Br)CC").unwrap();
         let q = compute_gasteiger_charges(&mol);
@@ -1008,10 +819,6 @@ mod tests {
     // Validated against RDKit's setHybridization and Gasteiger charges.
     // ===================================================================
 
-    /// Implements of.
-    ///
-    /// Function context: `crates/ferrum_core/src/algo/electronic.rs`.
-    /// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
     fn hyb_of(smiles: &str, atom_idx: usize) -> crate::types::Hybridization {
         let mol = parse_smiles(smiles).unwrap();
         effective_hybridization(&mol, atom_idx)
@@ -1019,10 +826,6 @@ mod tests {
 
     // -- carbonyl =O: direct double bond → SP2 via Stage 3 (not norbs path) --
     #[test]
-    /// Runs regression test for hyb carbonyl o sp2.
-    ///
-    /// Function context: `crates/ferrum_core/src/algo/electronic.rs`.
-    /// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
     fn test_hyb_carbonyl_o_sp2() {
         // C=O: C(0) O(1)  — direct double bond, Stage 3 fires before norbs
         assert_eq!(
@@ -1034,10 +837,6 @@ mod tests {
 
     // -- ester bridging O: C=O neighbour (not hypervalent) → SP2 (RDKit-confirmed) --
     #[test]
-    /// Runs regression test for hyb ester bridging o sp2.
-    ///
-    /// Function context: `crates/ferrum_core/src/algo/electronic.rs`.
-    /// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
     fn test_hyb_ester_bridging_o_sp2() {
         // CC(=O)OC: C(0) C(1) =O(2) bridging-O(3) C(4)
         // O(3): C(1) neighbour has C=O pi bond, C is not P/S → SP2
@@ -1050,10 +849,6 @@ mod tests {
 
     // -- carboxylic-acid OH: terminal O-H, C neighbour has C=O → SP2 --
     #[test]
-    /// Runs regression test for hyb carboxylic acid oh sp2.
-    ///
-    /// Function context: `crates/ferrum_core/src/algo/electronic.rs`.
-    /// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
     fn test_hyb_carboxylic_acid_oh_sp2() {
         // CC(=O)O: C(0) C(1) =O(2) OH(3)
         // O(3): C(1) has C=O to O(2) ≠ O(3) → SP2
@@ -1066,10 +861,6 @@ mod tests {
 
     // -- phenol OH: direct aromatic C neighbour → SP2 (Case 1) --
     #[test]
-    /// Runs regression test for hyb phenol o sp2.
-    ///
-    /// Function context: `crates/ferrum_core/src/algo/electronic.rs`.
-    /// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
     fn test_hyb_phenol_o_sp2() {
         let mol = parse_smiles("c1ccc(O)cc1").unwrap();
         let o_idx = mol.atoms.iter().position(|a| a.atomic_number == 8).unwrap();
@@ -1082,10 +873,6 @@ mod tests {
 
     // -- anisole O: one heavy nbr is aromatic C, other is aliphatic C → SP2 (Case 1) --
     #[test]
-    /// Runs regression test for hyb anisole o sp2.
-    ///
-    /// Function context: `crates/ferrum_core/src/algo/electronic.rs`.
-    /// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
     fn test_hyb_anisole_o_sp2() {
         // COc1ccccc1: C(0) O(1) aromatic-ring(2-7)
         let mol = parse_smiles("COc1ccccc1").unwrap();
@@ -1099,10 +886,6 @@ mod tests {
 
     // -- plain ether O: two aliphatic C neighbours, no pi → SP3 --
     #[test]
-    /// Runs regression test for hyb ether o sp3.
-    ///
-    /// Function context: `crates/ferrum_core/src/algo/electronic.rs`.
-    /// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
     fn test_hyb_ether_o_sp3() {
         // COC: C(0) O(1) C(2)
         assert_eq!(
@@ -1114,10 +897,6 @@ mod tests {
 
     // -- phosphate OH: terminal O-H but neighbour is P (not C) → SP3 --
     #[test]
-    /// Runs regression test for hyb phosphate oh sp3.
-    ///
-    /// Function context: `crates/ferrum_core/src/algo/electronic.rs`.
-    /// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
     fn test_hyb_phosphate_oh_sp3() {
         // OP(=O)(O)O: O(0) P(1) =O(2) O(3)H O(4)H
         // All three P–OH oxygens must be SP3; only the =O is SP2.
@@ -1142,10 +921,6 @@ mod tests {
 
     // -- thioether S adjacent to aromatic ring: norbs==4, always SP3 (not SP2) --
     #[test]
-    /// Runs regression test for hyb thioanisole s sp3.
-    ///
-    /// Function context: `crates/ferrum_core/src/algo/electronic.rs`.
-    /// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
     fn test_hyb_thioanisole_s_sp3() {
         // CSc1ccccc1 — PhSCH3, the thioether S has one aromatic-C neighbour
         // but S in norbs==4 is always SP3 (unlike phenol O which is SP2).
@@ -1164,10 +939,6 @@ mod tests {
 
     // -- thioether S adjacent to C=N (thiazolidine-like): still SP3 --
     #[test]
-    /// Runs regression test for hyb thiazolidine s sp3.
-    ///
-    /// Function context: `crates/ferrum_core/src/algo/electronic.rs`.
-    /// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
     fn test_hyb_thiazolidine_s_sp3() {
         // C1(=N)SCC1 — 4,5-dihydrothiazole ring; S sees a C=N neighbour
         // but S in norbs==4 must still be SP3.
@@ -1186,10 +957,6 @@ mod tests {
 
     // -- sulfonamide N: N–S(=O)₂ must be SP3 (hypervalent S excluded) --
     #[test]
-    /// Runs regression test for hyb sulfonamide n sp3.
-    ///
-    /// Function context: `crates/ferrum_core/src/algo/electronic.rs`.
-    /// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
     fn test_hyb_sulfonamide_n_sp3() {
         // CN(C)S(=O)(=O)c1ccccc1 — N-dimethylbenzenesulfonamide
         // The amine N is bonded to the sulfonyl S, whose S=O bonds fire
@@ -1225,10 +992,6 @@ mod tests {
 
     // -- amide N: N–C=O must still be SP2 (C is non-hypervalent, not excluded) --
     #[test]
-    /// Runs regression test for hyb amide n sp2.
-    ///
-    /// Function context: `crates/ferrum_core/src/algo/electronic.rs`.
-    /// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
     fn test_hyb_amide_n_sp2() {
         // CC(=O)NC — N-methylacetamide; amide N must be SP2.
         let mol = parse_smiles("CC(=O)NC").unwrap();
@@ -1246,10 +1009,6 @@ mod tests {
 
     // -- aniline N: N bonded to aromatic C must still be SP2 --
     #[test]
-    /// Runs regression test for hyb aniline n sp2.
-    ///
-    /// Function context: `crates/ferrum_core/src/algo/electronic.rs`.
-    /// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
     fn test_hyb_aniline_n_sp2() {
         // Nc1ccccc1 — aniline; NH₂ bonded to aromatic ring must be SP2.
         let mol = parse_smiles("Nc1ccccc1").unwrap();
@@ -1267,10 +1026,6 @@ mod tests {
 
     // -- phosphate bridging O: two heavy neighbours (C and P), neither aromatic → SP3 --
     #[test]
-    /// Runs regression test for hyb phosphate bridging o sp3.
-    ///
-    /// Function context: `crates/ferrum_core/src/algo/electronic.rs`.
-    /// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
     fn test_hyb_phosphate_bridging_o_sp3() {
         // COP(=O)(OC)O — two C–O–P bridging oxygens + one P–OH
         // All non-double-bond oxygens must be SP3.
@@ -1294,10 +1049,6 @@ mod tests {
     }
 
     #[test]
-    /// Runs regression test for hyb allene central carbon sp.
-    ///
-    /// Function context: `crates/ferrum_core/src/algo/electronic.rs`.
-    /// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
     fn test_hyb_allene_central_carbon_sp() {
         assert_eq!(
             hyb_of("C=C=C", 1),
@@ -1307,10 +1058,6 @@ mod tests {
     }
 
     #[test]
-    /// Runs regression test for hyb trivalent bracket carbon sp3.
-    ///
-    /// Function context: `crates/ferrum_core/src/algo/electronic.rs`.
-    /// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
     fn test_hyb_trivalent_bracket_carbon_sp3() {
         assert_eq!(
             hyb_of("[C](C)(C)C", 0),

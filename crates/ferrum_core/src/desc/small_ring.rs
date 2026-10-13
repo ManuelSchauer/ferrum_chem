@@ -350,22 +350,14 @@ mod tests {
     use super::*;
     use crate::io::smiles::parse_smiles;
 
-    /// Implements molecule.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/small_ring.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn prepare_molecule(smiles: &str) -> Molecule {
         parse_smiles(smiles).unwrap()
     }
 
-    /// Implements small ring.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/small_ring.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn calc_small_ring(smiles: &str) -> Vec<u16> {
-        let mut mol = prepare_molecule(smiles);
+        let mol = prepare_molecule(smiles);
         match SmallRingDescriptor.calculate(
-            &mut mol,
+            &mol,
             &mut crate::desc::context::CalculationContext::new(),
         ) {
             DescriptorValue::IntU16Vec(v) => v,
@@ -374,10 +366,6 @@ mod tests {
     }
 
     #[test]
-    /// Runs regression test for benzene.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/small_ring.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_benzene() {
         let output = calc_small_ring("c1ccccc1");
 
@@ -393,10 +381,6 @@ mod tests {
     }
 
     #[test]
-    /// Runs regression test for naphthalene.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/small_ring.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_naphthalene() {
         let output = calc_small_ring("c1ccc2ccccc2c1");
 
@@ -407,10 +391,6 @@ mod tests {
     }
 
     #[test]
-    /// Runs regression test for cyclohexane.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/small_ring.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_cyclohexane() {
         let output = calc_small_ring("C1CCCCC1");
 
@@ -422,10 +402,6 @@ mod tests {
     }
 
     #[test]
-    /// Runs regression test for cyclopropane.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/small_ring.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_cyclopropane() {
         let output = calc_small_ring("C1CC1");
 
@@ -469,9 +445,6 @@ mod tests {
 
     #[test]
     /// Adamantane: 4 chordless six-rings (CDK 2.13).
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/small_ring.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_total_rings_uses_symmetrized_ring_count_for_adamantane() {
         let output = calc_small_ring("C1C2CC3CC1CC(C2)C3");
         assert_eq!(
@@ -481,10 +454,6 @@ mod tests {
     }
 
     #[test]
-    /// Runs regression test for no rings.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/small_ring.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_no_rings() {
         let output = calc_small_ring("CCCC");
 

@@ -154,10 +154,6 @@ fn chi_path(mol: &Molecule, deltas: &[f64], length: usize) -> f64 {
     sum / 2.0
 }
 
-/// Implements path rdkit like.
-///
-/// Function context: `crates/ferrum_core/src/desc/chi.rs`.
-/// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
 fn chi_path_rdkit_like(
     mol: &Molecule,
     ctx: &mut crate::desc::context::CalculationContext,
@@ -1044,8 +1040,8 @@ mod tests {
     use crate::io::smiles::parse_smiles;
 
     fn calc(desc: &dyn Descriptor, smiles: &str) -> Vec<f64> {
-        let mut mol = parse_smiles(smiles).expect("valid SMILES");
-        match desc.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()) {
+        let mol = parse_smiles(smiles).expect("valid SMILES");
+        match desc.calculate(&mol, &mut crate::desc::context::CalculationContext::new()) {
             DescriptorValue::FloatVec(v) => v,
             other => panic!("expected FloatVec, got {:?}", other),
         }
@@ -1054,7 +1050,7 @@ mod tests {
     fn assert_close(got: &[f64], expected: &[f64], what: &str) {
         assert_eq!(got.len(), expected.len(), "{what}: length");
         for (i, (&g, &e)) in got.iter().zip(expected).enumerate() {
-            let ok = if e.is_nan() { g.is_nan() } else { (g as f64 - e).abs() <= 1e-5 + 1e-6 * e.abs() };
+            let ok = if e.is_nan() { g.is_nan() } else { (g - e).abs() <= 1e-5 + 1e-6 * e.abs() };
             assert!(ok, "{what}[{i}]: got {g}, expected {e}");
         }
     }
@@ -1082,7 +1078,7 @@ mod tests {
             let got = calc(&ChiIndices, smiles);
             assert_eq!(got.len(), 7);
             for (i, (&g, &e)) in got.iter().zip(&expected).enumerate() {
-                assert!((g as f64 - e).abs() < 1e-6, "{smiles}[{i}]: got {g}, expected {e}");
+                assert!((g - e).abs() < 1e-6, "{smiles}[{i}]: got {g}, expected {e}");
             }
         }
     }
@@ -1095,7 +1091,6 @@ mod tests {
         let c = calc(&ChiIndices, "CCO");
         assert!((c[1] - c[3]).abs() > 1e-3, "Chi1v must differ from Chi1 for ethanol");
     }
-
 
     // CDK layout (expected values from CDK 2.13, see
     // tests/data/cdk_parity_reference.csv).

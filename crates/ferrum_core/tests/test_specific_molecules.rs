@@ -4,48 +4,12 @@
 //! algorithms, descriptors, and ML surfaces. It captures real-world edge cases
 //! so regressions are caught before parity or performance runs.
 
-//! ## File guide: Test Specific Molecules
-//!
-//! This file belongs to FerrumChem's **integration/diagnostic validation layer**.
-//!
-//! What to learn here:
-//! - Which chemistry/ML concern this file owns in the pipeline.
-//! - How Rust types and control-flow encode that concern.
-//! - Which public symbols are the best entry points for reading/debugging.
-//!
-//! Key symbols in this file:
-//! - `struct RepresentativeCase`
-//! - `fn aromatic_atom_count`
-//! - `fn assert_aromatic_state_consistent`
-//! - `fn find_bond`
-//! - `fn representative_blockers_keep_aromatic_state_consistent`
-//!
-//! Suggested reading workflow:
-//! 1. Read top-level type definitions and public APIs.
-//! 2. Trace helper functions used in hot/critical paths.
-//! 3. Cross-reference tests/examples that exercise this file.
-
-//!
-//! ### Algorithmic assumptions for this file
-//! - `Test Specific Molecules` fixtures are regression-focused: they pin previously fragile behavior before parity/performance runs.
-//! - `Test Specific Molecules` assumes deterministic parser/descriptor outputs so test failures indicate real semantic drift.
-//! - Test expectations in `Test Specific Molecules` are intentionally explicit to support learning-oriented debugging.
-//! - Specific scope anchor: `crates/ferrum_core/tests/test_specific_molecules.rs` defines test specific molecules behavior and should be updated together with its direct tests.
-//! ### Chemistry/ML references
-//! - Repository historical bug reports and checkpoints that motivated `Test Specific Molecules` assertions.
-//! - RDKit or chemistry-reference fixtures used to validate `Test Specific Molecules` expectations.
-//! - Rust integration-test best practices for reproducible scientific software checks.
-//! - Code-local source of truth: symbols and tests declared in `crates/ferrum_core/tests/test_specific_molecules.rs`.
-
 use ferrum_core::algo::rings::find_minimum_cycle_basis_bonds;
 use ferrum_core::desc::aromatic_ring_count::compute_aromatic_ring_count;
 use ferrum_core::io::smiles::parse_smiles;
 use ferrum_core::types::BondType;
 
 /// Implements RepresentativeCase.
-///
-/// Function context: `crates/ferrum_core/tests/test_specific_molecules.rs`.
-/// Mol-layer note: core graph data structure component.
 struct RepresentativeCase {
     id: &'static str,
     smiles: &'static str,
@@ -122,19 +86,12 @@ const REPRESENTATIVE_CASES: &[RepresentativeCase] = &[
     },
 ];
 
-/// Implements atom count.
-///
-/// Function context: `crates/ferrum_core/tests/test_specific_molecules.rs`.
-/// Test-layer note: this assertion path pins expected behavior to prevent regressions.
 fn aromatic_atom_count(smiles: &str) -> usize {
     let mol = parse_smiles(smiles).expect("valid representative SMILES");
     mol.atoms.iter().filter(|atom| atom.is_aromatic()).count()
 }
 
 /// Asserts aromatic state consistent to guard invariants.
-///
-/// Function context: `crates/ferrum_core/tests/test_specific_molecules.rs`.
-/// Test-layer note: this assertion path pins expected behavior to prevent regressions.
 fn assert_aromatic_state_consistent(case: &RepresentativeCase) {
     let mol = parse_smiles(case.smiles).expect("valid representative SMILES");
 
@@ -179,10 +136,6 @@ fn assert_aromatic_state_consistent(case: &RepresentativeCase) {
     );
 }
 
-/// Finds bond.
-///
-/// Function context: `crates/ferrum_core/tests/test_specific_molecules.rs`.
-/// Test-layer note: this assertion path pins expected behavior to prevent regressions.
 fn find_bond(mol: &ferrum_core::mol::molecule::Molecule, a: u16, b: u16) -> usize {
     mol.adjacency[a as usize]
         .iter()
@@ -195,10 +148,6 @@ fn find_bond(mol: &ferrum_core::mol::molecule::Molecule, a: u16, b: u16) -> usiz
 }
 
 #[test]
-/// Runs regression test for representative blockers keep aromatic state consistent.
-///
-/// Function context: `crates/ferrum_core/tests/test_specific_molecules.rs`.
-/// Test-layer note: this assertion path pins expected behavior to prevent regressions.
 fn representative_blockers_keep_aromatic_state_consistent() {
     for case in REPRESENTATIVE_CASES {
         assert_aromatic_state_consistent(case);
@@ -206,10 +155,6 @@ fn representative_blockers_keep_aromatic_state_consistent() {
 }
 
 #[test]
-/// Runs regression test for cnp0515307 bridge bond stays kekulized.
-///
-/// Function context: `crates/ferrum_core/tests/test_specific_molecules.rs`.
-/// Test-layer note: this assertion path pins expected behavior to prevent regressions.
 fn cnp0515307_bridge_bond_stays_kekulized() {
     let mol = parse_smiles(REPRESENTATIVE_CASES[0].smiles).expect("valid representative SMILES");
     let bond_idx = find_bond(&mol, 44, 51);
@@ -221,10 +166,6 @@ fn cnp0515307_bridge_bond_stays_kekulized() {
 }
 
 #[test]
-/// Runs regression test for cnp0515307 matches rdkit aromatic targets.
-///
-/// Function context: `crates/ferrum_core/tests/test_specific_molecules.rs`.
-/// Test-layer note: this assertion path pins expected behavior to prevent regressions.
 fn cnp0515307_matches_rdkit_aromatic_targets() {
     let mol = parse_smiles(REPRESENTATIVE_CASES[0].smiles).expect("valid representative SMILES");
     let aromatic_atoms = mol.atoms.iter().filter(|atom| atom.is_aromatic()).count();
@@ -242,10 +183,6 @@ fn cnp0515307_matches_rdkit_aromatic_targets() {
 }
 
 #[test]
-/// Runs regression test for cnp0584384 matches rdkit aromatic targets.
-///
-/// Function context: `crates/ferrum_core/tests/test_specific_molecules.rs`.
-/// Test-layer note: this assertion path pins expected behavior to prevent regressions.
 fn cnp0584384_matches_rdkit_aromatic_targets() {
     let mol = parse_smiles(REPRESENTATIVE_CASES[4].smiles).expect("valid representative SMILES");
     let aromatic_atoms = mol.atoms.iter().filter(|atom| atom.is_aromatic()).count();
@@ -269,10 +206,6 @@ fn cnp0584384_matches_rdkit_aromatic_targets() {
 }
 
 #[test]
-/// Runs regression test for cnp0321538 matches rdkit aromatic targets.
-///
-/// Function context: `crates/ferrum_core/tests/test_specific_molecules.rs`.
-/// Test-layer note: this assertion path pins expected behavior to prevent regressions.
 fn cnp0321538_matches_rdkit_aromatic_targets() {
     let mol = parse_smiles(REPRESENTATIVE_CASES[5].smiles).expect("valid representative SMILES");
     let aromatic_atoms = mol.atoms.iter().filter(|atom| atom.is_aromatic()).count();
@@ -290,10 +223,6 @@ fn cnp0321538_matches_rdkit_aromatic_targets() {
 }
 
 #[test]
-/// Runs regression test for cnp0539904 matches rdkit aromatic targets.
-///
-/// Function context: `crates/ferrum_core/tests/test_specific_molecules.rs`.
-/// Test-layer note: this assertion path pins expected behavior to prevent regressions.
 fn cnp0539904_matches_rdkit_aromatic_targets() {
     let mol = parse_smiles(REPRESENTATIVE_CASES[6].smiles).expect("valid representative SMILES");
     let aromatic_atoms = mol.atoms.iter().filter(|atom| atom.is_aromatic()).count();
@@ -311,10 +240,6 @@ fn cnp0539904_matches_rdkit_aromatic_targets() {
 }
 
 #[test]
-/// Runs regression test for cnp0331134 matches rdkit aromatic targets.
-///
-/// Function context: `crates/ferrum_core/tests/test_specific_molecules.rs`.
-/// Test-layer note: this assertion path pins expected behavior to prevent regressions.
 fn cnp0331134_matches_rdkit_aromatic_targets() {
     let mol = parse_smiles(REPRESENTATIVE_CASES[7].smiles).expect("valid representative SMILES");
     let aromatic_atoms = mol.atoms.iter().filter(|atom| atom.is_aromatic()).count();
@@ -334,10 +259,6 @@ fn cnp0331134_matches_rdkit_aromatic_targets() {
 }
 
 #[test]
-/// Runs regression test for cnp0138771 matches rdkit aromatic targets.
-///
-/// Function context: `crates/ferrum_core/tests/test_specific_molecules.rs`.
-/// Test-layer note: this assertion path pins expected behavior to prevent regressions.
 fn cnp0138771_matches_rdkit_aromatic_targets() {
     let mol = parse_smiles(REPRESENTATIVE_CASES[8].smiles).expect("valid representative SMILES");
     let aromatic_atoms = mol.atoms.iter().filter(|atom| atom.is_aromatic()).count();
@@ -361,10 +282,6 @@ fn cnp0138771_matches_rdkit_aromatic_targets() {
 }
 
 #[test]
-/// Runs regression test for cnp0234360 matches rdkit aromatic targets.
-///
-/// Function context: `crates/ferrum_core/tests/test_specific_molecules.rs`.
-/// Test-layer note: this assertion path pins expected behavior to prevent regressions.
 fn cnp0234360_matches_rdkit_aromatic_targets() {
     let mol = parse_smiles(REPRESENTATIVE_CASES[9].smiles).expect("valid representative SMILES");
     let aromatic_atoms = mol.atoms.iter().filter(|atom| atom.is_aromatic()).count();
@@ -388,10 +305,6 @@ fn cnp0234360_matches_rdkit_aromatic_targets() {
 }
 
 #[test]
-/// Runs regression test for cnp0208621 matches rdkit aromatic targets.
-///
-/// Function context: `crates/ferrum_core/tests/test_specific_molecules.rs`.
-/// Test-layer note: this assertion path pins expected behavior to prevent regressions.
 fn cnp0208621_matches_rdkit_aromatic_targets() {
     let mol = parse_smiles(REPRESENTATIVE_CASES[10].smiles).expect("valid representative SMILES");
     let aromatic_atoms = mol.atoms.iter().filter(|atom| atom.is_aromatic()).count();
@@ -418,10 +331,6 @@ fn cnp0208621_matches_rdkit_aromatic_targets() {
 }
 
 #[test]
-/// Runs regression test for representative blockers match rdkit targets.
-///
-/// Function context: `crates/ferrum_core/tests/test_specific_molecules.rs`.
-/// Test-layer note: this assertion path pins expected behavior to prevent regressions.
 fn representative_blockers_match_rdkit_targets() {
     for case in REPRESENTATIVE_CASES {
         let mol = parse_smiles(case.smiles).expect("valid representative SMILES");

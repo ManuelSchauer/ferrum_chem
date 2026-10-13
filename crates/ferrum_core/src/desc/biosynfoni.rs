@@ -116,8 +116,6 @@ pub fn get_biosynfoni_feature_keys() -> Vec<String> {
 }
 
 /// Implements Biosynfoni descriptor.
-///
-/// Descriptor-layer note: computes molecular properties for ML pipelines.
 pub struct Biosynfoni;
 
 impl crate::desc::typed::Descriptor for Biosynfoni {
@@ -142,8 +140,8 @@ mod tests {
     use crate::algo::rings::find_sssr;
 
     fn get_biosynfoni(smiles: &str) -> Vec<usize> {
-        let mut mol = parse_smiles(smiles).unwrap();
-        find_sssr(&mut mol);
+        let mol = parse_smiles(smiles).unwrap();
+        find_sssr(&mol);
         compute_biosynfoni_fingerprint(&mol)
     }
 

@@ -8,39 +8,6 @@
 //! - Implementing stateless descriptor structs in Rust.
 //! - Mapping chemistry concepts to reproducible numeric features.
 
-//! ## File guide: Polarizability
-//!
-//! This file belongs to FerrumChem's **descriptor/fingerprint feature layer**.
-//!
-//! What to learn here:
-//! - Which chemistry/ML concern this file owns in the pipeline.
-//! - How Rust types and control-flow encode that concern.
-//! - Which public symbols are the best entry points for reading/debugging.
-//!
-//! Key symbols in this file:
-//! - `POLARIZABILITY` (CDK APol/BPol table)
-//! - `struct APol`
-//! - `fn name`
-//! - `fn calculate`
-//! - `struct BPol`
-//!
-//! Suggested reading workflow:
-//! 1. Read top-level type definitions and public APIs.
-//! 2. Trace helper functions used in hot/critical paths.
-//! 3. Cross-reference tests/examples that exercise this file.
-
-//!
-//! ### Algorithmic assumptions for this file
-//! - `Polarizability` assumes molecule preprocessing (implicit hydrogens, aromaticity flags, and ring annotations) is current before calculation.
-//! - `Polarizability` remains deterministic for identical atom/bond indexing so batch and single-molecule runs agree bit-for-bit.
-//! - Typed `DescriptorValue` output is part of the contract; downstream ML code should not rely on ad-hoc coercions.
-//! - Specific scope anchor: `crates/ferrum_core/src/desc/polarizability.rs` defines polarizability behavior and should be updated together with its direct tests.
-//! ### Chemistry/ML references
-//! - Todeschini & Consonni. Handbook of Molecular Descriptors (general descriptor taxonomy).
-//! - RDKit descriptor/fingerprint APIs used as practical parity baselines for `Polarizability` workflows.
-//! - Repository unit and parity tests covering `Polarizability` behavior and edge molecules.
-//! - Code-local source of truth: symbols and tests declared in `crates/ferrum_core/src/desc/polarizability.rs`.
-
 use super::Descriptor;
 use super::cdk_perception::CdkView;
 use crate::desc::DescriptorValue;
@@ -129,9 +96,9 @@ mod tests {
     use crate::io::smiles::parse_smiles;
 
     fn calc(desc: &dyn Descriptor, smiles: &str) -> f64 {
-        let mut mol = parse_smiles(smiles).expect("valid SMILES");
+        let mol = parse_smiles(smiles).expect("valid SMILES");
         match desc.calculate(
-            &mut mol,
+            &mol,
             &mut crate::desc::context::CalculationContext::new(),
         ) {
             DescriptorValue::Float(v) => v,
@@ -174,13 +141,13 @@ mod tests {
 
     #[test]
     fn test_empty_molecule() {
-        let mut mol = Molecule::default();
+        let mol = Molecule::default();
         let mut ctx = crate::desc::context::CalculationContext::new();
         assert!(
-            matches!(APol.calculate(&mut mol, &mut ctx), DescriptorValue::Float(v) if v == 0.0)
+            matches!(APol.calculate(&mol, &mut ctx), DescriptorValue::Float(v) if v == 0.0)
         );
         assert!(
-            matches!(BPol.calculate(&mut mol, &mut ctx), DescriptorValue::Float(v) if v == 0.0)
+            matches!(BPol.calculate(&mol, &mut ctx), DescriptorValue::Float(v) if v == 0.0)
         );
     }
 }

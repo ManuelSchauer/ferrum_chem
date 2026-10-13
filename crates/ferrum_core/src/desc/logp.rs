@@ -8,39 +8,6 @@
 //! parameters by atomic contributions. Journal of chemical information and computer
 //! sciences, 39(5), 868-873.
 
-//! ## File guide: Logp
-//!
-//! This file belongs to FerrumChem's **descriptor/fingerprint feature layer**.
-//!
-//! What to learn here:
-//! - Which chemistry/ML concern this file owns in the pipeline.
-//! - How Rust types and control-flow encode that concern.
-//! - Which public symbols are the best entry points for reading/debugging.
-//!
-//! Key symbols in this file:
-//! - `fn is_hydrogen_label`
-//! - `struct ParsedPattern`
-//! - `fn crippen_atom_contributions`
-//! - `fn classify_implicit_h`
-//! - `fn compute_logp`
-//!
-//! Suggested reading workflow:
-//! 1. Read top-level type definitions and public APIs.
-//! 2. Trace helper functions used in hot/critical paths.
-//! 3. Cross-reference tests/examples that exercise this file.
-
-//!
-//! ### Algorithmic assumptions for this file
-//! - `Logp` assumes molecule preprocessing (implicit hydrogens, aromaticity flags, and ring annotations) is current before calculation.
-//! - `Logp` remains deterministic for identical atom/bond indexing so batch and single-molecule runs agree bit-for-bit.
-//! - Typed `DescriptorValue` output is part of the contract; downstream ML code should not rely on ad-hoc coercions.
-//! - Specific scope anchor: `crates/ferrum_core/src/desc/logp.rs` defines logp behavior and should be updated together with its direct tests.
-//! ### Chemistry/ML references
-//! - Todeschini & Consonni. Handbook of Molecular Descriptors (general descriptor taxonomy).
-//! - RDKit descriptor/fingerprint APIs used as practical parity baselines for `Logp` workflows.
-//! - Repository unit and parity tests covering `Logp` behavior and edge molecules.
-//! - Code-local source of truth: symbols and tests declared in `crates/ferrum_core/src/desc/logp.rs`.
-
 use super::typed::Descriptor;
 #[cfg(test)]
 use crate::algo::iso::find_all_matches;
@@ -70,17 +37,12 @@ static PARSED_PATTERNS: Lazy<Vec<ParsedPattern>> = Lazy::new(|| {
 static CRIPPEN_CACHE_ENABLED: Lazy<bool> =
     Lazy::new(|| std::env::var_os("FERRUM_DISABLE_CRIPPEN_CACHE").is_none());
 
-/// Checks whether hydrogen label.
-///
-/// Function context: `crates/ferrum_core/src/desc/logp.rs`.
-/// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
 fn is_hydrogen_label(label: &str) -> bool {
     matches!(label, "H1" | "H2" | "H3" | "H4" | "HS")
 }
 
-/// Pre-filtered Crippen patterns used for heavy-atom typing.
-///
-/// Hydrogen patterns are handled separately via `classify_implicit_h()`.
+// Hydrogen patterns are not matched as SMARTS; implicit and explicit H are
+// typed by `classify_implicit_h()`.
 
 /// Parsed SMARTS pattern with contributions.
 struct ParsedPattern {
@@ -164,29 +126,17 @@ fn crippen_mr_contributions(mol: &Molecule) -> Vec<f64> {
     mr
 }
 
-/// Implements crippen atom contributions cached.
-///
-/// Function context: `crates/ferrum_core/src/desc/logp.rs`.
-/// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
 pub(crate) fn ensure_crippen_atom_contributions_cached(mol: &Molecule) {
     if *CRIPPEN_CACHE_ENABLED {
         mol.crippen_contribs_or_init(|| crippen_atom_contributions(mol));
     }
 }
 
-/// Implements crippen atom contributions ref.
-///
-/// Function context: `crates/ferrum_core/src/desc/logp.rs`.
-/// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
 pub(crate) fn cached_crippen_atom_contributions_ref(mol: &Molecule) -> Option<(&[f64], &[f64])> {
     let (logp, mr) = mol.cached_crippen_contribs()?;
     Some((logp, mr))
 }
 
-/// Implements crippen atom contributions.
-///
-/// Function context: `crates/ferrum_core/src/desc/logp.rs`.
-/// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
 pub(crate) fn cached_crippen_atom_contributions(mol: &Molecule) -> (Vec<f64>, Vec<f64>) {
     ensure_crippen_atom_contributions_cached(mol);
     if let Some((logp, mr)) = cached_crippen_atom_contributions_ref(mol) {
@@ -349,10 +299,6 @@ pub fn compute_logp(mol: &Molecule) -> (f64, f64) {
     (total_logp, total_mr)
 }
 
-/// Computes logp cached.
-///
-/// Function context: `crates/ferrum_core/src/desc/logp.rs`.
-/// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
 pub(crate) fn compute_logp_cached(mol: &Molecule) -> (f64, f64) {
     if !*CRIPPEN_CACHE_ENABLED {
         return compute_logp(mol);
@@ -434,18 +380,10 @@ pub(crate) fn compute_molar_refractivity_cached(mol: &Molecule) -> f64 {
 pub struct LogP;
 
 impl Descriptor for LogP {
-    /// Implements the behavior encoded by this function.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/logp.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn name(&self) -> &str {
         "LogP"
     }
 
-    /// Calculates the behavior encoded by this function.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/logp.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn calculate(
         &self,
         mol: &Molecule,
@@ -465,18 +403,10 @@ impl Descriptor for LogP {
 pub struct MolarRefractivity;
 
 impl Descriptor for MolarRefractivity {
-    /// Implements the behavior encoded by this function.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/logp.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn name(&self) -> &str {
         "MolarRefractivity"
     }
 
-    /// Calculates the behavior encoded by this function.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/logp.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn calculate(
         &self,
         mol: &Molecule,
@@ -488,10 +418,6 @@ impl Descriptor for MolarRefractivity {
 
 // Thread safety
 const _: () = {
-    /// Asserts send sync to guard invariants.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/logp.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     const fn assert_send_sync<T: Send + Sync>() {}
     let _ = assert_send_sync::<LogP>;
     let _ = assert_send_sync::<MolarRefractivity>;
@@ -1182,10 +1108,6 @@ mod tests {
     use super::*;
     use crate::io::smiles::parse_smiles;
 
-    /// Calculates logp.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/logp.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn calculate_logp(smiles: &str) -> f64 {
         let mol = parse_smiles(smiles).unwrap();
         let (logp, _) = compute_logp(&mol);
@@ -1193,10 +1115,6 @@ mod tests {
     }
 
     #[test]
-    /// Runs regression test for pattern matching debug.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/logp.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_pattern_matching_debug() {
         let mol = parse_smiles("C").unwrap();
 
@@ -1225,10 +1143,6 @@ mod tests {
     }
 
     #[test]
-    /// Runs regression test for logp water.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/logp.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_logp_water() {
         let logp = calculate_logp("O");
         println!("Water LogP: {}", logp);
@@ -1239,10 +1153,6 @@ mod tests {
     }
 
     #[test]
-    /// Runs regression test for logp methane.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/logp.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_logp_methane() {
         let logp = calculate_logp("C");
         println!("Methane LogP: {}", logp);
@@ -1251,10 +1161,6 @@ mod tests {
     }
 
     #[test]
-    /// Runs regression test for logp ethane.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/logp.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_logp_ethane() {
         let logp = calculate_logp("CC");
         println!("Ethane LogP: {}", logp);
@@ -1263,10 +1169,6 @@ mod tests {
     }
 
     #[test]
-    /// Runs regression test for logp benzene.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/logp.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_logp_benzene() {
         let logp = calculate_logp("c1ccccc1");
         println!("Benzene LogP: {}", logp);
@@ -1275,10 +1177,6 @@ mod tests {
     }
 
     #[test]
-    /// Runs regression test for logp octane.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/logp.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_logp_octane() {
         let logp = calculate_logp("CCCCCCCC");
         println!("Octane LogP: {}", logp);
@@ -1287,10 +1185,6 @@ mod tests {
     }
 
     #[test]
-    /// Runs regression test for logp ethanol.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/logp.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_logp_ethanol() {
         let logp = calculate_logp("CCO");
         println!("Ethanol LogP: {}", logp);
@@ -1299,10 +1193,6 @@ mod tests {
     }
 
     #[test]
-    /// Runs regression test for logp acetone.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/logp.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_logp_acetone() {
         let logp = calculate_logp("CC(=O)C");
         println!("Acetone LogP: {}", logp);
@@ -1311,10 +1201,6 @@ mod tests {
     }
 
     #[test]
-    /// Runs regression test for logp toluene.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/logp.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_logp_toluene() {
         let logp = calculate_logp("Cc1ccccc1");
         println!("Toluene LogP: {}", logp);
@@ -1323,10 +1209,6 @@ mod tests {
     }
 
     #[test]
-    /// Runs regression test for patterns parse stats.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/logp.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_patterns_parse_stats() {
         // Test that Crippen patterns can be parsed
         // Note: Not all patterns are expected to parse - some require advanced SMARTS features
@@ -1390,10 +1272,6 @@ mod tests {
     }
 
     #[test]
-    /// Runs regression test for logp aspirin.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/logp.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_logp_aspirin() {
         // Aspirin: CC(=O)Oc1ccccc1C(=O)O
         let logp = calculate_logp("CC(=O)Oc1ccccc1C(=O)O");
@@ -1403,10 +1281,6 @@ mod tests {
     }
 
     #[test]
-    /// Runs regression test for logp caffeine.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/logp.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_logp_caffeine() {
         // Caffeine: CN1C=NC2=C1C(=O)N(C(=O)N2C)C
         let logp = calculate_logp("CN1C=NC2=C1C(=O)N(C(=O)N2C)C");
@@ -1426,10 +1300,6 @@ mod tests {
     }
 
     #[test]
-    /// Runs regression test for logp phenol.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/logp.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_logp_phenol() {
         let logp = calculate_logp("Oc1ccccc1");
         println!("Phenol LogP: {}", logp);
@@ -1438,10 +1308,6 @@ mod tests {
     }
 
     #[test]
-    /// Runs regression test for logp aniline.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/logp.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_logp_aniline() {
         let logp = calculate_logp("Nc1ccccc1");
         println!("Aniline LogP: {}", logp);
@@ -1450,10 +1316,6 @@ mod tests {
     }
 
     #[test]
-    /// Runs regression test for logp chlorobenzene.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/logp.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_logp_chlorobenzene() {
         let logp = calculate_logp("Clc1ccccc1");
         println!("Chlorobenzene LogP: {}", logp);
@@ -1462,10 +1324,6 @@ mod tests {
     }
 
     #[test]
-    /// Runs regression test for logp pyridine.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/logp.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_logp_pyridine() {
         let logp = calculate_logp("c1ccncc1");
         println!("Pyridine LogP: {}", logp);
@@ -1474,10 +1332,6 @@ mod tests {
     }
 
     #[test]
-    /// Runs regression test for logp nitrobenzene.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/logp.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_logp_nitrobenzene() {
         let logp = calculate_logp("[O-][N+](=O)c1ccccc1");
         println!("Nitrobenzene LogP: {}", logp);
@@ -1486,10 +1340,6 @@ mod tests {
     }
 
     #[test]
-    /// Runs regression test for logp thiophene.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/logp.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_logp_thiophene() {
         let logp = calculate_logp("c1ccsc1");
         println!("Thiophene LogP: {}", logp);
@@ -1498,10 +1348,6 @@ mod tests {
     }
 
     #[test]
-    /// Runs regression test for logp furan.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/logp.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_logp_furan() {
         let logp = calculate_logp("c1ccoc1");
         println!("Furan LogP: {}", logp);
@@ -1510,10 +1356,6 @@ mod tests {
     }
 
     #[test]
-    /// Runs regression test for logp acetic acid.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/logp.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_logp_acetic_acid() {
         let logp = calculate_logp("CC(=O)O");
         println!("Acetic acid LogP: {}", logp);
@@ -1522,10 +1364,6 @@ mod tests {
     }
 
     #[test]
-    /// Runs regression test for logp dimethyl ether.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/logp.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_logp_dimethyl_ether() {
         let logp = calculate_logp("COC");
         println!("Dimethyl ether LogP: {}", logp);
@@ -1534,10 +1372,6 @@ mod tests {
     }
 
     #[test]
-    /// Runs regression test for logp methylamine.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/logp.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_logp_methylamine() {
         let logp = calculate_logp("CN");
         println!("Methylamine LogP: {}", logp);
@@ -1546,10 +1380,6 @@ mod tests {
     }
 
     #[test]
-    /// Runs regression test for logp acetonitrile.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/logp.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_logp_acetonitrile() {
         let logp = calculate_logp("CC#N");
         println!("Acetonitrile LogP: {}", logp);
@@ -1558,10 +1388,6 @@ mod tests {
     }
 
     #[test]
-    /// Runs regression test for logp propane.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/logp.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_logp_propane() {
         let logp = calculate_logp("CCC");
         println!("Propane LogP: {}", logp);
@@ -1570,10 +1396,6 @@ mod tests {
     }
 
     #[test]
-    /// Runs regression test for logp butane.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/logp.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_logp_butane() {
         let logp = calculate_logp("CCCC");
         println!("Butane LogP: {}", logp);
@@ -1582,10 +1404,6 @@ mod tests {
     }
 
     #[test]
-    /// Runs regression test for logp charged ammonium.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/logp.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_logp_charged_ammonium() {
         let logp = calculate_logp("[NH4+]");
         println!("Ammonium LogP: {}", logp);
@@ -1594,10 +1412,6 @@ mod tests {
     }
 
     #[test]
-    /// Runs regression test for logp carboxylate.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/logp.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_logp_carboxylate() {
         let logp = calculate_logp("[O-]C(=O)C");
         println!("Acetate LogP: {}", logp);
@@ -1606,10 +1420,6 @@ mod tests {
     }
 
     // Molar Refractivity Tests
-    /// Calculates mr.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/logp.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn calculate_mr(smiles: &str) -> f64 {
         let mol = parse_smiles(smiles).expect("valid SMILES");
         let (_, mr) = compute_logp(&mol);
@@ -1617,10 +1427,6 @@ mod tests {
     }
 
     #[test]
-    /// Runs regression test for mr methane.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/logp.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_mr_methane() {
         let mr = calculate_mr("C");
         println!("Methane MR: {}", mr);
@@ -1629,10 +1435,6 @@ mod tests {
     }
 
     #[test]
-    /// Runs regression test for mr ethane.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/logp.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_mr_ethane() {
         let mr = calculate_mr("CC");
         println!("Ethane MR: {}", mr);
@@ -1641,10 +1443,6 @@ mod tests {
     }
 
     #[test]
-    /// Runs regression test for mr benzene.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/logp.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_mr_benzene() {
         let mr = calculate_mr("c1ccccc1");
         println!("Benzene MR: {}", mr);
@@ -1653,10 +1451,6 @@ mod tests {
     }
 
     #[test]
-    /// Runs regression test for mr ethanol.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/logp.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_mr_ethanol() {
         let mr = calculate_mr("CCO");
         println!("Ethanol MR: {}", mr);
@@ -1665,10 +1459,6 @@ mod tests {
     }
 
     #[test]
-    /// Runs regression test for mr positive.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/logp.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_mr_positive() {
         // MR should always be positive for reasonable molecules
         let mr = calculate_mr("CC(=O)O");

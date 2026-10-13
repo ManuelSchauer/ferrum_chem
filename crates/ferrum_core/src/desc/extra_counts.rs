@@ -15,39 +15,6 @@
 //! - Bertz (1981) JACS 103, 3599 (BertzCT)
 //! - Kier & Hall (1986) Molecular Connectivity (HallKierAlpha)
 
-//! ## File guide: Extra Counts
-//!
-//! This file belongs to FerrumChem's **descriptor/fingerprint feature layer**.
-//!
-//! What to learn here:
-//! - Which chemistry/ML concern this file owns in the pipeline.
-//! - How Rust types and control-flow encode that concern.
-//! - Which public symbols are the best entry points for reading/debugging.
-//!
-//! Key symbols in this file:
-//! - `struct U64IdentityHasher`
-//! - `fn finish`
-//! - `fn write`
-//! - `fn write_u64`
-//! - `fn write_usize`
-//!
-//! Suggested reading workflow:
-//! 1. Read top-level type definitions and public APIs.
-//! 2. Trace helper functions used in hot/critical paths.
-//! 3. Cross-reference tests/examples that exercise this file.
-
-//!
-//! ### Algorithmic assumptions for this file
-//! - `Extra Counts` assumes molecule preprocessing (implicit hydrogens, aromaticity flags, and ring annotations) is current before calculation.
-//! - `Extra Counts` remains deterministic for identical atom/bond indexing so batch and single-molecule runs agree bit-for-bit.
-//! - Typed `DescriptorValue` output is part of the contract; downstream ML code should not rely on ad-hoc coercions.
-//! - Specific scope anchor: `crates/ferrum_core/src/desc/extra_counts.rs` defines extra counts behavior and should be updated together with its direct tests.
-//! ### Chemistry/ML references
-//! - Todeschini & Consonni. Handbook of Molecular Descriptors (general descriptor taxonomy).
-//! - RDKit descriptor/fingerprint APIs used as practical parity baselines for `Extra Counts` workflows.
-//! - Repository unit and parity tests covering `Extra Counts` behavior and edge molecules.
-//! - Code-local source of truth: symbols and tests declared in `crates/ferrum_core/src/desc/extra_counts.rs`.
-
 use super::typed::{Descriptor, DescriptorValue};
 use crate::mol::molecule::Molecule;
 use crate::types::BondType;
@@ -140,19 +107,11 @@ struct U64IdentityHasher(u64);
 
 impl Hasher for U64IdentityHasher {
     #[inline]
-    /// Implements the behavior encoded by this function.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/extra_counts.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn finish(&self) -> u64 {
         self.0
     }
 
     #[inline]
-    /// Writes the behavior encoded by this function.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/extra_counts.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn write(&mut self, bytes: &[u8]) {
         // Fallback path for non-u64 writes. Bertz connection map keys use `u64`,
         // so this should not be on the hot path.
@@ -166,19 +125,11 @@ impl Hasher for U64IdentityHasher {
     }
 
     #[inline]
-    /// Writes u64.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/extra_counts.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn write_u64(&mut self, i: u64) {
         self.0 = i;
     }
 
     #[inline]
-    /// Writes usize.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/extra_counts.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn write_usize(&mut self, i: usize) {
         self.0 = i as u64;
     }
@@ -197,10 +148,6 @@ type U64FastMap<V> = std::collections::HashMap<u64, V, BuildHasherDefault<U64Ide
 /// Drug-likeness metric: higher values → more 3D character.
 pub struct FractionCSP3;
 
-/// Computes fraction csp3.
-///
-/// Function context: `crates/ferrum_core/src/desc/extra_counts.rs`.
-/// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
 fn compute_fraction_csp3(mol: &Molecule) -> f64 {
     use crate::algo::electronic::effective_hybridization_pub;
     use crate::types::Hybridization;
@@ -230,18 +177,10 @@ fn compute_fraction_csp3(mol: &Molecule) -> f64 {
 }
 
 impl Descriptor for FractionCSP3 {
-    /// Implements the behavior encoded by this function.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/extra_counts.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn name(&self) -> &str {
         "FractionCSP3"
     }
 
-    /// Calculates the behavior encoded by this function.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/extra_counts.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn calculate(
         &self,
         mol: &Molecule,
@@ -255,10 +194,6 @@ impl Descriptor for FractionCSP3 {
 // Ring Type Counts (helper function only; typed descriptor in ring_types.rs)
 // ---------------------------------------------------------------------------
 
-/// Implements all single bonds.
-///
-/// Function context: `crates/ferrum_core/src/desc/extra_counts.rs`.
-/// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
 fn ring_all_single_bonds(mol: &Molecule, ring: &[u16]) -> bool {
     ring.iter()
         .all(|&bond_idx| mol.bonds[bond_idx as usize].bond_type == BondType::Single)
@@ -313,10 +248,6 @@ pub fn compute_ring_type_counts(mol: &Molecule) -> [u32; 5] {
 /// Count of amide bonds: [NX3][CX3](=[OX1])
 pub struct NumAmideBonds;
 
-/// Computes num amide bonds.
-///
-/// Function context: `crates/ferrum_core/src/desc/extra_counts.rs`.
-/// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
 fn compute_num_amide_bonds(mol: &Molecule) -> u32 {
     let mut count = 0u32;
 
@@ -364,18 +295,10 @@ fn compute_num_amide_bonds(mol: &Molecule) -> u32 {
 }
 
 impl Descriptor for NumAmideBonds {
-    /// Implements the behavior encoded by this function.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/extra_counts.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn name(&self) -> &str {
         "NumAmideBonds"
     }
 
-    /// Calculates the behavior encoded by this function.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/extra_counts.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn calculate(
         &self,
         mol: &Molecule,
@@ -392,10 +315,6 @@ impl Descriptor for NumAmideBonds {
 /// Fraction of heavy atoms that are aromatic.
 pub struct AromaticAtomFraction;
 
-/// Computes aromatic atom fraction.
-///
-/// Function context: `crates/ferrum_core/src/desc/extra_counts.rs`.
-/// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
 fn compute_aromatic_atom_fraction(mol: &Molecule) -> f64 {
     let heavy: usize = mol.atoms.iter().filter(|a| a.atomic_number > 1).count();
     if heavy == 0 {
@@ -410,18 +329,10 @@ fn compute_aromatic_atom_fraction(mol: &Molecule) -> f64 {
 }
 
 impl Descriptor for AromaticAtomFraction {
-    /// Implements the behavior encoded by this function.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/extra_counts.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn name(&self) -> &str {
         "AromaticAtomFraction"
     }
 
-    /// Calculates the behavior encoded by this function.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/extra_counts.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn calculate(
         &self,
         mol: &Molecule,
@@ -441,10 +352,6 @@ impl Descriptor for AromaticAtomFraction {
 /// For other elements: α = Rb0(element)/Rb0(C) - 1.
 pub struct HallKierAlpha;
 
-/// Builds hall kier alpha table.
-///
-/// Function context: `crates/ferrum_core/src/desc/extra_counts.rs`.
-/// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
 const fn build_hall_kier_alpha_table() -> [[f64; 3]; 119] {
     let mut table = [[f64::NAN; 3]; 119];
     table[6] = [-0.22, -0.13, 0.0];
@@ -462,19 +369,11 @@ const fn build_hall_kier_alpha_table() -> [[f64; 3]; 119] {
 const HALL_KIER_ALPHA_TABLE: [[f64; 3]; 119] = build_hall_kier_alpha_table();
 
 #[inline]
-/// Implements kier alpha lookup.
-///
-/// Function context: `crates/ferrum_core/src/desc/extra_counts.rs`.
-/// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
 fn hall_kier_alpha_lookup(atomic_number: u8, hyb_idx: usize) -> Option<f64> {
     let value = HALL_KIER_ALPHA_TABLE[atomic_number as usize][hyb_idx];
     if value.is_nan() { None } else { Some(value) }
 }
 
-/// Computes hall kier alpha sum.
-///
-/// Function context: `crates/ferrum_core/src/desc/extra_counts.rs`.
-/// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
 fn compute_hall_kier_alpha_sum(mol: &Molecule) -> f64 {
     use crate::algo::electronic::effective_hybridization_pub;
     use crate::types::Hybridization;
@@ -503,10 +402,6 @@ fn compute_hall_kier_alpha_sum(mol: &Molecule) -> f64 {
     alpha_sum
 }
 
-/// Computes hall kier alpha.
-///
-/// Function context: `crates/ferrum_core/src/desc/extra_counts.rs`.
-/// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
 fn compute_hall_kier_alpha(mol: &Molecule) -> f64 {
     compute_hall_kier_alpha_sum(mol)
 }
@@ -517,18 +412,10 @@ pub fn compute_hall_kier_alpha_f64(mol: &Molecule) -> f64 {
 }
 
 impl Descriptor for HallKierAlpha {
-    /// Implements the behavior encoded by this function.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/extra_counts.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn name(&self) -> &str {
         "HallKierAlpha"
     }
 
-    /// Calculates the behavior encoded by this function.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/extra_counts.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn calculate(
         &self,
         mol: &Molecule,
@@ -755,18 +642,10 @@ fn compute_bertz_ct(mol: &Molecule, ctx: &mut crate::desc::context::CalculationC
 }
 
 impl Descriptor for BertzCT {
-    /// Implements the behavior encoded by this function.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/extra_counts.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn name(&self) -> &str {
         "BertzCT"
     }
 
-    /// Calculates the behavior encoded by this function.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/extra_counts.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn calculate(
         &self,
         mol: &Molecule,
@@ -776,10 +655,6 @@ impl Descriptor for BertzCT {
     }
 }
 
-/// Implements entropy.
-///
-/// Function context: `crates/ferrum_core/src/desc/extra_counts.rs`.
-/// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
 fn shannon_entropy(counts: &[u32]) -> f64 {
     let total: u32 = counts.iter().sum();
     if total == 0 {
@@ -808,8 +683,6 @@ fn shannon_entropy(counts: &[u32]) -> f64 {
 ///
 /// Reference: D. Bonchev & N. Trinajstic, J. Chem. Phys. 67, 4517-4533 (1977)
 pub struct Ipc;
-
-
 
 /// Characteristic polynomial coefficients exactly as RDKit's
 /// `Graphs.CharacteristicPolynomial` (Le Verrier-Faddeev-Frame in float64).
@@ -940,18 +813,10 @@ fn compute_ipc(mol: &Molecule, ctx: &mut crate::desc::context::CalculationContex
 }
 
 impl Descriptor for Ipc {
-    /// Implements the behavior encoded by this function.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/extra_counts.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn name(&self) -> &str {
         "Ipc"
     }
 
-    /// Calculates the behavior encoded by this function.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/extra_counts.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn calculate(
         &self,
         mol: &Molecule,
@@ -971,10 +836,6 @@ impl Descriptor for Ipc {
 /// FC = -Σ pᵢ × log₂(pᵢ) where pᵢ = fraction of atoms with element i.
 pub struct FragmentComplexity;
 
-/// Computes fragment complexity.
-///
-/// Function context: `crates/ferrum_core/src/desc/extra_counts.rs`.
-/// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
 fn compute_fragment_complexity(mol: &Molecule) -> f64 {
     let mut element_counts = [0u32; 120];
     for atom in &mol.atoms {
@@ -986,18 +847,10 @@ fn compute_fragment_complexity(mol: &Molecule) -> f64 {
 }
 
 impl Descriptor for FragmentComplexity {
-    /// Implements the behavior encoded by this function.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/extra_counts.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn name(&self) -> &str {
         "FragmentComplexity"
     }
 
-    /// Calculates the behavior encoded by this function.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/extra_counts.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn calculate(
         &self,
         mol: &Molecule,
@@ -1011,10 +864,6 @@ impl Descriptor for FragmentComplexity {
 // Thread safety
 // ---------------------------------------------------------------------------
 const _: () = {
-    /// Asserts send sync to guard invariants.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/extra_counts.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     const fn assert_send_sync<T: Send + Sync>() {}
     let _ = assert_send_sync::<FractionCSP3>;
     let _ = assert_send_sync::<NumAmideBonds>;
@@ -1111,27 +960,19 @@ mod tests {
         }
     }
 
-    /// Implements float.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/extra_counts.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn calc_float(desc: &dyn Descriptor, smiles: &str) -> f64 {
-        let mut mol = parse_smiles(smiles).expect("valid SMILES");
+        let mol = parse_smiles(smiles).expect("valid SMILES");
         desc.calculate(
-            &mut mol,
+            &mol,
             &mut crate::desc::context::CalculationContext::new(),
         )
         .as_float()
     }
 
-    /// Implements int.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/extra_counts.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn calc_int(desc: &dyn Descriptor, smiles: &str) -> u32 {
-        let mut mol = parse_smiles(smiles).expect("valid SMILES");
+        let mol = parse_smiles(smiles).expect("valid SMILES");
         desc.calculate(
-            &mut mol,
+            &mol,
             &mut crate::desc::context::CalculationContext::new(),
         )
         .as_int()
@@ -1140,60 +981,36 @@ mod tests {
     // -- FractionCSP3 --
 
     #[test]
-    /// Runs regression test for fsp3 ethane.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/extra_counts.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_fsp3_ethane() {
         let v = calc_float(&FractionCSP3, "CC");
         assert!((v - 1.0).abs() < 0.01, "all sp3: {}", v);
     }
 
     #[test]
-    /// Runs regression test for fsp3 ethene.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/extra_counts.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_fsp3_ethene() {
         let v = calc_float(&FractionCSP3, "C=C");
         assert!(v.abs() < 0.01, "all sp2: {}", v);
     }
 
     #[test]
-    /// Runs regression test for fsp3 propanol.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/extra_counts.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_fsp3_propanol() {
         let v = calc_float(&FractionCSP3, "CCCO");
         assert!((v - 1.0).abs() < 0.01, "all sp3: {}", v);
     }
 
     #[test]
-    /// Runs regression test for fsp3 benzene.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/extra_counts.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_fsp3_benzene() {
         let v = calc_float(&FractionCSP3, "c1ccccc1");
         assert!(v.abs() < 0.01, "no sp3 carbons: {}", v);
     }
 
     #[test]
-    /// Runs regression test for fsp3 toluene.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/extra_counts.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_fsp3_toluene() {
         let v = calc_float(&FractionCSP3, "Cc1ccccc1");
         assert!((v - 1.0 / 7.0).abs() < 0.02, "fsp3 = {}", v);
     }
 
     #[test]
-    /// Runs regression test for fsp3 trivalent radical carbon excluded.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/extra_counts.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_fsp3_trivalent_radical_carbon_excluded() {
         let v = calc_float(&FractionCSP3, "[C](C)(C)C");
         assert!((v - 0.75).abs() < 0.01, "fsp3 = {}", v);
@@ -1202,10 +1019,6 @@ mod tests {
     // -- RingTypeCounts (helper function) --
 
     #[test]
-    /// Runs regression test for ring types benzene.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/extra_counts.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_ring_types_benzene() {
         let mol = parse_smiles("c1ccccc1").expect("valid");
         let v = compute_ring_type_counts(&mol);
@@ -1215,10 +1028,6 @@ mod tests {
     }
 
     #[test]
-    /// Runs regression test for ring types cyclohexane.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/extra_counts.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_ring_types_cyclohexane() {
         let mol = parse_smiles("C1CCCCC1").expect("valid");
         let v = compute_ring_type_counts(&mol);
@@ -1228,10 +1037,6 @@ mod tests {
     }
 
     #[test]
-    /// Runs regression test for ring types pyridine.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/extra_counts.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_ring_types_pyridine() {
         let mol = parse_smiles("c1ccncc1").expect("valid");
         let v = compute_ring_type_counts(&mol);
@@ -1241,10 +1046,6 @@ mod tests {
     }
 
     #[test]
-    /// Runs regression test for ring types morpholine.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/extra_counts.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_ring_types_morpholine() {
         let mol = parse_smiles("C1COCCN1").expect("valid");
         let v = compute_ring_type_counts(&mol);
@@ -1255,56 +1056,32 @@ mod tests {
     // -- NumAmideBonds --
 
     #[test]
-    /// Runs regression test for amide acetamide.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/extra_counts.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_amide_acetamide() {
         assert_eq!(calc_int(&NumAmideBonds, "CC(=O)N"), 1);
     }
 
     #[test]
-    /// Runs regression test for amide ethane.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/extra_counts.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_amide_ethane() {
         assert_eq!(calc_int(&NumAmideBonds, "CC"), 0);
     }
 
     #[test]
-    /// Runs regression test for amide peptide.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/extra_counts.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_amide_peptide() {
         let v = calc_int(&NumAmideBonds, "NCC(=O)NCC(=O)O");
         assert!(v >= 1, "should have amide bonds: {}", v);
     }
 
     #[test]
-    /// Runs regression test for amide caffeine like ureide counts imino n bond.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/extra_counts.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_amide_caffeine_like_ureide_counts_imino_n_bond() {
         assert_eq!(calc_int(&NumAmideBonds, "CN1C(=O)N=C2N=CN=C2C1=O"), 3);
     }
 
     #[test]
-    /// Runs regression test for amide barbituric acid aromatic ureide does not count.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/extra_counts.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_amide_barbituric_acid_aromatic_ureide_does_not_count() {
         assert_eq!(calc_int(&NumAmideBonds, "O=C1NC(=O)NC(=O)N1"), 0);
     }
 
     #[test]
-    /// Runs regression test for amide non aromatic imino n counts.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/extra_counts.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_amide_non_aromatic_imino_n_counts() {
         assert_eq!(
             calc_int(
@@ -1318,30 +1095,18 @@ mod tests {
     // -- AromaticAtomFraction --
 
     #[test]
-    /// Runs regression test for arom frac benzene.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/extra_counts.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_arom_frac_benzene() {
         let v = calc_float(&AromaticAtomFraction, "c1ccccc1");
         assert!((v - 1.0).abs() < 0.01, "all aromatic: {}", v);
     }
 
     #[test]
-    /// Runs regression test for arom frac hexane.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/extra_counts.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_arom_frac_hexane() {
         let v = calc_float(&AromaticAtomFraction, "CCCCCC");
         assert!(v.abs() < 0.01, "no aromatic: {}", v);
     }
 
     #[test]
-    /// Runs regression test for arom frac toluene.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/extra_counts.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_arom_frac_toluene() {
         let v = calc_float(&AromaticAtomFraction, "Cc1ccccc1");
         assert!((v - 6.0 / 7.0).abs() < 0.02, "frac = {}", v);
@@ -1350,30 +1115,18 @@ mod tests {
     // -- HallKierAlpha --
 
     #[test]
-    /// Runs regression test for hka all carbon.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/extra_counts.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_hka_all_carbon() {
         let v = calc_float(&HallKierAlpha, "CCCC");
         assert!(v.abs() < 0.01, "all-C alpha = {}", v);
     }
 
     #[test]
-    /// Runs regression test for hka oxygen.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/extra_counts.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_hka_oxygen() {
         let v = calc_float(&HallKierAlpha, "CCO");
         assert!(v < 0.0, "O makes alpha negative: {}", v);
     }
 
     #[test]
-    /// Runs regression test for hka bromine.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/extra_counts.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_hka_bromine() {
         let v = calc_float(&HallKierAlpha, "CCBr");
         assert!(v > 0.0, "Br makes alpha positive: {}", v);
@@ -1387,10 +1140,6 @@ mod tests {
     // (ester/phosphate oxygens were promoted to SP2 → alpha too negative).
 
     #[test]
-    /// Runs regression test for hka ester bridging o sp2.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/extra_counts.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_hka_ester_bridging_o_sp2() {
         // CC(=O)OC — methyl acetate
         // C_SP3(0) + C_SP2(-0.13) + O_SP2(-0.20) + O_SP2(-0.20) + C_SP3(0) = -0.53
@@ -1403,10 +1152,6 @@ mod tests {
     }
 
     #[test]
-    /// Runs regression test for hka carboxylic acid oh sp2.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/extra_counts.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_hka_carboxylic_acid_oh_sp2() {
         // CC(=O)O — acetic acid
         // C_SP3(0) + C_SP2(-0.13) + O_SP2(-0.20) + O_SP2(-0.20) = -0.53
@@ -1419,10 +1164,6 @@ mod tests {
     }
 
     #[test]
-    /// Runs regression test for hka phenol o sp2.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/extra_counts.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_hka_phenol_o_sp2() {
         // c1ccc(O)cc1 — phenol
         // 6×C_arom(-0.13) + O_SP2(-0.20) = -0.98
@@ -1435,10 +1176,6 @@ mod tests {
     }
 
     #[test]
-    /// Runs regression test for hka ether o sp3.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/extra_counts.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_hka_ether_o_sp3() {
         // COC — dimethyl ether
         // C_SP3(0) + O_SP3(-0.04) + C_SP3(0) = -0.04
@@ -1451,10 +1188,6 @@ mod tests {
     }
 
     #[test]
-    /// Runs regression test for hka phosphoric acid oh sp3.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/extra_counts.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_hka_phosphoric_acid_oh_sp3() {
         // OP(=O)(O)O — phosphoric acid
         // P_SP3(0.43) + O_SP2(-0.20) + 3×O_SP3(-0.04) = 0.11
@@ -1467,10 +1200,6 @@ mod tests {
     }
 
     #[test]
-    /// Runs regression test for hka dimethyl phosphate o sp3.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/extra_counts.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_hka_dimethyl_phosphate_o_sp3() {
         // COP(=O)(OC)O — dimethyl phosphate
         // 2×C_SP3(0) + 2×O_bridge_SP3(-0.04) + P_SP3(0.43) + O_SP2(-0.20) + O_OH_SP3(-0.04) = 0.11
@@ -1485,10 +1214,6 @@ mod tests {
     }
 
     #[test]
-    /// Runs regression test for hka allene central carbon sp.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/extra_counts.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_hka_allene_central_carbon_sp() {
         let v = calc_float(&HallKierAlpha, "C=C=C");
         assert!(
@@ -1499,10 +1224,6 @@ mod tests {
     }
 
     #[test]
-    /// Runs regression test for hka trivalent radical carbon stays sp3.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/extra_counts.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_hka_trivalent_radical_carbon_stays_sp3() {
         let v = calc_float(&HallKierAlpha, "[C](C)(C)C");
         assert!(v.abs() < 0.01, "tert-butyl radical HallKierAlpha = {}", v);
@@ -1511,20 +1232,12 @@ mod tests {
     // -- BertzCT --
 
     #[test]
-    /// Runs regression test for bertz methane.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/extra_counts.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_bertz_methane() {
         let v = calc_float(&BertzCT, "C");
         assert!(v.abs() < 0.01, "methane CT = {}", v);
     }
 
     #[test]
-    /// Runs regression test for bertz complex gt simple.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/extra_counts.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_bertz_complex_gt_simple() {
         let simple = calc_float(&BertzCT, "CCCC");
         let complex = calc_float(&BertzCT, "c1ccc(O)c(N)c1");
@@ -1532,10 +1245,6 @@ mod tests {
     }
 
     #[test]
-    /// Runs regression test for bertz benzene.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/extra_counts.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_bertz_benzene() {
         let v = calc_float(&BertzCT, "c1ccccc1");
         // RDKit: 71.961
@@ -1545,10 +1254,6 @@ mod tests {
     // -- Ipc --
 
     #[test]
-    /// Runs regression test for ipc ethane.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/extra_counts.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_ipc_ethane() {
         let v = calc_float(&Ipc, "CC");
         // RDKit: 2.0
@@ -1556,20 +1261,12 @@ mod tests {
     }
 
     #[test]
-    /// Runs regression test for ipc diverse.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/extra_counts.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_ipc_diverse() {
         let v = calc_float(&Ipc, "CC=O");
         assert!(v > 0.0, "should have info content: {}", v);
     }
 
     #[test]
-    /// Runs regression test for ipc avg mode returns smaller value.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/extra_counts.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_ipc_avg_mode_is_entropy_only() {
         // This test exercises the average-Ipc mode gate without affecting default behavior.
         // `Ipc(avg)` should be <= `Ipc` for positive total coefficient mass.
@@ -1588,30 +1285,18 @@ mod tests {
     // -- FragmentComplexity --
 
     #[test]
-    /// Runs regression test for fc all carbon.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/extra_counts.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_fc_all_carbon() {
         let v = calc_float(&FragmentComplexity, "CCCC");
         assert!(v.abs() < 0.01, "all-C FC = {}", v);
     }
 
     #[test]
-    /// Runs regression test for fc diverse.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/extra_counts.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_fc_diverse() {
         let v = calc_float(&FragmentComplexity, "CCNO");
         assert!(v > 0.0, "diverse FC = {}", v);
     }
 
     #[test]
-    /// Runs regression test for fc more diverse higher.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/extra_counts.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_fc_more_diverse_higher() {
         let less = calc_float(&FragmentComplexity, "CCCC");
         let more = calc_float(&FragmentComplexity, "CCNO");
@@ -1663,8 +1348,8 @@ mod cdk_fragment_complexity_tests {
     use crate::io::smiles::parse_smiles;
 
     fn frag_c(smiles: &str) -> f64 {
-        let mut mol = parse_smiles(smiles).unwrap();
-        CdkFragmentComplexity.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()).as_float()
+        let mol = parse_smiles(smiles).unwrap();
+        CdkFragmentComplexity.calculate(&mol, &mut crate::desc::context::CalculationContext::new()).as_float()
     }
 
     // Expected values from CDK 2.13 FragmentComplexityDescriptor.

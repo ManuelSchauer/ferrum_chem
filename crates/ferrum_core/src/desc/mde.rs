@@ -84,8 +84,8 @@ impl Descriptor for MDE {
 
     fn calculate(&self, mol: &Molecule, ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
         // CDK computes on `removeHydrogens(container)`
-        if let Some(mut suppressed) = crate::algo::sanitize::cdk_remove_hydrogens(mol) {
-            return self.calculate(&mut suppressed, ctx);
+        if let Some(suppressed) = crate::algo::sanitize::cdk_remove_hydrogens(mol) {
+            return self.calculate(&suppressed, ctx);
         }
         let n = mol.num_atoms();
         // classes[element][degree]: atom indices in ascending order
@@ -119,7 +119,7 @@ impl Descriptor for MDE {
             if v1.is_empty() || v2.is_empty() {
                 continue;
             }
-            *out = eval_c_value(dist, n, v1, v2, i == j) as f64;
+            *out = eval_c_value(dist, n, v1, v2, i == j);
         }
         DescriptorValue::FloatVec(values)
     }
@@ -136,12 +136,12 @@ mod tests {
     use crate::io::smiles::parse_smiles;
 
     fn calc_mde(smiles: &str) -> Vec<f64> {
-        let mut mol = parse_smiles(smiles).expect("valid SMILES");
-        MDE.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()).as_float_vec().to_vec()
+        let mol = parse_smiles(smiles).expect("valid SMILES");
+        MDE.calculate(&mol, &mut crate::desc::context::CalculationContext::new()).as_float_vec().to_vec()
     }
 
     fn close(a: f64, b: f64) -> bool {
-        (a as f64 - b).abs() < 1e-5
+        (a - b).abs() < 1e-5
     }
 
     #[test]

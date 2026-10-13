@@ -4,37 +4,10 @@
 //! (`nBitsPerEntry=4`, thresholds `[1,2,4,8]`) for parity with:
 //! - `GetHashedAtomPairFingerprintAsBitVect()`
 //! - `GetHashedTopologicalTorsionFingerprintAsBitVect()`
-
-//! ## File guide: Path Fingerprints
 //!
-//! This file belongs to FerrumChem's **descriptor/fingerprint feature layer**.
-//!
-//! What to learn here:
-//! - Which chemistry/ML concern this file owns in the pipeline.
-//! - How Rust types and control-flow encode that concern.
-//! - Which public symbols are the best entry points for reading/debugging.
-//!
-//! Key symbols in this file:
-//! - `fn rdkit_hash_combine`
-//! - `fn bond_neighbor`
-//! - `fn bond_between_atoms`
-//! - `fn is_effectively_sp3`
-//! - `fn num_pi_electrons`
-//!
-//! Suggested reading workflow:
-//! 1. Read top-level type definitions and public APIs.
-//! 2. Trace helper functions used in hot/critical paths.
-//! 3. Cross-reference tests/examples that exercise this file.
-
-//!
-//! ### Algorithmic assumptions for this file
-//! - Atom-pair and torsion encodings assume shortest-path and ordered-atom canonicalization are deterministic.
-//! - Bit mapping expects fixed-size folded spaces where collisions are acceptable but reproducible.
-//! - Topological paths are computed on bond graphs only; stereochemical 3D torsion geometry is out-of-scope.
-//! ### Chemistry/ML references
+//! References:
 //! - Carhart et al. (1985). Atom pair molecular representations.
 //! - Nilakantan et al. (1987). Topological torsion descriptors.
-//! - RDKit AtomPair/TopologicalTorsion behavior as external parity reference.
 
 use super::typed::{Descriptor, DescriptorValue};
 use crate::mol::molecule::Molecule;
@@ -58,10 +31,6 @@ const CODE_SIZE: u32 = NUM_TYPE_BITS + NUM_PI_BITS + NUM_BRANCH_BITS; // 9
 const CODE_SIZE_LIMIT: u32 = (1u32 << CODE_SIZE) - 1; // 511
 
 #[inline]
-/// Implements hash combine.
-///
-/// Function context: `crates/ferrum_core/src/desc/path_fingerprints.rs`.
-/// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
 fn rdkit_hash_combine(seed: &mut u32, value: u32) {
     *seed ^= value
         .wrapping_add(0x9e37_79b9)
@@ -70,10 +39,6 @@ fn rdkit_hash_combine(seed: &mut u32, value: u32) {
 }
 
 #[inline]
-/// Implements neighbor.
-///
-/// Function context: `crates/ferrum_core/src/desc/path_fingerprints.rs`.
-/// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
 fn bond_neighbor(mol: &Molecule, atom_idx: usize, bond_idx: usize) -> usize {
     let bond = &mol.bonds[bond_idx];
     if bond.source as usize == atom_idx {
@@ -83,10 +48,6 @@ fn bond_neighbor(mol: &Molecule, atom_idx: usize, bond_idx: usize) -> usize {
     }
 }
 
-/// Implements between atoms.
-///
-/// Function context: `crates/ferrum_core/src/desc/path_fingerprints.rs`.
-/// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
 fn bond_between_atoms(mol: &Molecule, a: usize, b: usize) -> Option<usize> {
     for &bond_idx_u16 in &mol.adjacency[a] {
         let bond_idx = bond_idx_u16 as usize;
@@ -97,10 +58,6 @@ fn bond_between_atoms(mol: &Molecule, a: usize, b: usize) -> Option<usize> {
     None
 }
 
-/// Checks whether effectively sp3.
-///
-/// Function context: `crates/ferrum_core/src/desc/path_fingerprints.rs`.
-/// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
 fn is_effectively_sp3(mol: &Molecule, idx: usize) -> bool {
     let atom = &mol.atoms[idx];
     if atom.is_aromatic() {
@@ -122,10 +79,6 @@ fn is_effectively_sp3(mol: &Molecule, idx: usize) -> bool {
     })
 }
 
-/// Implements pi electrons.
-///
-/// Function context: `crates/ferrum_core/src/desc/path_fingerprints.rs`.
-/// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
 fn num_pi_electrons(mol: &Molecule, idx: usize) -> u32 {
     let atom = &mol.atoms[idx];
     if atom.is_aromatic() {
@@ -178,10 +131,6 @@ fn atom_code(mol: &Molecule, idx: usize, branch_subtract: u32) -> u32 {
     code
 }
 
-/// Implements count simulated hashes.
-///
-/// Function context: `crates/ferrum_core/src/desc/path_fingerprints.rs`.
-/// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
 fn fold_count_simulated_hashes(hashes: &[u32], num_bits: usize) -> BitVec<u8, Lsb0> {
     let mut bits = bitvec![u8, Lsb0; 0; num_bits];
     if num_bits == 0 {
@@ -214,10 +163,6 @@ fn fold_count_simulated_hashes(hashes: &[u32], num_bits: usize) -> BitVec<u8, Ls
     bits
 }
 
-/// Implements pair hashes.
-///
-/// Function context: `crates/ferrum_core/src/desc/path_fingerprints.rs`.
-/// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
 fn atom_pair_hashes(
     mol: &Molecule,
     ctx: &mut crate::desc::context::CalculationContext,
@@ -261,10 +206,6 @@ fn atom_pair_hashes(
     hashes
 }
 
-/// Implements paths len4.
-///
-/// Function context: `crates/ferrum_core/src/desc/path_fingerprints.rs`.
-/// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
 fn dfs_paths_len4(mol: &Molecule, path: &mut Vec<usize>, out: &mut Vec<[usize; 4]>) {
     if path.len() == TT_ATOM_COUNT {
         out.push([path[0], path[1], path[2], path[3]]);
@@ -299,10 +240,6 @@ fn dfs_paths_len4(mol: &Molecule, path: &mut Vec<usize>, out: &mut Vec<[usize; 4
     }
 }
 
-/// Implements torsion paths.
-///
-/// Function context: `crates/ferrum_core/src/desc/path_fingerprints.rs`.
-/// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
 fn unique_torsion_paths(mol: &Molecule) -> Vec<[usize; 4]> {
     // A 3-membered ring yields the closed torsion path a-b-c-a, so molecules
     // with fewer than 4 atoms can still have torsions (RDKit behaviour).
@@ -346,10 +283,6 @@ fn unique_torsion_paths(mol: &Molecule) -> Vec<[usize; 4]> {
     unique
 }
 
-/// Implements hashes.
-///
-/// Function context: `crates/ferrum_core/src/desc/path_fingerprints.rs`.
-/// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
 fn torsion_hashes(mol: &Molecule) -> Vec<u32> {
     let n = mol.num_atoms();
     if n < 3 {
@@ -413,10 +346,6 @@ pub struct AtomPairFingerprint {
 }
 
 impl AtomPairFingerprint {
-    /// Creates a new value with the defaults and invariants required by this module.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/path_fingerprints.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     pub fn new(num_bits: usize) -> Self {
         Self { num_bits }
     }
@@ -437,18 +366,10 @@ impl AtomPairFingerprint {
 }
 
 impl Descriptor for AtomPairFingerprint {
-    /// Implements the behavior encoded by this function.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/path_fingerprints.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn name(&self) -> &str {
         "AtomPair"
     }
 
-    /// Calculates the behavior encoded by this function.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/path_fingerprints.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn calculate(
         &self,
         mol: &Molecule,
@@ -468,26 +389,18 @@ pub struct TopologicalTorsionFingerprint {
 }
 
 impl TopologicalTorsionFingerprint {
-    /// Creates a new value with the defaults and invariants required by this module.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/path_fingerprints.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     pub fn new(num_bits: usize) -> Self {
         Self { num_bits }
     }
 
-    /// Implements size.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/path_fingerprints.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     pub fn default_size() -> Self {
         Self { num_bits: 2048 }
     }
 
     /// Raw hashed torsion environment identifiers (pre-folding).
     pub fn raw_features(&self, mol: &Molecule) -> Vec<u64> {
-        let mut clone = mol.clone();
-        torsion_hashes(&mut clone)
+        let clone = mol.clone();
+        torsion_hashes(&clone)
             .into_iter()
             .map(|v| v as u64)
             .collect()
@@ -495,18 +408,10 @@ impl TopologicalTorsionFingerprint {
 }
 
 impl Descriptor for TopologicalTorsionFingerprint {
-    /// Implements the behavior encoded by this function.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/path_fingerprints.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn name(&self) -> &str {
         "TopologicalTorsion"
     }
 
-    /// Calculates the behavior encoded by this function.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/path_fingerprints.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn calculate(
         &self,
         mol: &Molecule,
@@ -519,10 +424,6 @@ impl Descriptor for TopologicalTorsionFingerprint {
 }
 
 const _: () = {
-    /// Asserts send sync to guard invariants.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/path_fingerprints.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     const fn assert_send_sync<T: Send + Sync>() {}
     let _ = assert_send_sync::<AtomPairFingerprint>;
     let _ = assert_send_sync::<TopologicalTorsionFingerprint>;
@@ -534,25 +435,17 @@ mod tests {
     use crate::desc::fingerprint::tanimoto_similarity;
     use crate::io::smiles::parse_smiles;
 
-    /// Counts bits.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/path_fingerprints.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn count_bits(fp: &BitVec<u8, Lsb0>) -> usize {
         fp.count_ones()
     }
 
     // ========== Atom Pair Tests ==========
 
-    /// Implements ap.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/path_fingerprints.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn calc_ap(smiles: &str, bits: usize) -> BitVec<u8, Lsb0> {
-        let mut mol = parse_smiles(smiles).expect("valid SMILES");
+        let mol = parse_smiles(smiles).expect("valid SMILES");
         let ap = AtomPairFingerprint::new(bits);
         ap.calculate(
-            &mut mol,
+            &mol,
             &mut crate::desc::context::CalculationContext::new(),
         )
         .as_binary()
@@ -560,20 +453,12 @@ mod tests {
     }
 
     #[test]
-    /// Runs regression test for ap methane no pairs.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/path_fingerprints.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_ap_methane_no_pairs() {
         let fp = calc_ap("C", 2048);
         assert_eq!(count_bits(&fp), 0);
     }
 
     #[test]
-    /// Runs regression test for ap ethane.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/path_fingerprints.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_ap_ethane() {
         let fp = calc_ap("CC", 2048);
         assert!(
@@ -583,10 +468,6 @@ mod tests {
     }
 
     #[test]
-    /// Runs regression test for ap benzene.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/path_fingerprints.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_ap_benzene() {
         let fp = calc_ap("c1ccccc1", 2048);
         let bits = count_bits(&fp);
@@ -594,10 +475,6 @@ mod tests {
     }
 
     #[test]
-    /// Runs regression test for ap identical.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/path_fingerprints.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_ap_identical() {
         let fp1 = calc_ap("CCO", 2048);
         let fp2 = calc_ap("CCO", 2048);
@@ -605,10 +482,6 @@ mod tests {
     }
 
     #[test]
-    /// Runs regression test for ap self tanimoto.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/path_fingerprints.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_ap_self_tanimoto() {
         let fp = calc_ap("c1ccc(CC(=O)O)cc1", 2048);
         let sim = tanimoto_similarity(&fp, &fp);
@@ -616,10 +489,6 @@ mod tests {
     }
 
     #[test]
-    /// Runs regression test for ap similar molecules.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/path_fingerprints.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_ap_similar_molecules() {
         let fp1 = calc_ap("c1ccc(O)cc1", 2048);
         let fp2 = calc_ap("Cc1ccc(O)cc1", 2048);
@@ -632,10 +501,6 @@ mod tests {
     }
 
     #[test]
-    /// Runs regression test for ap larger molecules more bits.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/path_fingerprints.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_ap_larger_molecules_more_bits() {
         let fp_small = calc_ap("CC", 2048);
         let fp_large = calc_ap("CCCCCCCCCC", 2048);
@@ -643,10 +508,6 @@ mod tests {
     }
 
     #[test]
-    /// Runs regression test for ap drug molecule.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/path_fingerprints.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_ap_drug_molecule() {
         let fp = calc_ap("CC(=O)Oc1ccccc1C(=O)O", 2048);
         let bits = count_bits(&fp);
@@ -655,15 +516,11 @@ mod tests {
 
     // ========== Topological Torsion Tests ==========
 
-    /// Implements tt.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/path_fingerprints.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn calc_tt(smiles: &str, bits: usize) -> BitVec<u8, Lsb0> {
-        let mut mol = parse_smiles(smiles).expect("valid SMILES");
+        let mol = parse_smiles(smiles).expect("valid SMILES");
         let tt = TopologicalTorsionFingerprint::new(bits);
         tt.calculate(
-            &mut mol,
+            &mol,
             &mut crate::desc::context::CalculationContext::new(),
         )
         .as_binary()
@@ -671,10 +528,6 @@ mod tests {
     }
 
     #[test]
-    /// Runs regression test for tt small molecules no paths.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/path_fingerprints.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_tt_small_molecules_no_paths() {
         assert_eq!(count_bits(&calc_tt("C", 2048)), 0);
         assert_eq!(count_bits(&calc_tt("CC", 2048)), 0);
@@ -682,30 +535,18 @@ mod tests {
     }
 
     #[test]
-    /// Runs regression test for tt butane.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/path_fingerprints.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_tt_butane() {
         let fp = calc_tt("CCCC", 2048);
         assert!(count_bits(&fp) > 0, "Butane has one 4-atom path");
     }
 
     #[test]
-    /// Runs regression test for tt benzene.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/path_fingerprints.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_tt_benzene() {
         let fp = calc_tt("c1ccccc1", 2048);
         assert!(count_bits(&fp) > 0);
     }
 
     #[test]
-    /// Runs regression test for tt identical.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/path_fingerprints.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_tt_identical() {
         let fp1 = calc_tt("CCCCC", 2048);
         let fp2 = calc_tt("CCCCC", 2048);
@@ -713,10 +554,6 @@ mod tests {
     }
 
     #[test]
-    /// Runs regression test for tt self tanimoto.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/path_fingerprints.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_tt_self_tanimoto() {
         let fp = calc_tt("c1ccc(CC(=O)O)cc1", 2048);
         let sim = tanimoto_similarity(&fp, &fp);
@@ -724,10 +561,6 @@ mod tests {
     }
 
     #[test]
-    /// Runs regression test for tt different molecules.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/path_fingerprints.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_tt_different_molecules() {
         let fp1 = calc_tt("CCCCCC", 2048);
         let fp2 = calc_tt("c1ccccc1", 2048);
@@ -735,10 +568,6 @@ mod tests {
     }
 
     #[test]
-    /// Runs regression test for tt drug molecule.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/path_fingerprints.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_tt_drug_molecule() {
         let fp = calc_tt("CC(=O)Oc1ccccc1C(=O)O", 2048);
         let bits = count_bits(&fp);

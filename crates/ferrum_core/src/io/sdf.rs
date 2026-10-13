@@ -305,7 +305,7 @@ fn parse_mol_block_lines(lines: &[&str]) -> Result<Molecule> {
 }
 
 /// Joins V3000 continuation lines (`-` at end of line) and strips `M  V30 `.
-fn v30_lines<'a>(lines: &[&'a str]) -> Vec<String> {
+fn v30_lines(lines: &[&str]) -> Vec<String> {
     let mut out = Vec::new();
     let mut acc = String::new();
     for &l in lines {

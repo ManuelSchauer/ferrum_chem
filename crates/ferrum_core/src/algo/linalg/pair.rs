@@ -8,6 +8,9 @@
 //! Layout: element `(i, j)` of problem `l` lives at `2 * (i * n + j) + l`;
 //! vectors are interleaved the same way (`v[2 * k + l]`).
 
+// The lane loops index `chunks_exact(2)` slices on purpose (tuned kernel).
+#![allow(clippy::chunks_exact_to_as_chunks)]
+
 use super::f2::F2;
 use super::{Extreme, MAX_IT, SpectrumBounds, multisection};
 
@@ -117,7 +120,7 @@ pub(super) fn tridiagonalize_pair(
         }
         // (reductions use four partial sums to stay off the add latency chain)
         let mut acc = [zero; 4];
-        for (k, c) in x.chunks_exact(2).enumerate() {
+        for (k, c) in x.as_chunks::<2>().0.iter().enumerate() {
             acc[k & 3] = acc[k & 3].add(F2::load(c).abs());
         }
         let scale = acc[0].add(acc[2]).add(acc[1].add(acc[3]));
@@ -126,7 +129,7 @@ pub(super) fn tridiagonalize_pair(
         let inv_scale = scale.select_eq_zero(zero, one.div(scale));
         let mut acc = [zero; 4];
         for (k, (c, uc)) in x
-            .chunks_exact(2)
+            .as_chunks::<2>().0.iter()
             .zip(u[..2 * i].chunks_exact_mut(2))
             .enumerate()
         {
@@ -158,7 +161,7 @@ pub(super) fn tridiagonalize_pair(
         let inv_h = one.div(h);
         let mut acc = [zero; 4];
         for (k, (pc, uc)) in p[..2 * i]
-            .chunks_exact_mut(2)
+            .as_chunks_mut::<2>().0.iter_mut()
             .zip(u[..2 * i].chunks_exact(2))
             .enumerate()
         {
@@ -175,7 +178,7 @@ pub(super) fn tridiagonalize_pair(
         // q = p - hh u, and row l (the next Householder source) updated eagerly
         let row = &mut head[2 * l * n..2 * l * n + 2 * i];
         for ((pc, uc), rc) in p[..2 * i]
-            .chunks_exact_mut(2)
+            .as_chunks_mut::<2>().0.iter_mut()
             .zip(u[..2 * i].chunks_exact(2))
             .zip(row.chunks_exact_mut(2))
         {

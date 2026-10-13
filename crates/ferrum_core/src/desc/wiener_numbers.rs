@@ -8,38 +8,6 @@
 //! - Implementing stateless descriptor structs in Rust.
 //! - Mapping chemistry concepts to reproducible numeric features.
 
-//! ## File guide: Wiener Numbers
-//!
-//! This file belongs to FerrumChem's **descriptor/fingerprint feature layer**.
-//!
-//! What to learn here:
-//! - Which chemistry/ML concern this file owns in the pipeline.
-//! - How Rust types and control-flow encode that concern.
-//! - Which public symbols are the best entry points for reading/debugging.
-//!
-//! Key symbols in this file:
-//! - `struct WienerIndex`
-//! - `fn wiener_numbers`
-//! - `fn name`
-//! - `fn calculate`
-//!
-//! Suggested reading workflow:
-//! 1. Read top-level type definitions and public APIs.
-//! 2. Trace helper functions used in hot/critical paths.
-//! 3. Cross-reference tests/examples that exercise this file.
-
-//!
-//! ### Algorithmic assumptions for this file
-//! - `Wiener Numbers` assumes molecule preprocessing (implicit hydrogens, aromaticity flags, and ring annotations) is current before calculation.
-//! - `Wiener Numbers` remains deterministic for identical atom/bond indexing so batch and single-molecule runs agree bit-for-bit.
-//! - Typed `DescriptorValue` output is part of the contract; downstream ML code should not rely on ad-hoc coercions.
-//! - Specific scope anchor: `crates/ferrum_core/src/desc/wiener_numbers.rs` defines wiener numbers behavior and should be updated together with its direct tests.
-//! ### Chemistry/ML references
-//! - Todeschini & Consonni. Handbook of Molecular Descriptors (general descriptor taxonomy).
-//! - RDKit descriptor/fingerprint APIs used as practical parity baselines for `Wiener Numbers` workflows.
-//! - Repository unit and parity tests covering `Wiener Numbers` behavior and edge molecules.
-//! - Code-local source of truth: symbols and tests declared in `crates/ferrum_core/src/desc/wiener_numbers.rs`.
-
 use super::cdk_graph::cdk_distance;
 use super::typed::{Descriptor, DescriptorValue};
 use crate::mol::molecule::Molecule;
@@ -78,8 +46,8 @@ impl Descriptor for WienerIndex {
         ctx: &mut crate::desc::context::CalculationContext,
     ) -> DescriptorValue {
         // CDK computes on `removeHydrogens(container)`
-        if let Some(mut suppressed) = crate::algo::sanitize::cdk_remove_hydrogens(mol) {
-            return self.calculate(&mut suppressed, ctx);
+        if let Some(suppressed) = crate::algo::sanitize::cdk_remove_hydrogens(mol) {
+            return self.calculate(&suppressed, ctx);
         }
         let n = mol.num_atoms();
         if n <= 1 {
@@ -103,9 +71,9 @@ mod tests {
     use crate::io::smiles::parse_smiles;
 
     fn wiener_numbers(smiles: &str) -> (f64, f64) {
-        let mut mol = parse_smiles(smiles).expect("Invalid SMILES");
+        let mol = parse_smiles(smiles).expect("Invalid SMILES");
         let v = WienerIndex
-            .calculate(&mut mol, &mut crate::desc::context::CalculationContext::new())
+            .calculate(&mol, &mut crate::desc::context::CalculationContext::new())
             .as_float_vec()
             .to_vec();
         assert_eq!(v.len(), 2);
@@ -176,7 +144,7 @@ mod tests {
     fn test_wiener_disconnected_uses_cdk_sentinel() {
         // CDK counts unreachable pairs with distance 999999999
         let (path, polarity) = wiener_numbers("CC.O");
-        assert_eq!(path as f64, (1.0 + 2.0 * 999_999_999.0f64) as f64 as f64);
+        assert_eq!(path, (1.0 + 2.0 * 999_999_999.0f64));
         assert_eq!(polarity, 0.0);
     }
 
