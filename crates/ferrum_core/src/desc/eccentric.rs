@@ -90,7 +90,7 @@ fn _compute_distance_matrix_unused(mol: &Molecule) -> Vec<u32> {
 /// - Path graphs: increasing with length
 /// - Cyclic: lower than linear of same size
 /// - Branched: varies with structure
-pub fn calculate(mol: &mut Molecule, ctx: &mut crate::desc::context::CalculationContext) -> i32 {
+pub fn calculate(mol: &Molecule, ctx: &mut crate::desc::context::CalculationContext) -> i32 {
     // CDK computes on `removeHydrogens(container)`
     if let Some(mut suppressed) = crate::algo::sanitize::cdk_remove_hydrogens(mol) {
         return calculate(&mut suppressed, ctx);
@@ -275,7 +275,7 @@ impl crate::desc::typed::Descriptor for EccentricConnectivityIndex {
 
     fn calculate(
         &self,
-        mol: &mut Molecule,
+        mol: &Molecule,
         ctx: &mut crate::desc::context::CalculationContext,
     ) -> crate::desc::typed::DescriptorValue {
         crate::desc::typed::DescriptorValue::Float(calculate(mol, ctx) as f64)

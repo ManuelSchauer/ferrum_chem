@@ -69,7 +69,7 @@ fn ring_bonds_all_aromatic(mol: &Molecule, ring: &[u16]) -> bool {
 /// - Cyclohexane: 1 saturated ring
 /// - Benzene: 0 saturated rings (aromatic double bonds)
 /// - Cyclohexene: 0 saturated rings (one double bond)
-pub fn num_saturated_rings(mol: &mut Molecule) -> u32 {
+pub fn num_saturated_rings(mol: &Molecule) -> u32 {
     ensure_symmetrized_sssr_bonds_cached(mol);
     let rings = cached_symmetrized_sssr_bonds_ref(mol).expect("symmetrized SSSR cache initialized");
 
@@ -90,7 +90,7 @@ pub fn num_saturated_rings(mol: &mut Molecule) -> u32 {
 /// - Cyclohexene: 1 aliphatic ring
 /// - Benzene: 0 aliphatic rings (aromatic)
 /// - Naphthalene: 0 aliphatic rings (both rings aromatic)
-pub fn num_aliphatic_rings(mol: &mut Molecule) -> u32 {
+pub fn num_aliphatic_rings(mol: &Molecule) -> u32 {
     ensure_symmetrized_sssr_bonds_cached(mol);
     let rings = cached_symmetrized_sssr_bonds_ref(mol).expect("symmetrized SSSR cache initialized");
 
@@ -111,7 +111,7 @@ pub fn num_aliphatic_rings(mol: &mut Molecule) -> u32 {
 /// - Naphthalene: 2 aromatic rings
 /// - Pyridine: 1 aromatic ring
 /// - Cyclohexane: 0 aromatic rings
-pub fn num_aromatic_rings(mol: &mut Molecule) -> u32 {
+pub fn num_aromatic_rings(mol: &Molecule) -> u32 {
     ensure_symmetrized_sssr_bonds_cached(mol);
     let rings = cached_symmetrized_sssr_bonds_ref(mol).expect("symmetrized SSSR cache initialized");
 
@@ -285,7 +285,7 @@ impl Descriptor for RingTypeCounts {
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn calculate(
         &self,
-        mol: &mut Molecule,
+        mol: &Molecule,
         _ctx: &mut crate::desc::context::CalculationContext,
     ) -> DescriptorValue {
         ensure_symmetrized_sssr_bonds_cached(mol);

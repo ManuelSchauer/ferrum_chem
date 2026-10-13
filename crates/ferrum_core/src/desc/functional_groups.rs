@@ -107,7 +107,7 @@ impl Descriptor for FunctionalGroupCounts {
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn calculate(
         &self,
-        mol: &mut Molecule,
+        mol: &Molecule,
         _ctx: &mut crate::desc::context::CalculationContext,
     ) -> DescriptorValue {
         let iso_target = crate::algo::iso::IsoTarget::new(mol);
@@ -140,7 +140,7 @@ impl Descriptor for AcidicGroupCount {
 
     fn calculate(
         &self,
-        mol: &mut Molecule,
+        mol: &Molecule,
         _ctx: &mut crate::desc::context::CalculationContext,
     ) -> DescriptorValue {
         DescriptorValue::Int(cdk_group_counts(mol).0)
@@ -162,7 +162,7 @@ impl Descriptor for BasicGroupCount {
 
     fn calculate(
         &self,
-        mol: &mut Molecule,
+        mol: &Molecule,
         _ctx: &mut crate::desc::context::CalculationContext,
     ) -> DescriptorValue {
         DescriptorValue::Int(cdk_group_counts(mol).1)

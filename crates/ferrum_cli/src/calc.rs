@@ -1,6 +1,5 @@
-use ferrum_core::desc::table::{
-    calculate_table, format_csv_rows_par, write_csv_header, FingerprintFormat, TableLayout,
-};
+use ferrum_core::desc::calculator::DescriptorCalculator;
+use ferrum_core::desc::table::{format_csv_rows_par, write_csv_header, FingerprintFormat};
 use ferrum_core::io::stream::MoleculeReader;
 use std::collections::BTreeMap;
 use std::fs::File;
@@ -35,7 +34,9 @@ pub fn run_calc(
         .map_err(|e| format!("Failed to open '{}': {}", input.display(), e))?
         .with_chunk_size(chunk_size);
 
-    let layout = Arc::new(TableLayout::all());
+    // one calculator, shared by every worker for every molecule
+    let calc = Arc::new(DescriptorCalculator::all());
+    let layout = calc.layout();
     println!(
         "Calculating {} scalar descriptors and {} fingerprints ({})...",
         layout.n_scalars(),
@@ -51,7 +52,7 @@ pub fn run_calc(
     let out_file = File::create(output)
         .map_err(|e| format!("Failed to create output file '{}': {}", output.display(), e))?;
     let mut writer = BufWriter::with_capacity(1 << 20, out_file);
-    write_csv_header(&mut writer, reader.id_column(), &layout, fp_format)
+    write_csv_header(&mut writer, reader.id_column(), layout, fp_format)
         .map_err(|e| format!("Failed to write '{}': {}", output.display(), e))?;
 
     let start = Instant::now();
@@ -103,11 +104,11 @@ pub fn run_calc(
                 break;
             }
         };
-        let (layout, tx) = (Arc::clone(&layout), tx.clone());
+        let (calc, tx) = (Arc::clone(&calc), tx.clone());
         rayon::spawn(move || {
-            let (ids, mut molecules): (Vec<_>, Vec<_>) =
+            let (ids, molecules): (Vec<_>, Vec<Option<_>>) =
                 chunk.into_iter().map(|r| (r.id, r.molecule.ok())).unzip();
-            let table = calculate_table(&mut molecules, &layout);
+            let table = calc.calculate(&molecules);
             drop(molecules);
             // format in the worker pool, so the writer thread only copies bytes
             let bytes = format_csv_rows_par(&ids, &table, fp_format);

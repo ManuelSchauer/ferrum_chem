@@ -108,7 +108,7 @@ impl Descriptor for MaccsKeys {
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
         fn calculate(
         &self,
-        mol: &mut Molecule,
+        mol: &Molecule,
         ctx: &mut crate::desc::context::CalculationContext,
     ) -> DescriptorValue {
         let mut bits = bitvec![u8, Lsb0; 0; 166];

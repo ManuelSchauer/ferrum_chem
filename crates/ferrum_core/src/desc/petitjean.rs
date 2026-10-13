@@ -107,7 +107,7 @@ fn _compute_distance_matrix_unused(mol: &Molecule) -> Vec<u32> {
 /// - Compact molecules: low diameter, Petitjean → 0
 /// - Cyclic molecules: diameter depends on size
 pub fn calculate(
-    mol: &mut Molecule,
+    mol: &Molecule,
     ctx: &mut crate::desc::context::CalculationContext,
 ) -> (u32, u32, f64) {
     let n = mol.num_atoms();
@@ -188,7 +188,7 @@ impl Descriptor for PetitjeanIndex {
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn calculate(
         &self,
-        mol: &mut Molecule,
+        mol: &Molecule,
         ctx: &mut crate::desc::context::CalculationContext,
     ) -> DescriptorValue {
         if mol.num_atoms() == 0 {

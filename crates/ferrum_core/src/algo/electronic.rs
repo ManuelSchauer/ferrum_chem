@@ -426,12 +426,10 @@ pub fn compute_gasteiger_charges(mol: &Molecule) -> Vec<f64> {
 ///
 /// Function context: `crates/ferrum_core/src/algo/electronic.rs`.
 /// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
-pub(crate) fn ensure_gasteiger_charges_cached(mol: &mut Molecule) {
-    if !*GASTEIGER_CACHE_ENABLED || mol.cached_gasteiger_charges().is_some() {
-        return;
+pub(crate) fn ensure_gasteiger_charges_cached(mol: &Molecule) {
+    if *GASTEIGER_CACHE_ENABLED {
+        mol.gasteiger_charges_or_init(|| compute_gasteiger_charges_uncached(mol));
     }
-    let charges = compute_gasteiger_charges_uncached(mol);
-    mol.store_gasteiger_charges(charges);
 }
 
 /// Implements gasteiger charges ref.
@@ -446,7 +444,7 @@ pub(crate) fn cached_gasteiger_charges_ref(mol: &Molecule) -> Option<&[f64]> {
 ///
 /// Function context: `crates/ferrum_core/src/algo/electronic.rs`.
 /// Algorithm-layer note: this operates on molecular graph topology, so index and adjacency invariants must remain valid.
-pub(crate) fn compute_gasteiger_charges_cached(mol: &mut Molecule) -> Vec<f64> {
+pub(crate) fn compute_gasteiger_charges_cached(mol: &Molecule) -> Vec<f64> {
     ensure_gasteiger_charges_cached(mol);
     if let Some(cached) = cached_gasteiger_charges_ref(mol) {
         return cached.to_vec();

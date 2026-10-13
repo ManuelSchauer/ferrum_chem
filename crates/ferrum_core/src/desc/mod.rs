@@ -55,6 +55,7 @@ pub mod batch;
 pub mod bcut;
 pub mod biosynfoni;
 pub mod bond_count;
+pub mod calculator;
 pub mod carbon_types;
 mod cdk_charges;
 pub(crate) mod cdk_daylight;

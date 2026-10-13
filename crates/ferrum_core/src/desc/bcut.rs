@@ -219,7 +219,7 @@ impl Descriptor for BCUT {
 
     fn calculate(
         &self,
-        mol: &mut Molecule,
+        mol: &Molecule,
         ctx: &mut crate::desc::context::CalculationContext,
     ) -> DescriptorValue {
         if mol.num_atoms() == 0 {

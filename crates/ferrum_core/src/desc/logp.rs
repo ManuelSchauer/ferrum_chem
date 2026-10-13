@@ -168,12 +168,10 @@ fn crippen_mr_contributions(mol: &Molecule) -> Vec<f64> {
 ///
 /// Function context: `crates/ferrum_core/src/desc/logp.rs`.
 /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-pub(crate) fn ensure_crippen_atom_contributions_cached(mol: &mut Molecule) {
-    if !*CRIPPEN_CACHE_ENABLED || mol.cached_crippen_contribs().is_some() {
-        return;
+pub(crate) fn ensure_crippen_atom_contributions_cached(mol: &Molecule) {
+    if *CRIPPEN_CACHE_ENABLED {
+        mol.crippen_contribs_or_init(|| crippen_atom_contributions(mol));
     }
-    let (logp, mr) = crippen_atom_contributions(mol);
-    mol.store_crippen_contribs(logp, mr);
 }
 
 /// Implements crippen atom contributions ref.
@@ -189,7 +187,7 @@ pub(crate) fn cached_crippen_atom_contributions_ref(mol: &Molecule) -> Option<(&
 ///
 /// Function context: `crates/ferrum_core/src/desc/logp.rs`.
 /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-pub(crate) fn cached_crippen_atom_contributions(mol: &mut Molecule) -> (Vec<f64>, Vec<f64>) {
+pub(crate) fn cached_crippen_atom_contributions(mol: &Molecule) -> (Vec<f64>, Vec<f64>) {
     ensure_crippen_atom_contributions_cached(mol);
     if let Some((logp, mr)) = cached_crippen_atom_contributions_ref(mol) {
         return (logp.to_vec(), mr.to_vec());
@@ -355,13 +353,14 @@ pub fn compute_logp(mol: &Molecule) -> (f64, f64) {
 ///
 /// Function context: `crates/ferrum_core/src/desc/logp.rs`.
 /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-pub(crate) fn compute_logp_cached(mol: &mut Molecule) -> (f64, f64) {
+pub(crate) fn compute_logp_cached(mol: &Molecule) -> (f64, f64) {
     if !*CRIPPEN_CACHE_ENABLED {
         return compute_logp(mol);
     }
-    if let Some(totals) = mol.cached_crippen_totals() {
-        return totals;
-    }
+    mol.crippen_totals_or_init(|| crippen_totals(mol))
+}
+
+fn crippen_totals(mol: &Molecule) -> (f64, f64) {
     ensure_crippen_atom_contributions_cached(mol);
     let (mut total_logp, mut total_mr) =
         if let Some((logp_contribs, mr_contribs)) = cached_crippen_atom_contributions_ref(mol) {
@@ -386,7 +385,6 @@ pub(crate) fn compute_logp_cached(mol: &mut Molecule) -> (f64, f64) {
         }
     }
 
-    mol.store_crippen_totals(total_logp, total_mr);
     (total_logp, total_mr)
 }
 
@@ -395,7 +393,7 @@ pub(crate) fn compute_logp_cached(mol: &mut Molecule) -> (f64, f64) {
 /// Uses already cached Crippen totals when available. If only per-atom cached
 /// contributions exist, it reuses those; otherwise it computes MR-only heavy-atom
 /// contributions to avoid unnecessary LogP vector work.
-pub(crate) fn compute_molar_refractivity_cached(mol: &mut Molecule) -> f64 {
+pub(crate) fn compute_molar_refractivity_cached(mol: &Molecule) -> f64 {
     if !*CRIPPEN_CACHE_ENABLED {
         let (_, mr) = compute_logp(mol);
         return mr;
@@ -450,7 +448,7 @@ impl Descriptor for LogP {
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn calculate(
         &self,
-        mol: &mut Molecule,
+        mol: &Molecule,
         _ctx: &mut crate::desc::context::CalculationContext,
     ) -> super::typed::DescriptorValue {
         let (logp, _) = compute_logp_cached(mol);
@@ -481,7 +479,7 @@ impl Descriptor for MolarRefractivity {
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn calculate(
         &self,
-        mol: &mut Molecule,
+        mol: &Molecule,
         _ctx: &mut crate::desc::context::CalculationContext,
     ) -> super::typed::DescriptorValue {
         super::typed::DescriptorValue::Float(compute_molar_refractivity_cached(mol))

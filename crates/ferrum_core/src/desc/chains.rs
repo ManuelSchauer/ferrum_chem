@@ -93,7 +93,7 @@ impl Descriptor for LongestAliphaticChain {
 
     fn calculate(
         &self,
-        mol: &mut Molecule,
+        mol: &Molecule,
         _ctx: &mut crate::desc::context::CalculationContext,
     ) -> DescriptorValue {
         DescriptorValue::Int(Self::compute(mol))
@@ -122,7 +122,7 @@ impl Descriptor for LargestChain {
 
     fn calculate(
         &self,
-        mol: &mut Molecule,
+        mol: &Molecule,
         _ctx: &mut crate::desc::context::CalculationContext,
     ) -> DescriptorValue {
         DescriptorValue::Int(Self::compute(mol))

@@ -90,7 +90,7 @@ fn _compute_distance_matrix_unused(mol: &Molecule) -> Vec<u32> {
 /// - Larger molecules have higher G values
 /// - Heavier atoms contribute more to G
 /// - More compact structures have higher G (shorter distances)
-pub fn calculate(mol: &mut Molecule, ctx: &mut crate::desc::context::CalculationContext) -> f64 {
+pub fn calculate(mol: &Molecule, ctx: &mut crate::desc::context::CalculationContext) -> f64 {
     let n = mol.num_atoms();
 
     if n <= 1 {

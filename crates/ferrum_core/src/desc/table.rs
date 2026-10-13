@@ -9,8 +9,8 @@
 //!   bytes, bit `i` is bit `i % 8` (LSB first) of byte `i / 8`, which is the
 //!   layout of `numpy.packbits(bits, bitorder="little")`.
 //!
-//! [`calculate_table`] computes a table in parallel for a chunk of molecules;
-//! callers stream large inputs chunk by chunk (see `io::stream`) so memory stays
+//! Tables are computed by [`super::calculator::DescriptorCalculator`]; callers
+//! stream large inputs chunk by chunk (see `io::stream`) so memory stays
 //! bounded by the chunk size.
 
 use std::io::{self, Write};
@@ -18,7 +18,6 @@ use std::io::{self, Write};
 use rayon::prelude::*;
 
 use super::batch::BatchDescriptor;
-use super::context::CalculationContext;
 use super::typed::DescriptorValue;
 use crate::mol::molecule::Molecule;
 
@@ -168,26 +167,49 @@ impl DescriptorTable {
     }
 }
 
-/// Returned by [`calculate_table_cancellable`] when cancelled.
+/// Returned by a cancellable calculation when it was cancelled.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Cancelled;
 
-/// Computes all descriptors of `layout` for a chunk of records in parallel.
-/// `None` entries (unparseable input) give an invalid row.
-pub fn calculate_table(molecules: &mut [Option<Molecule>], layout: &TableLayout) -> DescriptorTable {
-    match calculate_table_cancellable(molecules, layout, &|| false) {
-        Ok(table) => table,
-        Err(Cancelled) => unreachable!("never cancelled"),
+/// A molecule slot of an input batch: a molecule, or `None` for a record that
+/// could not be parsed (gives an invalid row).
+pub trait MoleculeSlot: Sync {
+    fn molecule(&self) -> Option<&Molecule>;
+}
+
+impl MoleculeSlot for Molecule {
+    fn molecule(&self) -> Option<&Molecule> {
+        Some(self)
     }
 }
 
-/// [`calculate_table`] with cooperative cancellation between molecules.
-pub fn calculate_table_cancellable<F>(
-    molecules: &mut [Option<Molecule>],
+impl MoleculeSlot for &Molecule {
+    fn molecule(&self) -> Option<&Molecule> {
+        Some(self)
+    }
+}
+
+impl MoleculeSlot for Option<Molecule> {
+    fn molecule(&self) -> Option<&Molecule> {
+        self.as_ref()
+    }
+}
+
+impl MoleculeSlot for Option<&Molecule> {
+    fn molecule(&self) -> Option<&Molecule> {
+        *self
+    }
+}
+
+/// Computes all descriptors of `layout` for a batch in parallel (molecules
+/// are only read). Use [`super::calculator::DescriptorCalculator`].
+pub(crate) fn compute_table<M, F>(
+    molecules: &[M],
     layout: &TableLayout,
     should_cancel: &F,
 ) -> Result<DescriptorTable, Cancelled>
 where
+    M: MoleculeSlot,
     F: Fn() -> bool + Sync,
 {
     let rows = molecules.len();
@@ -203,36 +225,34 @@ where
     // `par_chunks_mut(0)` panics, so empty segments use a dummy chunk size
     let scalar_chunks = scalars.par_chunks_mut(ns.max(1));
     let fp_chunks = fp_all.par_chunks_mut(total_words.max(1));
-    let work = molecules.par_iter_mut().zip(valid.par_iter_mut());
-    let run = |ctx: &mut CalculationContext,
-               (((mol, ok), srow), frow): (((&mut Option<Molecule>, &mut bool), &mut [f64]), &mut [u64])| {
+    let work = molecules.par_iter().zip(valid.par_iter_mut());
+    let run = |(((slot, ok), srow), frow): (((&M, &mut bool), &mut [f64]), &mut [u64])| {
         if should_cancel() {
             return Err(Cancelled);
         }
-        let Some(mol) = mol else { return Ok(()) };
+        let Some(mol) = slot.molecule() else { return Ok(()) };
         *ok = true;
-        ctx.reset_for_new_molecule();
-        let mut offset = 0;
-        for &d in &layout.scalars {
-            d.write_into(mol, srow, &mut offset, ctx);
-        }
-        debug_assert_eq!(offset, srow.len().min(ns));
-        let mut word = 0;
-        for (&d, &nw) in layout.fingerprints.iter().zip(&fp_words) {
-            pack_bits(d.calculate(mol, ctx), &mut frow[word..word + nw]);
-            word += nw;
-        }
+        super::calculator::with_thread_context(|ctx| {
+            let mut offset = 0;
+            for &d in &layout.scalars {
+                d.write_into(mol, srow, &mut offset, ctx);
+            }
+            debug_assert_eq!(offset, srow.len().min(ns));
+            let mut word = 0;
+            for (&d, &nw) in layout.fingerprints.iter().zip(&fp_words) {
+                pack_bits(d.calculate(mol, ctx), &mut frow[word..word + nw]);
+                word += nw;
+            }
+        });
         Ok(())
     };
 
     if ns > 0 && total_words > 0 {
-        work.zip(scalar_chunks).zip(fp_chunks).try_for_each_init(CalculationContext::new, run)?;
+        work.zip(scalar_chunks).zip(fp_chunks).try_for_each(run)?;
     } else if ns > 0 {
-        work.zip(scalar_chunks)
-            .try_for_each_init(CalculationContext::new, |ctx, (w, s)| run(ctx, ((w, s), &mut [])))?;
+        work.zip(scalar_chunks).try_for_each(|(w, s)| run(((w, s), &mut [])))?;
     } else if total_words > 0 {
-        work.zip(fp_chunks)
-            .try_for_each_init(CalculationContext::new, |ctx, (w, f)| run(ctx, ((w, &mut []), f)))?;
+        work.zip(fp_chunks).try_for_each(|(w, f)| run(((w, &mut []), f)))?;
     }
 
     let mut fingerprints = Vec::with_capacity(layout.fingerprints.len());
@@ -435,11 +455,12 @@ fn write_csv_field(out: &mut Vec<u8>, s: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::desc::context::CalculationContext;
     use crate::io::smiles::parse_smiles;
 
     fn table_for(smiles: &[&str], descriptors: &[BatchDescriptor]) -> DescriptorTable {
-        let mut mols: Vec<Option<Molecule>> = smiles.iter().map(|s| parse_smiles(s).ok()).collect();
-        calculate_table(&mut mols, &TableLayout::new(descriptors))
+        let mols: Vec<Option<Molecule>> = smiles.iter().map(|s| parse_smiles(s).ok()).collect();
+        crate::desc::calculator::DescriptorCalculator::new(descriptors).calculate(&mols)
     }
 
     #[test]
@@ -485,17 +506,17 @@ mod tests {
 
     #[test]
     fn cancellation_stops_calculation() {
-        let mut mols = vec![parse_smiles("C").ok(); 64];
+        let mols = vec![parse_smiles("C").ok(); 64];
         let layout = TableLayout::new(&[BatchDescriptor::MolecularWeight]);
-        assert_eq!(calculate_table_cancellable(&mut mols, &layout, &|| true), Err(Cancelled));
+        assert_eq!(compute_table(&mols, &layout, &|| true), Err(Cancelled));
     }
 
     #[test]
     fn csv_formats() {
         let descriptors = [BatchDescriptor::HeavyAtomCount, BatchDescriptor::LogP, BatchDescriptor::MaccsKeys];
         let layout = TableLayout::new(&descriptors);
-        let mut mols: Vec<Option<Molecule>> = vec![parse_smiles("CC(=O)O").ok(), None];
-        let t = calculate_table(&mut mols, &layout);
+        let mols: Vec<Option<Molecule>> = vec![parse_smiles("CC(=O)O").ok(), None];
+        let t = crate::desc::calculator::DescriptorCalculator::new(&descriptors).calculate(&mols);
         let ids = vec!["CC(=O)O".to_string(), "bad,id".to_string()];
         let render = |f| {
             let mut out = Vec::new();

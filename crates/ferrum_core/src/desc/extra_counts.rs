@@ -248,7 +248,7 @@ impl Descriptor for FractionCSP3 {
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn calculate(
         &self,
-        mol: &mut Molecule,
+        mol: &Molecule,
         _ctx: &mut crate::desc::context::CalculationContext,
     ) -> DescriptorValue {
         DescriptorValue::Float(compute_fraction_csp3(mol))
@@ -382,7 +382,7 @@ impl Descriptor for NumAmideBonds {
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn calculate(
         &self,
-        mol: &mut Molecule,
+        mol: &Molecule,
         _ctx: &mut crate::desc::context::CalculationContext,
     ) -> DescriptorValue {
         DescriptorValue::Int(compute_num_amide_bonds(mol))
@@ -428,7 +428,7 @@ impl Descriptor for AromaticAtomFraction {
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn calculate(
         &self,
-        mol: &mut Molecule,
+        mol: &Molecule,
         _ctx: &mut crate::desc::context::CalculationContext,
     ) -> DescriptorValue {
         DescriptorValue::Float(compute_aromatic_atom_fraction(mol))
@@ -535,7 +535,7 @@ impl Descriptor for HallKierAlpha {
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn calculate(
         &self,
-        mol: &mut Molecule,
+        mol: &Molecule,
         _ctx: &mut crate::desc::context::CalculationContext,
     ) -> DescriptorValue {
         DescriptorValue::Float(compute_hall_kier_alpha(mol))
@@ -683,7 +683,7 @@ fn bertz_symmetry_classes_fw(mol: &Molecule) -> Vec<usize> {
 }
 
 /// Port of RDKit `GraphDescriptors.BertzCT` (Python, cutoff = 100).
-fn compute_bertz_ct(mol: &mut Molecule, ctx: &mut crate::desc::context::CalculationContext) -> f64 {
+fn compute_bertz_ct(mol: &Molecule, ctx: &mut crate::desc::context::CalculationContext) -> f64 {
     let n = mol.num_atoms();
     if n < 2 {
         return 0.0;
@@ -773,7 +773,7 @@ impl Descriptor for BertzCT {
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn calculate(
         &self,
-        mol: &mut Molecule,
+        mol: &Molecule,
         ctx: &mut crate::desc::context::CalculationContext,
     ) -> DescriptorValue {
         DescriptorValue::Float(compute_bertz_ct(mol, ctx))
@@ -958,7 +958,7 @@ impl Descriptor for Ipc {
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn calculate(
         &self,
-        mol: &mut Molecule,
+        mol: &Molecule,
         ctx: &mut crate::desc::context::CalculationContext,
     ) -> DescriptorValue {
         DescriptorValue::Float(compute_ipc(mol, ctx))
@@ -1004,7 +1004,7 @@ impl Descriptor for FragmentComplexity {
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn calculate(
         &self,
-        mol: &mut Molecule,
+        mol: &Molecule,
         _ctx: &mut crate::desc::context::CalculationContext,
     ) -> DescriptorValue {
         DescriptorValue::Float(compute_fragment_complexity(mol))
@@ -1633,7 +1633,7 @@ impl Descriptor for CdkFragmentComplexity {
 
     /// `|B^2 - A^2 + A| + H/100` with A = non-hydrogen atoms, B = bonds
     /// (hydrogens included) and H = atoms other than H and C.
-    fn calculate(&self, mol: &mut Molecule, _ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
+    fn calculate(&self, mol: &Molecule, _ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
         let mut a = 0i64;
         let mut hetero = 0i64;
         let mut hydrogens = 0i64;

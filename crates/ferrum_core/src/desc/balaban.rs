@@ -46,45 +46,12 @@
 //! - Code-local source of truth: symbols and tests declared in `crates/ferrum_core/src/desc/balaban.rs`.
 
 use super::typed::{Descriptor, DescriptorValue};
-use crate::algo::distance_matrix::compute_distance_matrix;
 use crate::mol::molecule::Molecule;
 
 
 
-/// Computes distance matrix cached.
-///
-/// Function context: `crates/ferrum_core/src/desc/balaban.rs`.
-/// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-pub(crate) fn compute_distance_matrix_cached(mol: &mut Molecule, use_bo: bool) -> Vec<f64> {
-    if !use_bo {
-        return compute_distance_matrix(mol, false);
-    }
-    if let Some(cached) = mol.cached_balaban_bo_dist() {
-        return cached.clone();
-    }
-    let dist = compute_distance_matrix(mol, true);
-    mol.store_balaban_bo_dist(dist.clone());
-    dist
-}
 
-/// Implements bo distance matrix cached.
-///
-/// Function context: `crates/ferrum_core/src/desc/balaban.rs`.
-/// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-pub(crate) fn ensure_bo_distance_matrix_cached(mol: &mut Molecule) {
-    if mol.cached_balaban_bo_dist().is_none() {
-        let dist = compute_distance_matrix(mol, true);
-        mol.store_balaban_bo_dist(dist);
-    }
-}
 
-/// Implements bo distance matrix ref.
-///
-/// Function context: `crates/ferrum_core/src/desc/balaban.rs`.
-/// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-pub(crate) fn cached_bo_distance_matrix_ref(mol: &Molecule) -> Option<&[f64]> {
-    mol.cached_balaban_bo_dist().map(|dist| dist.as_slice())
-}
 
 /// Balaban J from the bond-order weighted distances in sixths
 /// ([`crate::algo::distance_matrix::bond_order_distances_sixths`]).
@@ -184,7 +151,7 @@ impl Descriptor for BalabanIndex {
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn calculate(
         &self,
-        mol: &mut Molecule,
+        mol: &Molecule,
         ctx: &mut crate::desc::context::CalculationContext,
     ) -> DescriptorValue {
         DescriptorValue::Float(calculate_with_context(mol, ctx))

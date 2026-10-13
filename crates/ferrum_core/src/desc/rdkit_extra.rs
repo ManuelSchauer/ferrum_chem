@@ -75,7 +75,7 @@ impl Descriptor for MolWeights {
     fn name(&self) -> &str {
         "MolWeights"
     }
-    fn calculate(&self, mol: &mut Molecule, _ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
+    fn calculate(&self, mol: &Molecule, _ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
         DescriptorValue::FloatVec(vec![heavy_atom_mol_wt(mol), exact_mol_wt(mol)])
     }
 }
@@ -102,7 +102,7 @@ impl Descriptor for ChiNIndices {
     fn name(&self) -> &str {
         "ChiNIndices"
     }
-    fn calculate(&self, mol: &mut Molecule, ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
+    fn calculate(&self, mol: &Molecule, ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
         let nv = n_vals(mol);
         let chi0: f64 = nv.iter().sum();
         let chi1: f64 = mol.bonds.iter().map(|b| nv[b.source as usize] * nv[b.target as usize]).sum();
@@ -125,7 +125,7 @@ impl Descriptor for EStateAbs {
     fn name(&self) -> &str {
         "EStateAbs"
     }
-    fn calculate(&self, mol: &mut Molecule, ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
+    fn calculate(&self, mol: &Molecule, ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
         let es = crate::desc::estate::compute_estates(mol, ctx);
         if es.is_empty() {
             return DescriptorValue::FloatVec(vec![0.0, 0.0]);
@@ -150,7 +150,7 @@ pub struct EStateVsa;
 /// `VSA_EState1` .. `VSA_EState10` (RDKit `EState.EState_VSA`): E-state binned by Labute VSA.
 pub struct VsaEState;
 
-fn estate_and_vsa(mol: &mut Molecule, ctx: &mut crate::desc::context::CalculationContext) -> (Vec<f64>, Vec<f64>) {
+fn estate_and_vsa(mol: &Molecule, ctx: &mut crate::desc::context::CalculationContext) -> (Vec<f64>, Vec<f64>) {
     let es = crate::desc::estate::compute_estates(mol, ctx);
     let (vsa, _) = crate::desc::vsa::compute_labute_contribs(mol, ctx);
     (es, vsa)
@@ -160,7 +160,7 @@ impl Descriptor for EStateVsa {
     fn name(&self) -> &str {
         "EStateVsa"
     }
-    fn calculate(&self, mol: &mut Molecule, ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
+    fn calculate(&self, mol: &Molecule, ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
         let (es, vsa) = estate_and_vsa(mol, ctx);
         let mut out = [0.0f64; 11];
         for (e, v) in es.iter().zip(&vsa) {
@@ -174,7 +174,7 @@ impl Descriptor for VsaEState {
     fn name(&self) -> &str {
         "VsaEState"
     }
-    fn calculate(&self, mol: &mut Molecule, ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
+    fn calculate(&self, mol: &Molecule, ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
         let (es, vsa) = estate_and_vsa(mol, ctx);
         let mut out = [0.0f64; 10];
         for (e, v) in es.iter().zip(&vsa) {
@@ -278,7 +278,7 @@ impl Descriptor for RingCounts {
     fn name(&self) -> &str {
         "RingCounts"
     }
-    fn calculate(&self, mol: &mut Molecule, _ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
+    fn calculate(&self, mol: &Molecule, _ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
         DescriptorValue::IntVec(ring_counts(mol).to_vec())
     }
 }
@@ -294,7 +294,7 @@ impl Descriptor for LipinskiNO {
     fn name(&self) -> &str {
         "LipinskiNO"
     }
-    fn calculate(&self, mol: &mut Molecule, _ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
+    fn calculate(&self, mol: &Molecule, _ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
         let mut nhoh = 0u32;
         let mut no = 0u32;
         for (i, a) in mol.atoms.iter().enumerate() {
@@ -363,7 +363,7 @@ impl Descriptor for AvgIpcPhi {
     fn name(&self) -> &str {
         "AvgIpcPhi"
     }
-    fn calculate(&self, mol: &mut Molecule, ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
+    fn calculate(&self, mol: &Molecule, ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
         DescriptorValue::FloatVec(vec![avg_ipc_with_context(mol, ctx), phi(mol)])
     }
 }
@@ -380,7 +380,7 @@ impl Descriptor for FpDensityMorgan {
     fn name(&self) -> &str {
         "FpDensityMorgan"
     }
-    fn calculate(&self, mol: &mut Molecule, _ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
+    fn calculate(&self, mol: &Molecule, _ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
         let heavy = num_heavy_atoms(mol);
         let mut out = Vec::with_capacity(3);
         for radius in 1..=3u8 {
@@ -434,7 +434,7 @@ impl Descriptor for Fragments {
     fn name(&self) -> &str {
         "Fragments"
     }
-    fn calculate(&self, mol: &mut Molecule, _ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
+    fn calculate(&self, mol: &Molecule, _ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
         let target = crate::algo::iso::IsoTarget::new(mol);
         DescriptorValue::IntVec(
             FRAGMENT_QUERIES
@@ -529,7 +529,7 @@ impl Descriptor for Bcut2D {
     fn name(&self) -> &str {
         "BCUT2D"
     }
-    fn calculate(&self, mol: &mut Molecule, _ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
+    fn calculate(&self, mol: &Molecule, _ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
         if mol.num_atoms() == 0 || mol.atoms.iter().any(|a| a.atomic_number == 1) {
             return DescriptorValue::FloatVec(bcut2d(mol).to_vec());
         }
@@ -554,7 +554,7 @@ impl Descriptor for StereoCenters {
     fn name(&self) -> &str {
         "StereoCenters"
     }
-    fn calculate(&self, mol: &mut Molecule, ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
+    fn calculate(&self, mol: &Molecule, ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
         let (all, unspecified) = crate::algo::stereo::atom_stereo_center_counts_with_context(mol, ctx);
         DescriptorValue::IntVec(vec![all, unspecified])
     }
@@ -567,7 +567,7 @@ impl Descriptor for Sps {
     fn name(&self) -> &str {
         "SPS"
     }
-    fn calculate(&self, mol: &mut Molecule, ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
+    fn calculate(&self, mol: &Molecule, ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
         DescriptorValue::Float(crate::algo::stereo::spacial_score_with_context(mol, ctx))
     }
 }

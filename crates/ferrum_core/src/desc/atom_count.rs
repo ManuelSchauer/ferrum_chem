@@ -91,7 +91,7 @@ impl Descriptor for AtomCount {
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn calculate(
         &self,
-        mol: &mut Molecule,
+        mol: &Molecule,
         _ctx: &mut crate::desc::context::CalculationContext,
     ) -> super::typed::DescriptorValue {
         super::typed::DescriptorValue::Int(compute_atom_count(mol))
@@ -116,7 +116,7 @@ impl Descriptor for HeavyAtomCount {
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn calculate(
         &self,
-        mol: &mut Molecule,
+        mol: &Molecule,
         _ctx: &mut crate::desc::context::CalculationContext,
     ) -> super::typed::DescriptorValue {
         super::typed::DescriptorValue::Int(compute_heavy_atom_count(mol))
@@ -144,7 +144,7 @@ impl Descriptor for ElementCounts {
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn calculate(
         &self,
-        mol: &mut Molecule,
+        mol: &Molecule,
         _ctx: &mut crate::desc::context::CalculationContext,
     ) -> super::typed::DescriptorValue {
         let mut counts = vec![0u16; 12]; // C, N, O, S, P, F, Cl, Br, I, Others, H, Heavy
@@ -228,7 +228,7 @@ impl Descriptor for SingleAtomCount {
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn calculate(
         &self,
-        mol: &mut Molecule,
+        mol: &Molecule,
         _ctx: &mut crate::desc::context::CalculationContext,
     ) -> super::typed::DescriptorValue {
         if self.atomic_number == 1 {
@@ -264,7 +264,7 @@ impl Descriptor for AromaticAtomCount {
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn calculate(
         &self,
-        mol: &mut Molecule,
+        mol: &Molecule,
         _ctx: &mut crate::desc::context::CalculationContext,
     ) -> super::typed::DescriptorValue {
         super::typed::DescriptorValue::Int(compute_aromatic_atom_count(mol))

@@ -90,13 +90,8 @@ pub fn compute_rotatable_bond_count(mol: &Molecule) -> u32 {
 ///
 /// Function context: `crates/ferrum_core/src/desc/bond_count.rs`.
 /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-pub(crate) fn compute_rotatable_bond_count_cached(mol: &mut Molecule) -> u32 {
-    if let Some(cached) = mol.cached_rotatable_bond_count() {
-        return cached;
-    }
-    let count = compute_rotatable_bond_count(mol);
-    mol.store_rotatable_bond_count(count);
-    count
+pub(crate) fn compute_rotatable_bond_count_cached(mol: &Molecule) -> u32 {
+    mol.rotatable_bond_count_or_init(|| compute_rotatable_bond_count(mol))
 }
 
 // ---------------------------------------------------------------------------
@@ -123,7 +118,7 @@ impl Descriptor for BondCount {
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn calculate(
         &self,
-        mol: &mut Molecule,
+        mol: &Molecule,
         _ctx: &mut crate::desc::context::CalculationContext,
     ) -> DescriptorValue {
         DescriptorValue::Int(compute_bond_count(mol))
@@ -150,7 +145,7 @@ impl Descriptor for BondCountDetailed {
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn calculate(
         &self,
-        mol: &mut Molecule,
+        mol: &Molecule,
         _ctx: &mut crate::desc::context::CalculationContext,
     ) -> DescriptorValue {
         let mut counts = vec![0u32; 5]; // total, single, double, triple, aromatic
@@ -192,7 +187,7 @@ impl Descriptor for RotatableBondCount {
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn calculate(
         &self,
-        mol: &mut Molecule,
+        mol: &Molecule,
         _ctx: &mut crate::desc::context::CalculationContext,
     ) -> DescriptorValue {
         DescriptorValue::Int(compute_rotatable_bond_count_cached(mol))

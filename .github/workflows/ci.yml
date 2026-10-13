@@ -84,6 +84,9 @@ jobs:
           bits = ferrum_py.fingerprint_bits()
           ecfp = np.unpackbits(fps["ECFP4"], axis=1, bitorder="little", count=bits["ECFP4"])
           assert ecfp.shape == (3, 2048) and ecfp[0].any() and not ecfp[1].any()
+          calc = ferrum_py.Calculator()
+          n2, X2, f2, v2 = calc.compute(smiles)
+          assert n2 == names and np.array_equal(X, X2, equal_nan=True) and np.array_equal(f2["ECFP4"], fps["ECFP4"])
           names, B = ferrum_py.compute_biosynfoni(smiles)
           assert B.shape == (3, len(names)), B.shape
           print("ok", X.shape, B.shape)

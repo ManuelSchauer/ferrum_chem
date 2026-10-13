@@ -134,7 +134,7 @@ impl Descriptor for Pmi1 {
     fn name(&self) -> &str {
         "PMI1"
     }
-    fn calculate(&self, mol: &mut Molecule, _: &mut CalculationContext) -> DescriptorValue {
+    fn calculate(&self, mol: &Molecule, _: &mut CalculationContext) -> DescriptorValue {
         float_or_nan(principal_moments(mol).map(|m| m[0]))
     }
 }
@@ -146,7 +146,7 @@ impl Descriptor for Pmi2 {
     fn name(&self) -> &str {
         "PMI2"
     }
-    fn calculate(&self, mol: &mut Molecule, _: &mut CalculationContext) -> DescriptorValue {
+    fn calculate(&self, mol: &Molecule, _: &mut CalculationContext) -> DescriptorValue {
         float_or_nan(principal_moments(mol).map(|m| m[1]))
     }
 }
@@ -158,7 +158,7 @@ impl Descriptor for Pmi3 {
     fn name(&self) -> &str {
         "PMI3"
     }
-    fn calculate(&self, mol: &mut Molecule, _: &mut CalculationContext) -> DescriptorValue {
+    fn calculate(&self, mol: &Molecule, _: &mut CalculationContext) -> DescriptorValue {
         float_or_nan(principal_moments(mol).map(|m| m[2]))
     }
 }
@@ -173,7 +173,7 @@ impl Descriptor for Asphericity {
     fn name(&self) -> &str {
         "Asphericity"
     }
-    fn calculate(&self, mol: &mut Molecule, _: &mut CalculationContext) -> DescriptorValue {
+    fn calculate(&self, mol: &Molecule, _: &mut CalculationContext) -> DescriptorValue {
         float_or_nan(gyration_moments(mol).map(|[p1, p2, p3]| {
             if p3 < 1e-4 {
                 0.0
@@ -190,7 +190,7 @@ mod tests {
     use super::*;
     use crate::io::sdf::parse_mol_block;
 
-    fn calc(desc: &dyn Descriptor, mol: &mut Molecule) -> f64 {
+    fn calc(desc: &dyn Descriptor, mol: &Molecule) -> f64 {
         match desc.calculate(mol, &mut CalculationContext::new()) {
             DescriptorValue::Float(x) => x,
             other => panic!("expected Float, got {other:?}"),

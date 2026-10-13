@@ -860,7 +860,7 @@ impl Descriptor for WeightedPath {
         "WeightedPath"
     }
 
-    fn calculate(&self, mol: &mut Molecule, _ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
+    fn calculate(&self, mol: &Molecule, _ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
         // CDK computes on `removeHydrogens(container)`
         if let Some(suppressed) = crate::algo::sanitize::cdk_remove_hydrogens(mol) {
             return DescriptorValue::FloatVec(weighted_path_values(&suppressed).to_vec());

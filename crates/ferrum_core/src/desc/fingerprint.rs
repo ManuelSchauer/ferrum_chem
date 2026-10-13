@@ -554,7 +554,7 @@ impl Descriptor for ECFP {
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn calculate(
         &self,
-        mol: &mut Molecule,
+        mol: &Molecule,
         ctx: &mut crate::desc::context::CalculationContext,
     ) -> DescriptorValue {
         let atom_invariants = morgan_connectivity_invariants(mol, true);
@@ -650,7 +650,7 @@ impl Descriptor for FCFP {
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn calculate(
         &self,
-        mol: &mut Molecule,
+        mol: &Molecule,
         ctx: &mut crate::desc::context::CalculationContext,
     ) -> DescriptorValue {
         let atom_invariants = morgan_feature_invariants(mol);

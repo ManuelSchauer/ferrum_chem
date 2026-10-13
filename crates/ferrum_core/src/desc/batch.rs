@@ -440,7 +440,7 @@ impl BatchDescriptor {
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     pub fn calculate(
         self,
-        mol: &mut Molecule,
+        mol: &Molecule,
         ctx: &mut crate::desc::context::CalculationContext,
     ) -> DescriptorValue {
         match self {
@@ -768,7 +768,7 @@ impl BatchDescriptor {
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     pub fn write_into(
         self,
-        mol: &mut Molecule,
+        mol: &Molecule,
         row: &mut [f64],
         offset: &mut usize,
         ctx: &mut crate::desc::context::CalculationContext,

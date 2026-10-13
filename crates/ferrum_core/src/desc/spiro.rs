@@ -57,7 +57,7 @@ use crate::mol::molecule::Molecule;
 /// - Spiro[3.3]heptane: 1 spiro atom
 /// - Bicyclic fused rings (naphthalene): 0 spiro atoms (shared edge)
 /// - Bicyclo[2.2.1]heptane (norbornane): 0 spiro atoms (bridge atoms)
-pub fn num_spiro_atoms(mol: &mut Molecule) -> u32 {
+pub fn num_spiro_atoms(mol: &Molecule) -> u32 {
     let n = mol.num_atoms();
     if n == 0 {
         return 0;

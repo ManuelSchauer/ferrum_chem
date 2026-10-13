@@ -171,7 +171,7 @@ impl Descriptor for Autocorrelation {
 
     fn calculate(
         &self,
-        mol: &mut Molecule,
+        mol: &Molecule,
         ctx: &mut crate::desc::context::CalculationContext,
     ) -> DescriptorValue {
         let mut values = vec![0.0f64; N_OUT];

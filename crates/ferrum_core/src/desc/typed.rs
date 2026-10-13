@@ -303,7 +303,7 @@ impl DescriptorValue {
 ///         "MyDescriptor"
 ///     }
 ///
-///     fn calculate(&self, mol: &mut Molecule, ctx: &mut ferrum_core::desc::context::CalculationContext) -> DescriptorValue {
+///     fn calculate(&self, mol: &Molecule, ctx: &mut ferrum_core::desc::context::CalculationContext) -> DescriptorValue {
 ///         DescriptorValue::Int(mol.num_atoms() as u32)
 ///     }
 /// }
@@ -317,11 +317,11 @@ pub trait Descriptor: Send + Sync {
     /// Returns an owned value. This is efficient due to move semantics
     /// and avoids pre-allocation complexity.
     ///
-    /// Note: Takes `&mut Molecule` for algorithms that need to cache
+    /// Note: Takes `&Molecule` for algorithms that need to cache
     /// computed properties (e.g., ring perception sets ring flags).
     fn calculate(
         &self,
-        mol: &mut Molecule,
+        mol: &Molecule,
         ctx: &mut crate::desc::context::CalculationContext,
     ) -> DescriptorValue;
 
@@ -331,7 +331,7 @@ pub trait Descriptor: Send + Sync {
     /// Override if this can be determined without calculation (e.g., constant size).
     fn size(
         &self,
-        mol: &mut Molecule,
+        mol: &Molecule,
         ctx: &mut crate::desc::context::CalculationContext,
     ) -> usize {
         self.calculate(mol, ctx).len()
@@ -356,7 +356,7 @@ pub trait Descriptor: Send + Sync {
 /// let ml_vector = build_ml_vector(&mut mol, &descriptors);
 /// // Use with linfa, ndarray, etc.
 /// ```
-pub fn build_ml_vector(mol: &mut Molecule, descriptors: &[Box<dyn Descriptor>]) -> Vec<f64> {
+pub fn build_ml_vector(mol: &Molecule, descriptors: &[Box<dyn Descriptor>]) -> Vec<f64> {
     let mut ctx = crate::desc::context::CalculationContext::new();
     let mut output = Vec::new();
     for desc in descriptors {
@@ -656,7 +656,7 @@ mod tests {
         /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
         fn calculate(
             &self,
-            mol: &mut Molecule,
+            mol: &Molecule,
             _ctx: &mut crate::desc::context::CalculationContext,
         ) -> DescriptorValue {
             DescriptorValue::Int(mol.num_atoms() as u32)

@@ -42,7 +42,7 @@
 //! - Code-local source of truth: symbols and tests declared in `crates/ferrum_core/src/desc/aromatic_ring_count.rs`.
 
 use super::typed::{Descriptor, DescriptorValue};
-use crate::algo::rings::{ensure_minimum_cycle_basis_bonds_cached, find_minimum_cycle_basis_bonds};
+use crate::algo::rings::{find_minimum_cycle_basis_bonds, minimum_cycle_basis_bonds_cached};
 use crate::mol::molecule::Molecule;
 
 // ---------------------------------------------------------------------------
@@ -65,11 +65,8 @@ pub fn compute_aromatic_ring_count(mol: &Molecule) -> u32 {
 ///
 /// Function context: `crates/ferrum_core/src/desc/aromatic_ring_count.rs`.
 /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-pub fn compute_aromatic_ring_count_cached(mol: &mut Molecule) -> u32 {
-    ensure_minimum_cycle_basis_bonds_cached(mol);
-    let cycles = mol
-        .cached_min_cycle_basis_bonds()
-        .expect("minimum cycle basis cache initialized");
+pub fn compute_aromatic_ring_count_cached(mol: &Molecule) -> u32 {
+    let cycles = minimum_cycle_basis_bonds_cached(mol);
     let aromatic_bond_mask: Vec<bool> = mol.bonds.iter().map(|bond| bond.is_aromatic()).collect();
     count_aromatic_cycles(cycles, &aromatic_bond_mask)
 }
@@ -122,7 +119,7 @@ impl Descriptor for AromaticRingCount {
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn calculate(
         &self,
-        mol: &mut Molecule,
+        mol: &Molecule,
         _ctx: &mut crate::desc::context::CalculationContext,
     ) -> DescriptorValue {
         DescriptorValue::Int(compute_aromatic_ring_count_cached(mol))

@@ -165,16 +165,11 @@ pub fn compute_tpsa(mol: &Molecule, include_sp: bool) -> f64 {
 ///
 /// Function context: `crates/ferrum_core/src/desc/tpsa.rs`.
 /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-pub(crate) fn compute_tpsa_cached(mol: &mut Molecule, include_sp: bool) -> f64 {
+pub(crate) fn compute_tpsa_cached(mol: &Molecule, include_sp: bool) -> f64 {
     if include_sp {
         return compute_tpsa(mol, true);
     }
-    if let Some(cached) = mol.cached_tpsa() {
-        return cached;
-    }
-    let tpsa = compute_tpsa(mol, false);
-    mol.store_tpsa(tpsa);
-    tpsa
+    mol.tpsa_or_init(|| compute_tpsa(mol, false))
 }
 
 /// Check if atom is in a 3-membered ring.
@@ -766,7 +761,7 @@ impl Descriptor for Tpsa {
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn calculate(
         &self,
-        mol: &mut Molecule,
+        mol: &Molecule,
         _ctx: &mut crate::desc::context::CalculationContext,
     ) -> DescriptorValue {
         let tpsa = compute_tpsa_cached(mol, false);

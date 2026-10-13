@@ -78,7 +78,7 @@ impl Descriptor for APol {
 
     fn calculate(
         &self,
-        mol: &mut Molecule,
+        mol: &Molecule,
         ctx: &mut crate::desc::context::CalculationContext,
     ) -> DescriptorValue {
         let h_pol = POLARIZABILITY[1];
@@ -105,7 +105,7 @@ impl Descriptor for BPol {
 
     fn calculate(
         &self,
-        mol: &mut Molecule,
+        mol: &Molecule,
         ctx: &mut crate::desc::context::CalculationContext,
     ) -> DescriptorValue {
         let h = CdkView::with_legacy_cached(mol, ctx, |view, _| view.h.clone());

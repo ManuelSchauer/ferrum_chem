@@ -2,7 +2,7 @@
 
 use ferrum_core::algo::paths::{DIST_INF, compute_unweighted_distance_matrix_cached};
 use ferrum_core::desc::batch::BatchDescriptor;
-use ferrum_core::desc::table::{TableLayout, calculate_table};
+use ferrum_core::desc::calculator::DescriptorCalculator;
 use ferrum_core::desc::context::CalculationContext;
 use ferrum_core::io::smiles::parse_smiles;
 
@@ -30,7 +30,7 @@ fn distance_matrix_marks_disconnected_atoms() {
 /// distance-based ones must stay finite (MDE used to overflow `d * d` in u8).
 #[test]
 fn full_bundle_on_long_chain_is_finite_for_topological_descriptors() {
-    let mut mols = vec![parse_smiles(&"C".repeat(300)).ok()];
+    let mols = vec![parse_smiles(&"C".repeat(300)).ok()];
     let descriptors = [
         BatchDescriptor::Mde,
         BatchDescriptor::WienerIndex,
@@ -39,7 +39,7 @@ fn full_bundle_on_long_chain_is_finite_for_topological_descriptors() {
         BatchDescriptor::EStateIndices,
         BatchDescriptor::AtomPairFingerprint,
     ];
-    let table = calculate_table(&mut mols, &TableLayout::new(&descriptors));
+    let table = DescriptorCalculator::new(&descriptors).calculate(&mols);
     assert!(table.scalars.iter().all(|v| v.is_finite()));
 
     // Wiener index of a linear chain: sum_{d=1}^{n-1} d * (n - d) = (n^3 - n) / 6.

@@ -44,23 +44,23 @@
 use crate::mol::{atom::Atom, bond::Bond};
 use crate::types::{AtomIdx, BondIdx};
 use smallvec::SmallVec;
+use std::sync::OnceLock;
 
+/// Properties derived from the molecule graph, each computed at most once
+/// (`OnceLock`: thread-safe, computed by the first caller, read-only after).
+/// They are pure functions of the molecule, so descriptors can fill them
+/// through `&Molecule` and several threads may share one molecule.
 #[derive(Debug, Default, Clone)]
-/// Implements MoleculeCache.
-///
-/// Function context: `crates/ferrum_core/src/mol/molecule.rs`.
-/// Mol-layer note: core graph data structure component.
 struct MoleculeCache {
-    gasteiger_charges: Option<Vec<f64>>,
-    labute_contribs: Option<CachedLabuteContribs>,
-    crippen_contribs: Option<(Vec<f64>, Vec<f64>)>,
-    crippen_totals: Option<(f64, f64)>,
-    hbond_donor_count: Option<u32>,
-    hbond_acceptor_count: Option<u32>,
-    rotatable_bond_count: Option<u32>,
-    tpsa: Option<f64>,
-    balaban_bo_dist: Option<Vec<f64>>,
-    min_cycle_basis_bonds: Option<Vec<smallvec::SmallVec<[u16; 8]>>>,
+    gasteiger_charges: OnceLock<Vec<f64>>,
+    labute_contribs: OnceLock<CachedLabuteContribs>,
+    crippen_contribs: OnceLock<(Vec<f64>, Vec<f64>)>,
+    crippen_totals: OnceLock<(f64, f64)>,
+    hbond_donor_count: OnceLock<u32>,
+    hbond_acceptor_count: OnceLock<u32>,
+    rotatable_bond_count: OnceLock<u32>,
+    tpsa: OnceLock<f64>,
+    min_cycle_basis_bonds: OnceLock<Vec<smallvec::SmallVec<[u16; 8]>>>,
 }
 
 #[derive(Debug, Clone)]
@@ -90,11 +90,12 @@ pub struct Molecule {
     // 3D conformer data
     pub conformers: Vec<crate::mol::conformer::Conformer>,
 
-    /// Ring perception result (RDKit symmetrized SSSR), set during sanitization.
-    pub(crate) ring_info: Option<Box<RingInfo>>,
+    /// Ring perception result (RDKit symmetrized SSSR): set during
+    /// sanitization, computed on first use for molecules built by hand.
+    ring_info: OnceLock<Box<RingInfo>>,
 
-    // Lazy-initialized cache for expensive properties
-    cache: Option<Box<MoleculeCache>>,
+    /// Derived properties, computed on first use (see [`MoleculeCache`]).
+    cache: MoleculeCache,
 }
 
 /// Ring information as perceived by RDKit's symmetrized SSSR.
@@ -152,8 +153,8 @@ impl Molecule {
             bonds: Vec::with_capacity(n_atoms),
             adjacency: Vec::with_capacity(n_atoms),
             conformers: Vec::new(),
-            ring_info: None,
-            cache: None,
+            ring_info: OnceLock::new(),
+            cache: MoleculeCache::default(),
         }
     }
 
@@ -171,8 +172,8 @@ impl Molecule {
             bonds,
             adjacency,
             conformers: Vec::new(),
-            ring_info: None,
-            cache: None,
+            ring_info: OnceLock::new(),
+            cache: MoleculeCache::default(),
         }
     }
 
@@ -189,13 +190,14 @@ impl Molecule {
         self.atoms[atom].total_h() as u32 + h_nbrs
     }
 
-    /// Ring information from sanitization (RDKit symmetrized SSSR), if perceived.
+    /// Ring information (RDKit symmetrized SSSR). Set by sanitization; for
+    /// molecules built by hand it is computed on first use. Always `Some`.
     pub fn ring_info(&self) -> Option<&RingInfo> {
-        self.ring_info.as_deref()
+        Some(self.ring_info.get_or_init(|| Box::new(crate::algo::rings::compute_ring_info(self))))
     }
 
     pub(crate) fn set_ring_info(&mut self, info: RingInfo) {
-        self.ring_info = Some(Box::new(info));
+        self.ring_info = OnceLock::from(Box::new(info));
     }
 
     /// Implements atoms.
@@ -226,190 +228,70 @@ impl Molecule {
     /// Function context: `crates/ferrum_core/src/mol/molecule.rs`.
     /// Molecule-model note: preserve atom/bond index invariants and cached-property invalidation rules.
     pub fn invalidate_cached_properties(&mut self) {
-        self.cache = None;
+        self.cache = MoleculeCache::default();
+        self.ring_info = OnceLock::new();
     }
 
-    /// Implements mut.
-    ///
-    /// Function context: `crates/ferrum_core/src/mol/molecule.rs`.
-    /// Molecule-model note: preserve atom/bond index invariants and cached-property invalidation rules.
-    fn cache_mut(&mut self) -> &mut MoleculeCache {
-        if self.cache.is_none() {
-            self.cache = Some(Box::new(MoleculeCache::default()));
-        }
-        self.cache.as_mut().unwrap()
+    // --- Derived-property cache: `*_or_init` computes on first use ---
+
+    pub(crate) fn gasteiger_charges_or_init(&self, f: impl FnOnce() -> Vec<f64>) -> &[f64] {
+        self.cache.gasteiger_charges.get_or_init(f)
     }
 
-    // --- Cache Accessors ---
-
-    /// Implements gasteiger charges.
-    ///
-    /// Function context: `crates/ferrum_core/src/mol/molecule.rs`.
-    /// Molecule-model note: preserve atom/bond index invariants and cached-property invalidation rules.
     pub(crate) fn cached_gasteiger_charges(&self) -> Option<&[f64]> {
-        self.cache.as_deref()?.gasteiger_charges.as_deref()
+        self.cache.gasteiger_charges.get().map(Vec::as_slice)
     }
 
-    /// Implements gasteiger charges.
-    ///
-    /// Function context: `crates/ferrum_core/src/mol/molecule.rs`.
-    /// Molecule-model note: preserve atom/bond index invariants and cached-property invalidation rules.
-    pub(crate) fn store_gasteiger_charges(&mut self, charges: Vec<f64>) {
-        self.cache_mut().gasteiger_charges = Some(charges);
-    }
-
-    /// Implements labute contribs.
-    ///
-    /// Function context: `crates/ferrum_core/src/mol/molecule.rs`.
-    /// Molecule-model note: preserve atom/bond index invariants and cached-property invalidation rules.
-    pub(crate) fn cached_labute_contribs(&self) -> Option<(&[f64], f64)> {
-        let contribs = self.cache.as_deref()?.labute_contribs.as_ref()?;
-        Some((&contribs.atom_vsa, contribs.h_contrib))
-    }
-
-    /// Implements labute contribs.
-    ///
-    /// Function context: `crates/ferrum_core/src/mol/molecule.rs`.
-    /// Molecule-model note: preserve atom/bond index invariants and cached-property invalidation rules.
-    pub(crate) fn store_labute_contribs(&mut self, atom_vsa: Vec<f64>, h_contrib: f64) {
-        self.cache_mut().labute_contribs = Some(CachedLabuteContribs {
-            atom_vsa,
-            h_contrib,
+    pub(crate) fn labute_contribs_or_init(&self, f: impl FnOnce() -> (Vec<f64>, f64)) -> (&[f64], f64) {
+        let c = self.cache.labute_contribs.get_or_init(|| {
+            let (atom_vsa, h_contrib) = f();
+            CachedLabuteContribs { atom_vsa, h_contrib }
         });
+        (&c.atom_vsa, c.h_contrib)
     }
 
-    /// Implements crippen contribs.
-    ///
-    /// Function context: `crates/ferrum_core/src/mol/molecule.rs`.
-    /// Molecule-model note: preserve atom/bond index invariants and cached-property invalidation rules.
+    pub(crate) fn cached_labute_contribs(&self) -> Option<(&[f64], f64)> {
+        self.cache.labute_contribs.get().map(|c| (c.atom_vsa.as_slice(), c.h_contrib))
+    }
+
+    pub(crate) fn crippen_contribs_or_init(&self, f: impl FnOnce() -> (Vec<f64>, Vec<f64>)) -> (&[f64], &[f64]) {
+        let (logp, mr) = self.cache.crippen_contribs.get_or_init(f);
+        (logp, mr)
+    }
+
     pub(crate) fn cached_crippen_contribs(&self) -> Option<(&[f64], &[f64])> {
-        let (logp, mr) = self.cache.as_deref()?.crippen_contribs.as_ref()?;
-        Some((logp, mr))
+        self.cache.crippen_contribs.get().map(|(l, m)| (l.as_slice(), m.as_slice()))
     }
 
-    /// Implements crippen contribs.
-    ///
-    /// Function context: `crates/ferrum_core/src/mol/molecule.rs`.
-    /// Molecule-model note: preserve atom/bond index invariants and cached-property invalidation rules.
-    pub(crate) fn store_crippen_contribs(&mut self, logp: Vec<f64>, mr: Vec<f64>) {
-        self.cache_mut().crippen_contribs = Some((logp, mr));
+    pub(crate) fn crippen_totals_or_init(&self, f: impl FnOnce() -> (f64, f64)) -> (f64, f64) {
+        *self.cache.crippen_totals.get_or_init(f)
     }
 
-    /// Implements crippen totals.
-    ///
-    /// Function context: `crates/ferrum_core/src/mol/molecule.rs`.
-    /// Molecule-model note: preserve atom/bond index invariants and cached-property invalidation rules.
     pub(crate) fn cached_crippen_totals(&self) -> Option<(f64, f64)> {
-        self.cache.as_deref()?.crippen_totals
+        self.cache.crippen_totals.get().copied()
     }
 
-    /// Implements crippen totals.
-    ///
-    /// Function context: `crates/ferrum_core/src/mol/molecule.rs`.
-    /// Molecule-model note: preserve atom/bond index invariants and cached-property invalidation rules.
-    pub(crate) fn store_crippen_totals(&mut self, logp: f64, mr: f64) {
-        self.cache_mut().crippen_totals = Some((logp, mr));
+    pub(crate) fn hbond_donor_count_or_init(&self, f: impl FnOnce() -> u32) -> u32 {
+        *self.cache.hbond_donor_count.get_or_init(f)
     }
 
-    /// Implements hbond donor count.
-    ///
-    /// Function context: `crates/ferrum_core/src/mol/molecule.rs`.
-    /// Molecule-model note: preserve atom/bond index invariants and cached-property invalidation rules.
-    pub(crate) fn cached_hbond_donor_count(&self) -> Option<u32> {
-        self.cache.as_deref()?.hbond_donor_count
+    pub(crate) fn hbond_acceptor_count_or_init(&self, f: impl FnOnce() -> u32) -> u32 {
+        *self.cache.hbond_acceptor_count.get_or_init(f)
     }
 
-    /// Implements hbond donor count.
-    ///
-    /// Function context: `crates/ferrum_core/src/mol/molecule.rs`.
-    /// Molecule-model note: preserve atom/bond index invariants and cached-property invalidation rules.
-    pub(crate) fn store_hbond_donor_count(&mut self, count: u32) {
-        self.cache_mut().hbond_donor_count = Some(count);
+    pub(crate) fn rotatable_bond_count_or_init(&self, f: impl FnOnce() -> u32) -> u32 {
+        *self.cache.rotatable_bond_count.get_or_init(f)
     }
 
-    /// Implements hbond acceptor count.
-    ///
-    /// Function context: `crates/ferrum_core/src/mol/molecule.rs`.
-    /// Molecule-model note: preserve atom/bond index invariants and cached-property invalidation rules.
-    pub(crate) fn cached_hbond_acceptor_count(&self) -> Option<u32> {
-        self.cache.as_deref()?.hbond_acceptor_count
+    pub(crate) fn tpsa_or_init(&self, f: impl FnOnce() -> f64) -> f64 {
+        *self.cache.tpsa.get_or_init(f)
     }
 
-    /// Implements hbond acceptor count.
-    ///
-    /// Function context: `crates/ferrum_core/src/mol/molecule.rs`.
-    /// Molecule-model note: preserve atom/bond index invariants and cached-property invalidation rules.
-    pub(crate) fn store_hbond_acceptor_count(&mut self, count: u32) {
-        self.cache_mut().hbond_acceptor_count = Some(count);
-    }
-
-    /// Implements rotatable bond count.
-    ///
-    /// Function context: `crates/ferrum_core/src/mol/molecule.rs`.
-    /// Molecule-model note: preserve atom/bond index invariants and cached-property invalidation rules.
-    pub(crate) fn cached_rotatable_bond_count(&self) -> Option<u32> {
-        self.cache.as_deref()?.rotatable_bond_count
-    }
-
-    /// Implements rotatable bond count.
-    ///
-    /// Function context: `crates/ferrum_core/src/mol/molecule.rs`.
-    /// Molecule-model note: preserve atom/bond index invariants and cached-property invalidation rules.
-    pub(crate) fn store_rotatable_bond_count(&mut self, count: u32) {
-        self.cache_mut().rotatable_bond_count = Some(count);
-    }
-
-    /// Implements tpsa.
-    ///
-    /// Function context: `crates/ferrum_core/src/mol/molecule.rs`.
-    /// Molecule-model note: preserve atom/bond index invariants and cached-property invalidation rules.
-    pub(crate) fn cached_tpsa(&self) -> Option<f64> {
-        self.cache.as_deref()?.tpsa
-    }
-
-    /// Implements tpsa.
-    ///
-    /// Function context: `crates/ferrum_core/src/mol/molecule.rs`.
-    /// Molecule-model note: preserve atom/bond index invariants and cached-property invalidation rules.
-    pub(crate) fn store_tpsa(&mut self, tpsa: f64) {
-        self.cache_mut().tpsa = Some(tpsa);
-    }
-
-    /// Implements balaban bo dist.
-    ///
-    /// Function context: `crates/ferrum_core/src/mol/molecule.rs`.
-    /// Molecule-model note: preserve atom/bond index invariants and cached-property invalidation rules.
-    pub(crate) fn cached_balaban_bo_dist(&self) -> Option<&Vec<f64>> {
-        self.cache.as_deref()?.balaban_bo_dist.as_ref()
-    }
-
-    /// Implements balaban bo dist.
-    ///
-    /// Function context: `crates/ferrum_core/src/mol/molecule.rs`.
-    /// Molecule-model note: preserve atom/bond index invariants and cached-property invalidation rules.
-    pub(crate) fn store_balaban_bo_dist(&mut self, dist: Vec<f64>) {
-        self.cache_mut().balaban_bo_dist = Some(dist);
-    }
-
-    /// Implements min cycle basis bonds.
-    ///
-    /// Function context: `crates/ferrum_core/src/mol/molecule.rs`.
-    /// Molecule-model note: preserve atom/bond index invariants and cached-property invalidation rules.
-    pub(crate) fn cached_min_cycle_basis_bonds(
+    pub(crate) fn min_cycle_basis_bonds_or_init(
         &self,
-    ) -> Option<&Vec<smallvec::SmallVec<[u16; 8]>>> {
-        self.cache.as_deref()?.min_cycle_basis_bonds.as_ref()
-    }
-
-    /// Implements min cycle basis bonds.
-    ///
-    /// Function context: `crates/ferrum_core/src/mol/molecule.rs`.
-    /// Molecule-model note: preserve atom/bond index invariants and cached-property invalidation rules.
-    pub(crate) fn store_min_cycle_basis_bonds(
-        &mut self,
-        rings: Vec<smallvec::SmallVec<[u16; 8]>>,
-    ) {
-        self.cache_mut().min_cycle_basis_bonds = Some(rings);
+        f: impl FnOnce() -> Vec<smallvec::SmallVec<[u16; 8]>>,
+    ) -> &[smallvec::SmallVec<[u16; 8]>] {
+        self.cache.min_cycle_basis_bonds.get_or_init(f)
     }
 
 }

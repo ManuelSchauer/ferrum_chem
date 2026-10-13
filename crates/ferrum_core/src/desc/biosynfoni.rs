@@ -127,7 +127,7 @@ impl crate::desc::typed::Descriptor for Biosynfoni {
 
     fn calculate(
         &self,
-        mol: &mut Molecule,
+        mol: &Molecule,
         _ctx: &mut crate::desc::context::CalculationContext,
     ) -> crate::desc::typed::DescriptorValue {
         let counts = compute_biosynfoni_fingerprint(mol);

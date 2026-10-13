@@ -65,7 +65,7 @@ impl Descriptor for PubChem881 {
 
     fn calculate(
         &self,
-        mol: &mut Molecule,
+        mol: &Molecule,
         _ctx: &mut crate::desc::context::CalculationContext,
     ) -> DescriptorValue {
         DescriptorValue::Binary(pubchem_fingerprint(mol))

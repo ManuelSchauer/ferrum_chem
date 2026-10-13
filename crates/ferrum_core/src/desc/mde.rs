@@ -82,7 +82,7 @@ impl Descriptor for MDE {
         "MDE"
     }
 
-    fn calculate(&self, mol: &mut Molecule, ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
+    fn calculate(&self, mol: &Molecule, ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
         // CDK computes on `removeHydrogens(container)`
         if let Some(mut suppressed) = crate::algo::sanitize::cdk_remove_hydrogens(mol) {
             return self.calculate(&mut suppressed, ctx);

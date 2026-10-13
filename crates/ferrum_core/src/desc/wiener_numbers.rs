@@ -74,7 +74,7 @@ impl Descriptor for WienerIndex {
 
     fn calculate(
         &self,
-        mol: &mut Molecule,
+        mol: &Molecule,
         ctx: &mut crate::desc::context::CalculationContext,
     ) -> DescriptorValue {
         // CDK computes on `removeHydrogens(container)`

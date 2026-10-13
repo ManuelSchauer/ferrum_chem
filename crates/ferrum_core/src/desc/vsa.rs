@@ -179,14 +179,15 @@ pub(crate) fn compute_labute_contribs(
 /// Function context: `crates/ferrum_core/src/desc/vsa.rs`.
 /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
 fn ensure_labute_contribs_cached(
-    mol: &mut Molecule,
+    mol: &Molecule,
     ctx: &mut crate::desc::context::CalculationContext,
 ) {
-    if !*LABUTE_CACHE_ENABLED || mol.cached_labute_contribs().is_some() {
-        return;
+    if *LABUTE_CACHE_ENABLED {
+        mol.labute_contribs_or_init(|| {
+            let (atom_vsa, h_contrib) = compute_labute_contribs_uncached(mol, ctx);
+            (atom_vsa.to_vec(), h_contrib)
+        });
     }
-    let (atom_vsa, h_contrib) = compute_labute_contribs_uncached(mol, ctx);
-    mol.store_labute_contribs(atom_vsa.to_vec(), h_contrib);
 }
 
 // ---------------------------------------------------------------------------
@@ -236,7 +237,7 @@ fn fill_binned_vsa(
 /// Function context: `crates/ferrum_core/src/desc/vsa.rs`.
 /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
 pub(crate) fn fill_slogp_vsa_into(
-    mol: &mut Molecule,
+    mol: &Molecule,
     out: &mut [f64],
     ctx: &mut crate::desc::context::CalculationContext,
 ) {
@@ -276,7 +277,7 @@ impl Descriptor for SlogpVSA {
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn calculate(
         &self,
-        mol: &mut Molecule,
+        mol: &Molecule,
         ctx: &mut crate::desc::context::CalculationContext,
     ) -> DescriptorValue {
         let mut values = vec![0.0f64; 12];
@@ -312,7 +313,7 @@ const SMR_BINS: [f64; 10] = [
 /// Function context: `crates/ferrum_core/src/desc/vsa.rs`.
 /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
 pub(crate) fn fill_smr_vsa_into(
-    mol: &mut Molecule,
+    mol: &Molecule,
     out: &mut [f64],
     ctx: &mut crate::desc::context::CalculationContext,
 ) {
@@ -348,7 +349,7 @@ impl Descriptor for SmrVSA {
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn calculate(
         &self,
-        mol: &mut Molecule,
+        mol: &Molecule,
         ctx: &mut crate::desc::context::CalculationContext,
     ) -> DescriptorValue {
         let mut values = vec![0.0f64; 10];
@@ -381,7 +382,7 @@ impl Descriptor for LabuteASA {
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn calculate(
         &self,
-        mol: &mut Molecule,
+        mol: &Molecule,
         ctx: &mut crate::desc::context::CalculationContext,
     ) -> DescriptorValue {
         ensure_labute_contribs_cached(mol, ctx);
@@ -426,7 +427,7 @@ const PEOE_BINS: [f64; 14] = [
 /// Function context: `crates/ferrum_core/src/desc/vsa.rs`.
 /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
 pub(crate) fn fill_peoe_vsa_into(
-    mol: &mut Molecule,
+    mol: &Molecule,
     out: &mut [f64],
     ctx: &mut crate::desc::context::CalculationContext,
 ) {
@@ -466,7 +467,7 @@ impl Descriptor for PeoeVsa {
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn calculate(
         &self,
-        mol: &mut Molecule,
+        mol: &Molecule,
         ctx: &mut crate::desc::context::CalculationContext,
     ) -> DescriptorValue {
         let mut values = vec![0.0f64; 14];

@@ -65,7 +65,7 @@ impl Descriptor for FormalCharge {
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn calculate(
         &self,
-        mol: &mut Molecule,
+        mol: &Molecule,
         _ctx: &mut crate::desc::context::CalculationContext,
     ) -> DescriptorValue {
         let total: i32 = mol.atoms.iter().map(|atom| atom.formal_charge as i32).sum();

@@ -41,7 +41,7 @@ impl Descriptor for SmallRingDescriptor {
 
     fn calculate(
         &self,
-        mol: &mut Molecule,
+        mol: &Molecule,
         _ctx: &mut crate::desc::context::CalculationContext,
     ) -> DescriptorValue {
         DescriptorValue::IntU16Vec(small_ring_counts(mol).to_vec())

@@ -14,70 +14,55 @@ use crate::mol::molecule::Molecule;
 use crate::types::AtomIdx;
 use smallvec::SmallVec;
 
-fn compute_ring_info_if_missing(mol: &Molecule) -> Option<Vec<SmallVec<[u16; 8]>>> {
-    if mol.ring_info().is_some() {
-        return None;
+/// Ring information (RDKit symmetrized SSSR) computed from the graph; used by
+/// [`Molecule::ring_info`] for molecules that were not sanitized.
+pub(crate) fn compute_ring_info(mol: &Molecule) -> crate::mol::molecule::RingInfo {
+    let rings = sssr::symmetrized_sssr(mol);
+    let mut info = crate::mol::molecule::RingInfo {
+        atom_ring_counts: vec![0; mol.num_atoms()],
+        bond_ring_counts: vec![0; mol.num_bonds()],
+        ..Default::default()
+    };
+    for r in &rings {
+        let bonds = sssr::ring_atoms_to_bonds(mol, r);
+        for &a in r {
+            info.atom_ring_counts[a as usize] += 1;
+        }
+        for &b in &bonds {
+            info.bond_ring_counts[b as usize] += 1;
+        }
+        info.atom_rings.push(r.iter().map(|&a| a as AtomIdx).collect());
+        info.bond_rings.push(bonds.iter().map(|&b| b as u16).collect());
     }
-    Some(
-        sssr::symmetrized_sssr(mol)
-            .iter()
-            .map(|r| sssr::ring_atoms_to_bonds(mol, r).iter().map(|&b| b as u16).collect())
-            .collect(),
-    )
+    info
+}
+
+fn ring_info(mol: &Molecule) -> &crate::mol::molecule::RingInfo {
+    mol.ring_info().expect("ring info is computed on demand")
 }
 
 /// Atom rings (RDKit `RingInfo::atomRings`, symmetrized SSSR) in traversal order.
-pub fn find_sssr(mol: &mut Molecule) -> Vec<SmallVec<[AtomIdx; 8]>> {
+pub fn find_sssr(mol: &Molecule) -> Vec<SmallVec<[AtomIdx; 8]>> {
     atom_rings(mol)
 }
 
-/// Atom rings (RDKit `RingInfo::atomRings`) without requiring `&mut`.
+/// Atom rings (RDKit `RingInfo::atomRings`).
 pub fn atom_rings(mol: &Molecule) -> Vec<SmallVec<[AtomIdx; 8]>> {
-    if let Some(info) = mol.ring_info() {
-        return info.atom_rings.clone();
-    }
-    sssr::symmetrized_sssr(mol)
-        .into_iter()
-        .map(|r| r.into_iter().map(|a| a as AtomIdx).collect())
-        .collect()
+    ring_info(mol).atom_rings.clone()
 }
 
 /// Bond rings (RDKit `RingInfo::bondRings`, symmetrized SSSR).
 pub fn find_symmetrized_sssr_bonds(mol: &Molecule) -> Vec<SmallVec<[u16; 8]>> {
-    match mol.ring_info() {
-        Some(info) => info.bond_rings.clone(),
-        None => compute_ring_info_if_missing(mol).unwrap_or_default(),
-    }
+    ring_info(mol).bond_rings.clone()
 }
 
-/// Borrowed bond rings from the sanitization ring info.
+/// Borrowed bond rings.
 pub(crate) fn cached_symmetrized_sssr_bonds_ref(mol: &Molecule) -> Option<&[SmallVec<[u16; 8]>]> {
-    mol.ring_info().map(|info| info.bond_rings.as_slice())
+    Some(ring_info(mol).bond_rings.as_slice())
 }
 
-/// Ensures ring info is available (only needed for molecules built by hand).
-pub(crate) fn ensure_symmetrized_sssr_bonds_cached(mol: &mut Molecule) {
-    if mol.ring_info().is_none() {
-        let rings = sssr::symmetrized_sssr(mol);
-        let mut info = crate::mol::molecule::RingInfo {
-            atom_ring_counts: vec![0; mol.num_atoms()],
-            bond_ring_counts: vec![0; mol.num_bonds()],
-            ..Default::default()
-        };
-        for r in &rings {
-            let bonds = sssr::ring_atoms_to_bonds(mol, r);
-            for &a in r {
-                info.atom_ring_counts[a as usize] += 1;
-            }
-            for &b in &bonds {
-                info.bond_ring_counts[b as usize] += 1;
-            }
-            info.atom_rings.push(r.iter().map(|&a| a as AtomIdx).collect());
-            info.bond_rings.push(bonds.iter().map(|&b| b as u16).collect());
-        }
-        mol.set_ring_info(info);
-    }
-}
+/// Kept for call sites written before ring info became lazy: nothing to do.
+pub(crate) fn ensure_symmetrized_sssr_bonds_cached(_mol: &Molecule) {}
 
 /// RDKit `Chem.GetSSSR`: smallest set of smallest rings, as bond lists.
 pub fn find_minimum_cycle_basis_bonds(mol: &Molecule) -> Vec<SmallVec<[u16; 8]>> {
@@ -88,11 +73,8 @@ pub fn find_minimum_cycle_basis_bonds(mol: &Molecule) -> Vec<SmallVec<[u16; 8]>>
 }
 
 /// Cached variant of [`find_minimum_cycle_basis_bonds`].
-pub(crate) fn ensure_minimum_cycle_basis_bonds_cached(mol: &mut Molecule) {
-    if mol.cached_min_cycle_basis_bonds().is_none() {
-        let rings = find_minimum_cycle_basis_bonds(mol);
-        mol.store_min_cycle_basis_bonds(rings);
-    }
+pub(crate) fn minimum_cycle_basis_bonds_cached(mol: &Molecule) -> &[SmallVec<[u16; 8]>] {
+    mol.min_cycle_basis_bonds_or_init(|| find_minimum_cycle_basis_bonds(mol))
 }
 
 /// Check if an atom is in a ring.

@@ -75,7 +75,7 @@ impl Descriptor for KappaIndices {
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn calculate(
         &self,
-        mol: &mut Molecule,
+        mol: &Molecule,
         ctx: &mut crate::desc::context::CalculationContext,
     ) -> DescriptorValue {
         // RDKit calcKappa1-3: A = heavy atoms, P1 = all graph bonds,
@@ -151,7 +151,7 @@ impl Descriptor for CdkKappaShapeIndices {
         "CdkKappaShapeIndices"
     }
 
-    fn calculate(&self, mol: &mut Molecule, _ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
+    fn calculate(&self, mol: &Molecule, _ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
         DescriptorValue::FloatVec(cdk_kier(mol).to_vec())
     }
 }

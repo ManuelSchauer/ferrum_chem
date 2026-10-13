@@ -53,7 +53,7 @@ pub fn compute_charges(mol: &Molecule) -> Vec<f64> {
 ///
 /// Function context: `crates/ferrum_core/src/desc/gasteiger_charge.rs`.
 /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-fn compute_charges_cached(mol: &mut Molecule) -> Vec<f64> {
+fn compute_charges_cached(mol: &Molecule) -> Vec<f64> {
     crate::algo::electronic::compute_gasteiger_charges_cached(mol)
 }
 
@@ -62,7 +62,7 @@ fn compute_charges_cached(mol: &mut Molecule) -> Vec<f64> {
 /// Reproduces Python's `min(chg, cur)` / `max(chg, cur)` semantics exactly,
 /// including how NaN charges (elements without Gasteiger parameters)
 /// propagate: `min(a, b)` returns `a` unless `b < a`.
-pub(crate) fn rdkit_charge_extremes(mol: &mut Molecule) -> (f64, f64) {
+pub(crate) fn rdkit_charge_extremes(mol: &Molecule) -> (f64, f64) {
     let mut min_chg = 500.0f64;
     let mut max_chg = -500.0f64;
     for chg in compute_charges_cached(mol) {
@@ -100,7 +100,7 @@ impl Descriptor for MaxPartialCharge {
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn calculate(
         &self,
-        mol: &mut Molecule,
+        mol: &Molecule,
         _ctx: &mut crate::desc::context::CalculationContext,
     ) -> DescriptorValue {
         let (_, max) = rdkit_charge_extremes(mol);
@@ -126,7 +126,7 @@ impl Descriptor for MinPartialCharge {
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn calculate(
         &self,
-        mol: &mut Molecule,
+        mol: &Molecule,
         _ctx: &mut crate::desc::context::CalculationContext,
     ) -> DescriptorValue {
         let (min, _) = rdkit_charge_extremes(mol);
@@ -152,7 +152,7 @@ impl Descriptor for MaxAbsPartialCharge {
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn calculate(
         &self,
-        mol: &mut Molecule,
+        mol: &Molecule,
         _ctx: &mut crate::desc::context::CalculationContext,
     ) -> DescriptorValue {
         let (min, max) = rdkit_charge_extremes(mol);
@@ -178,7 +178,7 @@ impl Descriptor for MinAbsPartialCharge {
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn calculate(
         &self,
-        mol: &mut Molecule,
+        mol: &Molecule,
         _ctx: &mut crate::desc::context::CalculationContext,
     ) -> DescriptorValue {
         let (min, max) = rdkit_charge_extremes(mol);
@@ -204,7 +204,7 @@ impl Descriptor for GasteigerCharges {
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn calculate(
         &self,
-        mol: &mut Molecule,
+        mol: &Molecule,
         _ctx: &mut crate::desc::context::CalculationContext,
     ) -> DescriptorValue {
         let charges = compute_charges_cached(mol);
@@ -242,7 +242,7 @@ mod tests {
     ///
     /// Function context: `crates/ferrum_core/src/desc/gasteiger_charge.rs`.
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-    fn calc_float(desc: &dyn Descriptor, mol: &mut Molecule) -> f64 {
+    fn calc_float(desc: &dyn Descriptor, mol: &Molecule) -> f64 {
         match desc.calculate(mol, &mut crate::desc::context::CalculationContext::new()) {
             DescriptorValue::Float(v) => v,
             other => panic!("expected Float, got {:?}", other),

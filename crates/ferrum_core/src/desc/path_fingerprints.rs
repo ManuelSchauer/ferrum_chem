@@ -350,7 +350,7 @@ fn unique_torsion_paths(mol: &Molecule) -> Vec<[usize; 4]> {
 ///
 /// Function context: `crates/ferrum_core/src/desc/path_fingerprints.rs`.
 /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-fn torsion_hashes(mol: &mut Molecule) -> Vec<u32> {
+fn torsion_hashes(mol: &Molecule) -> Vec<u32> {
     let n = mol.num_atoms();
     if n < 3 {
         return vec![];
@@ -451,7 +451,7 @@ impl Descriptor for AtomPairFingerprint {
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn calculate(
         &self,
-        mol: &mut Molecule,
+        mol: &Molecule,
         ctx: &mut crate::desc::context::CalculationContext,
     ) -> DescriptorValue {
         let hashes = atom_pair_hashes(mol, ctx);
@@ -509,7 +509,7 @@ impl Descriptor for TopologicalTorsionFingerprint {
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn calculate(
         &self,
-        mol: &mut Molecule,
+        mol: &Molecule,
         _ctx: &mut crate::desc::context::CalculationContext,
     ) -> DescriptorValue {
         let hashes = torsion_hashes(mol);

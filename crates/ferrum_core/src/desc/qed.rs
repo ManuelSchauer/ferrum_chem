@@ -281,7 +281,7 @@ fn compute_qed_aromatic_ring_count_target(target: &IsoTarget) -> u32 {
     (n_bonds - n_atoms + n_components).max(0) as u32
 }
 
-fn compute_qed_aromatic_ring_count_cached(mol: &mut Molecule) -> u32 {
+fn compute_qed_aromatic_ring_count_cached(mol: &Molecule) -> u32 {
     compute_qed_aromatic_ring_count(mol)
 }
 
@@ -318,7 +318,7 @@ fn compute_qed(mol: &Molecule) -> f64 {
 ///
 /// Function context: `crates/ferrum_core/src/desc/qed.rs`.
 /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-fn compute_qed_cached(mol: &mut Molecule) -> f64 {
+fn compute_qed_cached(mol: &Molecule) -> f64 {
     let mw = compute_molecular_weight(mol);
     let logp = compute_logp_cached(mol).0 as f64;
     let hbd = compute_hbond_donors_cached(mol) as f64;
@@ -583,7 +583,7 @@ impl Descriptor for Qed {
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn calculate(
         &self,
-        mol: &mut Molecule,
+        mol: &Molecule,
         _ctx: &mut crate::desc::context::CalculationContext,
     ) -> DescriptorValue {
         DescriptorValue::Float(compute_qed_cached(mol))

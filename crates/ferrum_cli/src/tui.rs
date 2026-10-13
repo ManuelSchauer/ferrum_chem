@@ -1,15 +1,12 @@
-use crate::loader::load_dataset;
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind};
 use crossterm::execute;
 use crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
 };
 use ferrum_core::desc::batch::BatchDescriptor;
-use ferrum_core::desc::table::{
-    calculate_table_cancellable, write_csv_header, write_csv_rows, DescriptorTable,
-    FingerprintFormat, TableLayout,
-};
-use ferrum_core::mol::molecule::Molecule;
+use ferrum_core::desc::calculator::DescriptorCalculator;
+use ferrum_core::desc::table::{format_csv_rows_par, write_csv_header, DescriptorTable, FingerprintFormat};
+use ferrum_core::io::stream::MoleculeReader;
 use ratatui::prelude::*;
 use ratatui::widgets::{
     Block, Borders, Clear, List, ListItem, ListState, Paragraph, Row, Table, Tabs, Wrap,
@@ -28,17 +25,26 @@ const PREVIEW_ROWS: usize = 10;
 const PREVIEW_COLS: usize = 6;
 const DEFAULT_EXPORT_PATH: &str = "/tmp/ferrum_descriptors.csv";
 
+/// Records shown in the dataset preview.
+const DATASET_PREVIEW: usize = 15;
+
+/// The full results of the last calculation (streamed to disk, so memory does
+/// not grow with the dataset); export copies this file.
+fn results_path() -> PathBuf {
+    std::env::temp_dir().join(format!("ferrum_tui_{}.csv", std::process::id()))
+}
+
 enum WorkerRequest {
+    /// Count the records of a file (streamed) and keep a short preview.
     LoadDataset(PathBuf),
+    /// Stream the file through a calculator into the results file.
     CalculateDescriptors {
-        molecules: Vec<Molecule>,
+        path: PathBuf,
         descriptors: Vec<BatchDescriptor>,
+        total: usize,
     },
     ExportMatrix {
         path: PathBuf,
-        smiles: Vec<String>,
-        descriptors: Vec<BatchDescriptor>,
-        matrix: DescriptorTable,
     },
     Shutdown,
 }
@@ -48,14 +54,15 @@ enum WorkerResponse {
     Progress(f32),
     DatasetLoaded {
         path: PathBuf,
-        molecules: Vec<Molecule>,
-        smiles: Vec<String>,
+        records: usize,
         failed_rows: usize,
+        preview: Vec<(String, String)>,
     },
     DescriptorsCalculated {
+        /// The first chunk of results (for the preview).
         matrix: DescriptorTable,
         feature_names: Vec<String>,
-        descriptors: Vec<BatchDescriptor>,
+        rows: usize,
     },
     MatrixExported(PathBuf),
     Error(String),
@@ -87,20 +94,21 @@ struct App {
 
     // Loaded dataset
     dataset_path: Option<PathBuf>,
-    molecules: Vec<Molecule>,
-    smiles: Vec<String>,
+    records: usize,
     failed_rows: usize,
+    /// `(identifier, heavy atoms)` of the first records.
+    preview: Vec<(String, String)>,
 
     // Descriptor selection
     descriptors: Vec<(BatchDescriptor, bool)>,
     desc_list_state: ListState,
 
-    // Calculated results
+    // Calculated results (preview of the first chunk; all rows are in `results_path()`)
     matrix: Option<DescriptorTable>,
     /// Scalar column names of `matrix` (fingerprints are not previewed).
     feature_names: Vec<String>,
-    /// Descriptor selection `matrix` was calculated with.
-    matrix_descriptors: Vec<BatchDescriptor>,
+    /// Number of result rows written to the results file.
+    result_rows: usize,
     result_row_offset: usize,
     result_col_offset: usize,
 
@@ -131,16 +139,16 @@ impl App {
             export_path_input: DEFAULT_EXPORT_PATH.to_string(),
 
             dataset_path: None,
-            molecules: Vec::new(),
-            smiles: Vec::new(),
+            records: 0,
             failed_rows: 0,
+            preview: Vec::new(),
 
             descriptors,
             desc_list_state: list_state,
 
             matrix: None,
             feature_names: Vec::new(),
-            matrix_descriptors: Vec::new(),
+            result_rows: 0,
             result_row_offset: 0,
             result_col_offset: 0,
 
@@ -197,23 +205,29 @@ impl App {
         self.spinner_idx = (self.spinner_idx + 1) % SPINNER_FRAMES.len();
         while let Ok(resp) = self.resp_rx.try_recv() {
             match resp {
-                WorkerResponse::Progress(_) => {}
-                WorkerResponse::DatasetLoaded { path, molecules, smiles, failed_rows } => {
-                    let count = molecules.len();
+                WorkerResponse::Progress(p) => {
+                    if p > 0.0 && matches!(self.popup, PopupMode::Computing) {
+                        self.status_message = format!("Calculating descriptors... {:.0}%", (p * 100.0).min(100.0));
+                    }
+                }
+                WorkerResponse::DatasetLoaded { path, records, failed_rows, preview } => {
                     self.dataset_path = Some(path);
-                    self.molecules = molecules;
-                    self.smiles = smiles;
+                    self.records = records;
                     self.failed_rows = failed_rows;
+                    self.preview = preview;
                     self.popup = PopupMode::None;
                     self.matrix = None;
-                    self.status_message = format!("Loaded {} molecules ({} skipped). Ready to calculate descriptors.", count, failed_rows);
+                    self.status_message = format!(
+                        "Found {} records ({} cannot be parsed). Ready to calculate descriptors.",
+                        records, failed_rows
+                    );
                 }
-                WorkerResponse::DescriptorsCalculated { matrix, feature_names, descriptors } => {
-                    let r = matrix.rows;
+                WorkerResponse::DescriptorsCalculated { matrix, feature_names, rows } => {
+                    let r = rows;
                     let c = matrix.n_scalars() + matrix.fingerprints.len();
                     self.matrix = Some(matrix);
                     self.feature_names = feature_names;
-                    self.matrix_descriptors = descriptors;
+                    self.result_rows = rows;
                     self.popup = PopupMode::None;
                     self.tab_index = 1;
                     self.status_message = format!("Successfully calculated descriptors ({} molecules x {} features). Press 'e' to export.", r, c);
@@ -291,18 +305,11 @@ impl App {
                         self.export_path_input.push(c);
                     }
                     KeyCode::Enter => {
-                        if let Some(matrix) = self.matrix.clone() {
+                        if self.matrix.is_some() {
                             let path = PathBuf::from(&self.export_path_input);
-                            let smiles = self.smiles.clone();
-                            let descriptors = self.matrix_descriptors.clone();
                             self.popup = PopupMode::Computing;
                             self.status_message = format!("Exporting to '{}'...", path.display());
-                            let _ = self.req_tx.send(WorkerRequest::ExportMatrix {
-                                path,
-                                smiles,
-                                descriptors,
-                                matrix,
-                            });
+                            let _ = self.req_tx.send(WorkerRequest::ExportMatrix { path });
                         }
                     }
                     _ => {}
@@ -384,17 +391,18 @@ impl App {
                 }
                 KeyCode::Enter | KeyCode::Char('c') => {
                     let selected = self.selected_descriptors();
-                    if self.molecules.is_empty() {
+                    if self.records == 0 || self.dataset_path.is_none() {
                         self.popup = PopupMode::Error("Please load a dataset first (Tab 1 or press 'f').".to_string());
                     } else if selected.is_empty() {
                         self.popup = PopupMode::Error("No descriptors selected. Press 'a' or toggle with Space.".to_string());
                     } else {
                         self.popup = PopupMode::Computing;
                         self.cancel_flag.store(false, Ordering::Relaxed);
-                        self.status_message = format!("Calculating {} descriptor families on {} molecules...", selected.len(), self.molecules.len());
+                        self.status_message = format!("Calculating {} descriptor families on {} records...", selected.len(), self.records);
                         let _ = self.req_tx.send(WorkerRequest::CalculateDescriptors {
-                            molecules: self.molecules.clone(),
+                            path: self.dataset_path.clone().unwrap_or_default(),
                             descriptors: selected,
+                            total: self.records,
                         });
                     }
                 }
@@ -471,66 +479,102 @@ fn worker_thread(
 ) {
     while let Ok(req) = req_rx.recv() {
         match req {
-            WorkerRequest::Shutdown => break,
+            WorkerRequest::Shutdown => {
+                let _ = fs::remove_file(results_path());
+                break;
+            }
             WorkerRequest::LoadDataset(path) => {
                 let _ = resp_tx.send(WorkerResponse::Progress(0.1));
-                match load_dataset(&path) {
-                    Ok((molecules, smiles, failed_rows)) => {
-                        let _ = resp_tx.send(WorkerResponse::DatasetLoaded {
-                            path,
-                            molecules,
-                            smiles,
-                            failed_rows,
-                        });
+                match count_records(&path) {
+                    Ok((records, failed_rows, preview)) => {
+                        let _ = resp_tx.send(WorkerResponse::DatasetLoaded { path, records, failed_rows, preview });
                     }
                     Err(e) => {
                         let _ = resp_tx.send(WorkerResponse::Error(e));
                     }
                 }
             }
-            WorkerRequest::CalculateDescriptors { molecules, descriptors } => {
-                let _ = resp_tx.send(WorkerResponse::Progress(0.1));
+            WorkerRequest::CalculateDescriptors { path, descriptors, total } => {
+                let _ = resp_tx.send(WorkerResponse::Progress(0.0));
                 let flag = Arc::clone(&cancel_flag);
-                let mut molecules: Vec<Option<Molecule>> = molecules.into_iter().map(Some).collect();
-                let layout = TableLayout::new(&descriptors);
-                match calculate_table_cancellable(&mut molecules, &layout, &move || {
-                    flag.load(Ordering::Relaxed)
-                }) {
-                    Ok(matrix) => {
+                match calculate_to_file(&path, &descriptors, total, &resp_tx, &move || flag.load(Ordering::Relaxed)) {
+                    Ok(Some((matrix, rows))) => {
                         let feature_names = matrix.scalar_names.clone();
-                        let _ = resp_tx.send(WorkerResponse::DescriptorsCalculated {
-                            matrix,
-                            feature_names,
-                            descriptors,
-                        });
+                        let _ = resp_tx.send(WorkerResponse::DescriptorsCalculated { matrix, feature_names, rows });
                     }
-                    Err(_) => {
+                    Ok(None) => {
                         let _ = resp_tx.send(WorkerResponse::Canceled);
+                    }
+                    Err(e) => {
+                        let _ = resp_tx.send(WorkerResponse::Error(e));
                     }
                 }
             }
-            WorkerRequest::ExportMatrix { path, smiles, descriptors, matrix } => {
-                match File::create(&path) {
-                    Ok(f) => {
-                        let mut writer = BufWriter::new(f);
-                        let layout = TableLayout::new(&descriptors);
-                        let format = FingerprintFormat::Hex;
-                        let written = write_csv_header(&mut writer, "SMILES", &layout, format)
-                            .and_then(|()| write_csv_rows(&mut writer, &smiles, &matrix, format))
-                            .and_then(|()| std::io::Write::flush(&mut writer));
-                        if let Err(e) = written {
-                            let _ = resp_tx.send(WorkerResponse::Error(format!("Failed to write CSV: {}", e)));
-                        } else {
-                            let _ = resp_tx.send(WorkerResponse::MatrixExported(path));
-                        }
-                    }
-                    Err(e) => {
-                        let _ = resp_tx.send(WorkerResponse::Error(format!("Failed to create file: {}", e)));
-                    }
+            WorkerRequest::ExportMatrix { path } => match fs::copy(results_path(), &path) {
+                Ok(_) => {
+                    let _ = resp_tx.send(WorkerResponse::MatrixExported(path));
                 }
+                Err(e) => {
+                    let _ = resp_tx.send(WorkerResponse::Error(format!("Failed to write CSV: {}", e)));
+                }
+            },
+        }
+    }
+}
+
+/// Streams a dataset once: number of records, unparseable records and a preview.
+fn count_records(path: &std::path::Path) -> Result<(usize, usize, Vec<(String, String)>), String> {
+    let mut reader = MoleculeReader::open(path).map_err(|e| format!("Failed to open '{}': {}", path.display(), e))?;
+    let (mut records, mut failed, mut preview) = (0usize, 0usize, Vec::new());
+    while let Some(chunk) = reader.next_chunk().map_err(|e| format!("Failed to read '{}': {}", path.display(), e))? {
+        for record in chunk {
+            records += 1;
+            let atoms = match &record.molecule {
+                Ok(m) => m.atoms.iter().filter(|a| a.atomic_number > 1).count().to_string(),
+                Err(_) => {
+                    failed += 1;
+                    "parse error".to_string()
+                }
+            };
+            if preview.len() < DATASET_PREVIEW {
+                preview.push((record.id, atoms));
             }
         }
     }
+    Ok((records, failed, preview))
+}
+
+/// Streams `path` through one calculator into `results_path()`. Returns the
+/// first chunk (preview) and the number of rows, or `None` when cancelled.
+fn calculate_to_file(
+    path: &std::path::Path,
+    descriptors: &[BatchDescriptor],
+    total: usize,
+    resp_tx: &Sender<WorkerResponse>,
+    should_cancel: &(dyn Fn() -> bool + Sync),
+) -> Result<Option<(DescriptorTable, usize)>, String> {
+    let calc = DescriptorCalculator::new(descriptors);
+    let mut reader = MoleculeReader::open(path).map_err(|e| format!("Failed to open '{}': {}", path.display(), e))?;
+    let out = results_path();
+    let mut writer = BufWriter::new(File::create(&out).map_err(|e| format!("Failed to create '{}': {}", out.display(), e))?);
+    let format = FingerprintFormat::Hex;
+    let write_err = |e: io::Error| format!("Failed to write '{}': {}", out.display(), e);
+    write_csv_header(&mut writer, reader.id_column(), calc.layout(), format).map_err(write_err)?;
+    let (mut first, mut rows) = (None, 0usize);
+    while let Some(chunk) = reader.next_chunk().map_err(|e| format!("Failed to read '{}': {}", path.display(), e))? {
+        let (ids, molecules): (Vec<_>, Vec<Option<_>>) = chunk.into_iter().map(|r| (r.id, r.molecule.ok())).unzip();
+        let Ok(table) = calc.calculate_cancellable(&molecules, &should_cancel) else {
+            return Ok(None);
+        };
+        io::Write::write_all(&mut writer, &format_csv_rows_par(&ids, &table, format)).map_err(write_err)?;
+        rows += table.rows;
+        let _ = resp_tx.send(WorkerResponse::Progress(rows as f32 / total.max(1) as f32));
+        if first.is_none() {
+            first = Some(table);
+        }
+    }
+    io::Write::flush(&mut writer).map_err(write_err)?;
+    Ok(first.map(|t| (t, rows)))
 }
 
 fn ui(f: &mut Frame, app: &mut App) {
@@ -641,23 +685,19 @@ fn render_import_tab(f: &mut Frame, area: Rect, app: &App) {
     f.render_widget(info, chunks[0]);
 
     let summary = Paragraph::new(format!(
-        "Molecules Loaded: {}\nRows Skipped:     {}\nStatus:           {}",
-        app.molecules.len(),
+        "Records:          {}\nCannot parse:     {}\nStatus:           {}",
+        app.records,
         app.failed_rows,
-        if app.molecules.is_empty() { "Empty" } else { "Ready" }
+        if app.records == 0 { "Empty" } else { "Ready" }
     ))
     .block(Block::default().borders(Borders::ALL).title("Dataset Summary"));
     f.render_widget(summary, chunks[1]);
 
     let rows: Vec<Row> = app
-        .smiles
+        .preview
         .iter()
-        .take(15)
         .enumerate()
-        .map(|(i, smi)| {
-            let atom_count = app.molecules.get(i).map(|m| m.num_atoms().to_string()).unwrap_or_default();
-            Row::new(vec![format!("#{}", i + 1), smi.clone(), atom_count])
-        })
+        .map(|(i, (id, atoms))| Row::new(vec![format!("#{}", i + 1), id.clone(), atoms.clone()]))
         .collect();
 
     let header = Row::new(vec!["Index", "SMILES", "Heavy Atoms"])
@@ -743,10 +783,11 @@ fn render_descriptor_tab(f: &mut Frame, area: Rect, app: &mut App) {
         }
 
         let title = format!(
-            "Calculated Matrix Preview (showing {}..{}/{}, cols {}..{}/{})",
+            "Preview (rows {}..{} of the first {}; {} rows in total, all exported; cols {}..{}/{})",
             row_start,
             row_start + max_r,
             matrix.rows,
+            app.result_rows,
             col_start,
             col_start + max_c,
             n_cols
@@ -796,4 +837,41 @@ fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
             Constraint::Percentage((100 - percent_x) / 2),
         ])
         .split(popup_layout[1])[1]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn smi_file(content: &str) -> PathBuf {
+        let path = std::env::temp_dir().join(format!("ferrum_tui_test_{}_{}.smi", std::process::id(), content.len()));
+        fs::write(&path, content).unwrap();
+        path
+    }
+
+    #[test]
+    fn count_records_streams_and_previews() {
+        let path = smi_file("CCO\nnot_a_smiles\nc1ccccc1\n");
+        let (records, failed, preview) = count_records(&path).unwrap();
+        assert_eq!((records, failed), (3, 1));
+        assert_eq!(preview[0], ("CCO".to_string(), "3".to_string()));
+        assert_eq!(preview[1].1, "parse error");
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn calculate_to_file_writes_every_row_and_honours_cancel() {
+        let path = smi_file("CCO\nnot_a_smiles\nc1ccccc1\nCCN\n");
+        let (tx, rx) = mpsc::channel();
+        let descriptors = [BatchDescriptor::MolecularWeight, BatchDescriptor::MaccsKeys];
+        let (preview, rows) = calculate_to_file(&path, &descriptors, 4, &tx, &|| false).unwrap().unwrap();
+        assert_eq!((rows, preview.rows), (4, 4));
+        let csv = fs::read_to_string(results_path()).unwrap();
+        assert_eq!(csv.lines().count(), 5);
+        assert!(csv.starts_with("SMILES,MolWt,MACCS\n"));
+        assert!(rx.try_iter().any(|r| matches!(r, WorkerResponse::Progress(p) if p >= 1.0)));
+        assert!(calculate_to_file(&path, &descriptors, 4, &tx, &|| true).unwrap().is_none());
+        let _ = fs::remove_file(path);
+        let _ = fs::remove_file(results_path());
+    }
 }

@@ -245,7 +245,7 @@ impl Descriptor for ChiIndices {
 
     fn calculate(
         &self,
-        mol: &mut Molecule,
+        mol: &Molecule,
         ctx: &mut crate::desc::context::CalculationContext,
     ) -> DescriptorValue {
         let simple = simple_deltas(mol);
@@ -1022,7 +1022,7 @@ impl Descriptor for CdkChiIndices {
 
     fn calculate(
         &self,
-        mol: &mut Molecule,
+        mol: &Molecule,
         _ctx: &mut crate::desc::context::CalculationContext,
     ) -> DescriptorValue {
         DescriptorValue::FloatVec(Self::values(mol).to_vec())

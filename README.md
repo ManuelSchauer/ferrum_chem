@@ -93,36 +93,45 @@ import ferrum_py
 
 smiles = ["CC(=O)Oc1ccccc1C(=O)O", "CN1C=NC2=C1C(=O)N(C(=O)N2C)C", "not a smiles"]
 
-names, X, fps, valid = ferrum_py.compute_descriptors(smiles)
+calc = ferrum_py.Calculator()                  # build once, reuse for every call
+names, X, fps, valid = calc.compute(smiles)
 # names: 531 column names; X: float64 (3, 531), NaN rows where valid is False
 # fps:   {"MACCS": uint8 (3, 21), "PubChem": (3, 111), "ECFP4": (3, 256), ...}
 
-bits = ferrum_py.fingerprint_bits()            # {"MACCS": 166, "ECFP4": 2048, ...}
+bits = calc.fingerprint_bits                   # {"MACCS": 166, "ECFP4": 2048, ...}
 ecfp4 = np.unpackbits(fps["ECFP4"], axis=1, bitorder="little", count=bits["ECFP4"])
 
-names, X, _, valid = ferrum_py.compute_descriptors(smiles, fingerprints=False)  # scalars only
-bio_names, bio = ferrum_py.compute_biosynfoni(smiles)                            # 39 counts
+scalars = ferrum_py.Calculator(fingerprints=False)                 # scalars only
+names, X, fps, valid = ferrum_py.compute_descriptors(smiles)       # same, shared module-level calculator
+bio_names, bio = ferrum_py.compute_biosynfoni(smiles)              # 39 counts
 ```
 
-The calculation runs in parallel and releases the GIL.
+The calculation runs in parallel and releases the GIL; one `Calculator` can be
+used from several Python threads at the same time.
 
 ### Rust
 
 ```rust
-use ferrum_core::desc::table::{calculate_table, TableLayout};
+use ferrum_core::desc::calculator::DescriptorCalculator;
 use ferrum_core::io::smiles::parse_smiles;
 
-let layout = TableLayout::all(); // or TableLayout::new(&[BatchDescriptor::MolecularWeight, ...])
-let mut molecules = vec![parse_smiles("c1ccccc1O").ok(), parse_smiles("CCN").ok()];
-let table = calculate_table(&mut molecules, &layout); // parallel
+// one calculator for all molecules and all threads (Send + Sync)
+let calc = DescriptorCalculator::all(); // or ::new(&[BatchDescriptor::MolecularWeight, ...]), ::scalars_only()
 
+let table = calc.calculate_smiles(&["c1ccccc1O", "CCN"]); // parallel
 let logp = table.scalar_row(0)[table.scalar_names.iter().position(|n| n == "MolLogP").unwrap()];
 let ecfp4_bits: Vec<usize> = table.fingerprint("ECFP4").unwrap().on_bits(0).collect();
+
+// molecules are only read, so they can be reused or shared between threads
+let mol = parse_smiles("CC(=O)Oc1ccccc1C(=O)O").unwrap();
+let one = calc.calculate_one(&mol);
 ```
 
-For large files, `ferrum_core::io::stream::MoleculeReader` reads SMILES, CSV
-and SDF in chunks, and `desc::table::{write_csv_header, write_csv_rows}`
-write the CSV format used by the CLI.
+`calculate` accepts slices of `Molecule`, `&Molecule`, `Option<Molecule>` or
+`Option<&Molecule>` (`None` gives an invalid row). For large files,
+`ferrum_core::io::stream::MoleculeReader` reads SMILES, CSV and SDF in chunks,
+and `desc::table::{write_csv_header, write_csv_rows}` write the CSV format used
+by the CLI.
 
 ---
 
@@ -286,27 +295,32 @@ matrix. In CSV, `hex` writes these bytes as one hex string per fingerprint.
 
 ## Thread safety and architecture
 
+- **One calculator for everything.** `DescriptorCalculator` (Rust) /
+  `ferrum_py.Calculator` (Python) is built once, is immutable afterwards and
+  `Send + Sync`; the same object computes every molecule on every thread. Its
+  constructor also initialises all compiled SMARTS patterns and data tables,
+  so the first molecule does not pay for them.
 - **Descriptors are stateless.** Every descriptor is a type without mutable
   state (at most immutable settings such as a fingerprint's radius and bit
   count) or a value of the `BatchDescriptor` enum, and implements
-  `Descriptor: Send + Sync`, checked at compile time. Precompiled SMARTS
-  patterns and data tables live in `OnceLock` statics: built once,
-  thread-safely, then read-only. The library uses no locks and no
+  `Descriptor: Send + Sync`, checked at compile time. Precompiled patterns
+  and tables live in `OnceLock` statics. The library uses no locks and no
   `static mut`; the only shared mutable value is an atomic id counter for
-  compiled SMARTS patterns, and two small `thread_local!` scratch caches
-  (eigenvalue buffers, SMARTS search orders) are private to each thread.
-- **Per-molecule caches** (ring information, Gasteiger and Crippen
-  contributions, distance matrices) are stored in the molecule, which a
-  calculation borrows exclusively (`&mut Molecule`).
-- **Per-thread scratch space** (`CalculationContext`) holds reusable buffers
-  and the results shared between descriptors of the same molecule
-  (characteristic polynomial, path tables, stereo perception, CDK atom-type
-  view, …); `calculate_table` creates one per worker thread and resets it for
-  every molecule.
-- **Parallelism** comes from Rayon: one `TableLayout` (immutable) is shared by
-  all threads, molecules are distributed across the pool, and the CLI keeps
-  several chunks in flight so a single slow molecule does not stall the other
-  cores.
+  compiled SMARTS patterns.
+- **Molecules are read-only during calculation** (`&Molecule`). Results that
+  several descriptors need (ring information, Gasteiger and Crippen
+  contributions, TPSA, H-bond counts, …) are cached inside the molecule in
+  `OnceLock` fields: computed once by the first descriptor that needs them,
+  thread-safely, and read-only afterwards. A molecule can therefore be reused
+  or shared between threads (e.g. in an `Arc`).
+- **Scratch space is per thread.** Each worker thread owns one
+  `CalculationContext` (reusable buffers and per-molecule intermediates such as
+  distance matrices, the characteristic polynomial, path tables, stereo
+  perception and the CDK atom-type view). The calculator resets it before
+  every molecule, so results never depend on the previous molecule.
+- **Parallelism** comes from Rayon. The CLI streams its input in chunks and
+  keeps several chunks in flight, so a single slow molecule does not stall the
+  other cores; the TUI streams the same way and keeps only a preview in memory.
 
 Repository layout:
 

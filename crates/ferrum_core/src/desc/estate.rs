@@ -68,7 +68,7 @@ use std::sync::OnceLock;
 /// The E-State values are computed once per molecule and shared through the
 /// calculation context (EStateIndices, EStateAbs, EState_VSA, VSA_EState).
 pub(crate) fn compute_estates(
-    mol: &mut Molecule,
+    mol: &Molecule,
     ctx: &mut crate::desc::context::CalculationContext,
 ) -> Vec<f64> {
     let key = crate::desc::context::molecule_cache_key(mol);
@@ -81,7 +81,7 @@ pub(crate) fn compute_estates(
 }
 
 fn compute_estates_uncached(
-    mol: &mut Molecule,
+    mol: &Molecule,
     ctx: &mut crate::desc::context::CalculationContext,
 ) -> Vec<f64> {
     let n = mol.num_atoms();
@@ -1006,7 +1006,7 @@ impl Descriptor for EStateIndices {
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn calculate(
         &self,
-        mol: &mut Molecule,
+        mol: &Molecule,
         ctx: &mut crate::desc::context::CalculationContext,
     ) -> DescriptorValue {
         let mut values = Vec::with_capacity(3 + NUM_ESTATE_TYPES);

@@ -187,7 +187,7 @@ impl Descriptor for CarbonTypes {
         "CarbonTypes"
     }
 
-    fn calculate(&self, mol: &mut Molecule, _ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
+    fn calculate(&self, mol: &Molecule, _ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
         DescriptorValue::IntU16Vec(carbon_types(mol).to_vec())
     }
 }

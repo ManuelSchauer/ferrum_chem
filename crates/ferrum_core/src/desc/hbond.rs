@@ -83,26 +83,16 @@ pub fn compute_hbond_acceptors(mol: &Molecule) -> u32 {
 ///
 /// Function context: `crates/ferrum_core/src/desc/hbond.rs`.
 /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-pub(crate) fn compute_hbond_donors_cached(mol: &mut Molecule) -> u32 {
-    if let Some(cached) = mol.cached_hbond_donor_count() {
-        return cached;
-    }
-    let count = compute_hbond_donors(mol);
-    mol.store_hbond_donor_count(count);
-    count
+pub(crate) fn compute_hbond_donors_cached(mol: &Molecule) -> u32 {
+    mol.hbond_donor_count_or_init(|| compute_hbond_donors(mol))
 }
 
 /// Computes hbond acceptors cached.
 ///
 /// Function context: `crates/ferrum_core/src/desc/hbond.rs`.
 /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-pub(crate) fn compute_hbond_acceptors_cached(mol: &mut Molecule) -> u32 {
-    if let Some(cached) = mol.cached_hbond_acceptor_count() {
-        return cached;
-    }
-    let count = compute_hbond_acceptors(mol);
-    mol.store_hbond_acceptor_count(count);
-    count
+pub(crate) fn compute_hbond_acceptors_cached(mol: &Molecule) -> u32 {
+    mol.hbond_acceptor_count_or_init(|| compute_hbond_acceptors(mol))
 }
 
 /// Hydrogen bond donor count descriptor.
@@ -125,7 +115,7 @@ impl Descriptor for HBondDonor {
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn calculate(
         &self,
-        mol: &mut Molecule,
+        mol: &Molecule,
         _ctx: &mut crate::desc::context::CalculationContext,
     ) -> DescriptorValue {
         DescriptorValue::Int(compute_hbond_donors_cached(mol))
@@ -152,7 +142,7 @@ impl Descriptor for HBondAcceptor {
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn calculate(
         &self,
-        mol: &mut Molecule,
+        mol: &Molecule,
         _ctx: &mut crate::desc::context::CalculationContext,
     ) -> DescriptorValue {
         DescriptorValue::Int(compute_hbond_acceptors_cached(mol))
