@@ -40,7 +40,7 @@ use super::typed::{Descriptor, DescriptorValue};
 use crate::mol::molecule::Molecule;
 use crate::types::{AtomIdx, BondType, Hybridization};
 use bitvec::prelude::*;
-use std::collections::{HashMap, HashSet, VecDeque};
+use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 
 const NUM_BITS_PER_ENTRY: usize = 4;
 const COUNT_BOUNDS: [u32; NUM_BITS_PER_ENTRY] = [1, 2, 4, 8];
@@ -178,57 +178,6 @@ fn atom_code(mol: &Molecule, idx: usize, branch_subtract: u32) -> u32 {
     code
 }
 
-/// Builds unweighted dist matrix.
-///
-/// Function context: `crates/ferrum_core/src/desc/path_fingerprints.rs`.
-/// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-fn build_unweighted_dist_matrix(mol: &Molecule) -> Vec<u8> {
-    let n = mol.num_atoms();
-    let mut distances = vec![u8::MAX; n * n];
-    if n == 0 {
-        return distances;
-    }
-
-    for start in 0..n {
-        distances[start * n + start] = 0;
-        let mut queue = VecDeque::new();
-        queue.push_back(start as AtomIdx);
-
-        while let Some(current) = queue.pop_front() {
-            let current_usize = current as usize;
-            let current_dist = distances[start * n + current_usize];
-            for &bond_idx in &mol.adjacency[current_usize] {
-                let bond = &mol.bonds[bond_idx as usize];
-                let neighbor = if bond.source == current {
-                    bond.target
-                } else {
-                    bond.source
-                } as usize;
-                let slot = &mut distances[start * n + neighbor];
-                if *slot == u8::MAX {
-                    *slot = current_dist.saturating_add(1);
-                    queue.push_back(neighbor as AtomIdx);
-                }
-            }
-        }
-    }
-
-    distances
-}
-
-/// Implements dist matrix.
-///
-/// Function context: `crates/ferrum_core/src/desc/path_fingerprints.rs`.
-/// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-fn unweighted_dist_matrix(mol: &mut Molecule) -> Vec<u8> {
-    if let Some(cached) = mol.cached_unweighted_dist_matrix() {
-        return cached.to_vec();
-    }
-    let matrix = build_unweighted_dist_matrix(mol);
-    mol.store_unweighted_dist_matrix(matrix.clone());
-    matrix
-}
-
 /// Implements count simulated hashes.
 ///
 /// Function context: `crates/ferrum_core/src/desc/path_fingerprints.rs`.
@@ -244,7 +193,7 @@ fn fold_count_simulated_hashes(hashes: &[u32], num_bits: usize) -> BitVec<u8, Ls
         return bits;
     }
 
-    let mut counts: HashMap<usize, u32> = HashMap::new();
+    let mut counts: HashMap<usize, u32> = HashMap::default();
     for &hash in hashes {
         let bit_id = (hash as usize) % block_len;
         *counts.entry(bit_id).or_insert(0) += 1;
@@ -269,20 +218,23 @@ fn fold_count_simulated_hashes(hashes: &[u32], num_bits: usize) -> BitVec<u8, Ls
 ///
 /// Function context: `crates/ferrum_core/src/desc/path_fingerprints.rs`.
 /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-fn atom_pair_hashes(mol: &mut Molecule) -> Vec<u32> {
+fn atom_pair_hashes(
+    mol: &Molecule,
+    ctx: &mut crate::desc::context::CalculationContext,
+) -> Vec<u32> {
     let n = mol.num_atoms();
     if n < 2 {
         return vec![];
     }
 
-    let distances = unweighted_dist_matrix(mol);
+    let distances = crate::algo::paths::compute_unweighted_distance_matrix_cached(mol, ctx);
     let atom_invariants: Vec<u32> = (0..n).map(|i| atom_code(mol, i, 0)).collect();
     let mut hashes = Vec::new();
 
     for i in 0..n {
         for j in (i + 1)..n {
             let dist = distances[i * n + j];
-            if dist == u8::MAX {
+            if dist == crate::algo::paths::DIST_INF {
                 continue;
             }
             let d = dist as u32;
@@ -323,6 +275,11 @@ fn dfs_paths_len4(mol: &Molecule, path: &mut Vec<usize>, out: &mut Vec<[usize; 4
     for &bond_idx_u16 in &mol.adjacency[current] {
         let bond_idx = bond_idx_u16 as usize;
         let next = bond_neighbor(mol, current, bond_idx);
+        // RDKit enumerates torsion paths with `useHs = false`: hydrogen atoms
+        // kept in the graph (e.g. `[H]/N=C`) are not part of any path
+        if mol.atoms[next].atomic_number == 1 {
+            continue;
+        }
 
         if let Some(existing_pos) = path.iter().position(|&a| a == next) {
             // Match RDKit path-extension behavior for ring closure candidates:
@@ -347,21 +304,23 @@ fn dfs_paths_len4(mol: &Molecule, path: &mut Vec<usize>, out: &mut Vec<[usize; 4
 /// Function context: `crates/ferrum_core/src/desc/path_fingerprints.rs`.
 /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
 fn unique_torsion_paths(mol: &Molecule) -> Vec<[usize; 4]> {
+    // A 3-membered ring yields the closed torsion path a-b-c-a, so molecules
+    // with fewer than 4 atoms can still have torsions (RDKit behaviour).
     let n = mol.num_atoms();
-    if n < TT_ATOM_COUNT {
+    if n < 3 {
         return vec![];
     }
 
     let mut all_paths = Vec::new();
     let mut path = Vec::with_capacity(TT_ATOM_COUNT);
-    for start in 0..n {
+    for start in (0..n).filter(|&a| mol.atoms[a].atomic_number != 1) {
         path.clear();
         path.push(start);
         dfs_paths_len4(mol, &mut path, &mut all_paths);
     }
 
     // Deduplicate by bond-set signature (RDKit path uniqueness criterion).
-    let mut seen_bond_sets: HashSet<[usize; TT_ATOM_COUNT - 1]> = HashSet::new();
+    let mut seen_bond_sets: HashSet<[usize; TT_ATOM_COUNT - 1]> = HashSet::default();
     let mut unique = Vec::new();
     for p in all_paths {
         let mut sig = [0usize; TT_ATOM_COUNT - 1];
@@ -393,7 +352,7 @@ fn unique_torsion_paths(mol: &Molecule) -> Vec<[usize; 4]> {
 /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
 fn torsion_hashes(mol: &mut Molecule) -> Vec<u32> {
     let n = mol.num_atoms();
-    if n < TT_ATOM_COUNT {
+    if n < 3 {
         return vec![];
     }
 
@@ -469,8 +428,8 @@ impl AtomPairFingerprint {
 
     /// Raw hashed atom-pair environment identifiers (pre-folding).
     pub fn raw_features(&self, mol: &Molecule) -> Vec<u64> {
-        let mut clone = mol.clone();
-        atom_pair_hashes(&mut clone)
+        let mut ctx = crate::desc::context::CalculationContext::new();
+        atom_pair_hashes(mol, &mut ctx)
             .into_iter()
             .map(|v| v as u64)
             .collect()
@@ -493,9 +452,9 @@ impl Descriptor for AtomPairFingerprint {
     fn calculate(
         &self,
         mol: &mut Molecule,
-        _ctx: &mut crate::desc::context::CalculationContext,
+        ctx: &mut crate::desc::context::CalculationContext,
     ) -> DescriptorValue {
-        let hashes = atom_pair_hashes(mol);
+        let hashes = atom_pair_hashes(mol, ctx);
         let bits = fold_count_simulated_hashes(&hashes, self.num_bits);
         DescriptorValue::Binary(bits)
     }

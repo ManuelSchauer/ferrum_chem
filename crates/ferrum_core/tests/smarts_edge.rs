@@ -41,7 +41,7 @@
 /// Function context: `crates/ferrum_core/tests/smarts_edge.rs`.
 /// Test-layer note: this assertion path pins expected behavior to prevent regressions.
 fn test_smarts_edge_cases() {
-    use ferrum_core::algo::iso::{count_matches, find_all_matches};
+    use ferrum_core::algo::iso::count_matches;
     use ferrum_core::io::smarts::parse_smarts;
     use ferrum_core::io::smiles::parse_smiles;
 
@@ -56,7 +56,7 @@ fn test_smarts_edge_cases() {
         (
             "[c](:a)(:a)=[C,N,O]",
             "O=c1[nH]cccc1",
-            2,
+            1,
             "aromatic+double bond in 2-pyridone (2 symmetry matches)",
         ),
         ("[C]=[!C;A;!#1]", "C=O", 1, "aliphatic C=O"),
@@ -207,8 +207,8 @@ fn test_smarts_bond_and_valence() {
             0,
             "aliphatic CC should NOT match aromatic benzene",
         ),
-        ("cc", "c1ccccc1", 12, "aromatic cc in benzene"),
-        ("C-C", "CC", 2, "explicit single bond"),
+        ("cc", "c1ccccc1", 6, "aromatic cc in benzene"),
+        ("C-C", "CC", 1, "explicit single bond"),
         (
             "C-c",
             "Cc1ccccc1",
@@ -272,8 +272,8 @@ fn test_smarts_ring_bond_features() {
     let cases = vec![
         // Ring bond (@) and not-ring bond (!@)
         ("C!@C", "C1CCCC1", 0, "!@ not-ring bond in cyclopentane"),
-        ("C!@C", "CCCCC", 8, "!@ not-ring bond in pentane"),
-        ("C@C", "C1CCCC1", 10, "@ ring bond in cyclopentane"),
+        ("C!@C", "CCCCC", 4, "!@ not-ring bond in pentane"),
+        ("C@C", "C1CCCC1", 5, "@ ring bond in cyclopentane"),
         ("C@C", "CCCCC", 0, "@ ring bond in pentane"),
         (
             "C=!@C",
@@ -281,7 +281,7 @@ fn test_smarts_ring_bond_features() {
             0,
             "=!@ should reject ring alkene bonds",
         ),
-        ("C=!@C", "CC=CC", 2, "=!@ should match acyclic alkene bonds"),
+        ("C=!@C", "CC=CC", 1, "=!@ should match acyclic alkene bonds"),
         (
             "C=!@CC=[O,S]",
             "O=C1C=CCC1",
@@ -301,9 +301,9 @@ fn test_smarts_ring_bond_features() {
             "omitted bonds between bracket atoms should not match across double bonds",
         ),
         // Any bond (~)
-        ("C~C", "CC", 2, "~ any bond: ethane"),
-        ("C~C", "C=C", 2, "~ any bond: ethylene"),
-        ("c~c", "c1ccccc1", 12, "~ any bond: benzene"),
+        ("C~C", "CC", 1, "~ any bond: ethane"),
+        ("C~C", "C=C", 1, "~ any bond: ethylene"),
+        ("c~c", "c1ccccc1", 6, "~ any bond: benzene"),
         // Ring membership
         ("[R1]", "C1CCCC1", 5, "R1 in cyclopentane"),
         ("[R0]", "C1CCCC1", 0, "R0 in cyclopentane"),

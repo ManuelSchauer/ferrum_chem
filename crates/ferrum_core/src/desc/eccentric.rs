@@ -43,6 +43,7 @@
 //! - Repository unit and parity tests covering `Eccentric` behavior and edge molecules.
 //! - Code-local source of truth: symbols and tests declared in `crates/ferrum_core/src/desc/eccentric.rs`.
 
+use super::cdk_graph::cdk_eccentricities;
 use crate::mol::molecule::Molecule;
 use std::collections::VecDeque;
 
@@ -89,40 +90,25 @@ fn _compute_distance_matrix_unused(mol: &Molecule) -> Vec<u32> {
 /// - Path graphs: increasing with length
 /// - Cyclic: lower than linear of same size
 /// - Branched: varies with structure
-pub fn calculate(mol: &mut Molecule, ctx: &mut crate::desc::context::CalculationContext) -> u32 {
+pub fn calculate(mol: &mut Molecule, ctx: &mut crate::desc::context::CalculationContext) -> i32 {
+    // CDK computes on `removeHydrogens(container)`
+    if let Some(mut suppressed) = crate::algo::sanitize::cdk_remove_hydrogens(mol) {
+        return calculate(&mut suppressed, ctx);
+    }
     let n = mol.num_atoms();
-
-    if n == 0 {
-        return 0;
+    if n <= 1 {
+        return 0; // a lone atom has eccentricity 0 and degree 0
     }
 
-    if n == 1 {
-        return 0; // Single atom has no eccentricity
-    }
-
-    // Compute distance matrix
+    // CDK EccentricConnectivityIndexDescriptor: sum of eccentricity x degree
+    // with Java `int` arithmetic. Unreachable pairs have CDK distance
+    // 999999999, so disconnected molecules overflow exactly as in CDK.
     let dist = crate::algo::paths::compute_unweighted_distance_matrix_cached(mol, ctx);
-
-    // Calculate eccentricity for each atom
-    let mut eccentricities = vec![0u32; n];
-    for i in 0..n {
-        let mut max_dist = 0u8;
-        for j in 0..n {
-            let d = dist[i * n + j];
-            if d != 255 && d > max_dist {
-                max_dist = d;
-            }
-        }
-        eccentricities[i] = max_dist as u32;
+    let ecc = cdk_eccentricities(dist, n);
+    let mut eci = 0i32;
+    for (i, &e) in ecc.iter().enumerate() {
+        eci = eci.wrapping_add(e.wrapping_mul(mol.adjacency[i].len() as i32));
     }
-
-    // Sum degree × eccentricity
-    let mut eci = 0u32;
-    for i in 0..n {
-        let degree = mol.get_degree(i as u16) as u32;
-        eci += degree * eccentricities[i];
-    }
-
     eci
 }
 
@@ -265,5 +251,33 @@ mod tests {
         );
         // Linear should have higher ECI (more extended)
         assert!(lin_eci > bra_eci);
+    }
+
+    #[test]
+    fn test_eccentric_disconnected_overflows_like_cdk() {
+        // CC.O: three atoms of eccentricity 999999999, degrees 1, 1, 0
+        let mut mol = parse("CC.O");
+        let mut ctx = crate::desc::context::CalculationContext::new();
+        assert_eq!(calculate(&mut mol, &mut ctx), 1_999_999_998);
+        // ethane x2: 4 x 999999999 wraps around in Java int arithmetic
+        let mut mol = parse("CC.CC");
+        assert_eq!(calculate(&mut mol, &mut ctx), 3_999_999_996u32 as i32);
+    }
+}
+
+/// CDK `EccentricConnectivityIndexDescriptor` (`ECCEN`).
+pub struct EccentricConnectivityIndex;
+
+impl crate::desc::typed::Descriptor for EccentricConnectivityIndex {
+    fn name(&self) -> &str {
+        "EccentricConnectivityIndex"
+    }
+
+    fn calculate(
+        &self,
+        mol: &mut Molecule,
+        ctx: &mut crate::desc::context::CalculationContext,
+    ) -> crate::desc::typed::DescriptorValue {
+        crate::desc::typed::DescriptorValue::Float(calculate(mol, ctx) as f64)
     }
 }

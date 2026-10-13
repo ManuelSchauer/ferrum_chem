@@ -86,33 +86,33 @@ pub(crate) fn cached_bo_distance_matrix_ref(mol: &Molecule) -> Option<&[f64]> {
     mol.cached_balaban_bo_dist().map(|dist| dist.as_slice())
 }
 
-/// Calculates with distance matrix.
-///
-/// Function context: `crates/ferrum_core/src/desc/balaban.rs`.
-/// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-fn calculate_with_distance_matrix(mol: &Molecule, dist: &[f64]) -> f64 {
-    if crate::algo::components::num_fragments(mol) > 1 {
-        return 0.0;
-    }
-
+/// Balaban J from the bond-order weighted distances in sixths
+/// ([`crate::algo::distance_matrix::bond_order_distances_sixths`]).
+fn calculate_with_sixths(mol: &Molecule, dist6: &[u32]) -> f64 {
+    use crate::algo::distance_matrix::BO_DIST_INF;
     let n = mol.num_atoms();
     let m = mol.num_bonds();
 
-    if n == 0 || m == 0 {
+    if n <= 1 || m == 0 {
         return 0.0;
     }
 
-    if n == 1 {
-        return 0.0;
-    }
-
-    // Connected molecules have finite distances for every pair, so this is a tight contiguous
-    // row sum with no per-entry branching. This is kept explicit for readability and to make
-    // future SIMD/blocked-sum experiments straightforward.
+    // Distance sums. Like RDKit's `GetDistanceMatrix`, unreachable pairs of
+    // disconnected molecules count as distance 1e8 (so J is tiny but not 0).
+    // The reachable part is summed exactly in sixths.
+    const RDKIT_LOCAL_INF: f64 = 1e8;
     let mut s = vec![0.0f64; n];
     for i in 0..n {
-        let row = &dist[i * n..(i + 1) * n];
-        s[i] = row.iter().sum();
+        let mut sixths = 0u64;
+        let mut unreachable = 0u64;
+        for &d in &dist6[i * n..(i + 1) * n] {
+            if d == BO_DIST_INF {
+                unreachable += 1;
+            } else {
+                sixths += d as u64;
+            }
+        }
+        s[i] = sixths as f64 / 6.0 + unreachable as f64 * RDKIT_LOCAL_INF;
     }
 
     // Cyclomatic number μ = m - n + 1
@@ -121,10 +121,8 @@ fn calculate_with_distance_matrix(mol: &Molecule, dist: &[f64]) -> f64 {
     // Sum over all edges (using simple adjacency, not bond orders)
     let mut sum = 0.0;
     for bond in &mol.bonds {
-        let i = bond.source as usize;
-        let j = bond.target as usize;
-        let si = s[i];
-        let sj = s[j];
+        let si = s[bond.source as usize];
+        let sj = s[bond.target as usize];
         if si <= 0.0 || sj <= 0.0 {
             return f64::NAN;
         }
@@ -152,18 +150,15 @@ fn calculate_with_distance_matrix(mol: &Molecule, dist: &[f64]) -> f64 {
 /// # Panics
 /// Returns NaN for molecules with no bonds
 pub fn calculate(mol: &Molecule) -> f64 {
-    let dist = compute_distance_matrix(mol, true);
-    calculate_with_distance_matrix(mol, &dist)
+    let mut dist6 = Vec::new();
+    crate::algo::distance_matrix::bond_order_distances_sixths(mol, &mut dist6);
+    calculate_with_sixths(mol, &dist6)
 }
 
-/// Calculates cached.
-///
-/// Function context: `crates/ferrum_core/src/desc/balaban.rs`.
-/// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-pub(crate) fn calculate_cached(mol: &mut Molecule) -> f64 {
-    ensure_bo_distance_matrix_cached(mol);
-    let dist = cached_bo_distance_matrix_ref(mol).expect("Balaban BO distance cache initialized");
-    calculate_with_distance_matrix(mol, dist)
+/// Balaban J with the bond-order distances shared through `ctx`.
+pub(crate) fn calculate_with_context(mol: &Molecule, ctx: &mut crate::desc::context::CalculationContext) -> f64 {
+    let dist6 = crate::algo::distance_matrix::bond_order_distances_sixths_cached(mol, ctx);
+    calculate_with_sixths(mol, dist6)
 }
 
 /// Balaban J Index descriptor.
@@ -190,9 +185,9 @@ impl Descriptor for BalabanIndex {
     fn calculate(
         &self,
         mol: &mut Molecule,
-        _ctx: &mut crate::desc::context::CalculationContext,
+        ctx: &mut crate::desc::context::CalculationContext,
     ) -> DescriptorValue {
-        DescriptorValue::Float(calculate_cached(mol) as f32)
+        DescriptorValue::Float(calculate_with_context(mol, ctx))
     }
 }
 

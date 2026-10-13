@@ -319,7 +319,6 @@ fn debug_rotatable_failures() {
     /// Function context: `crates/ferrum_core/tests/debug_core.rs`.
     /// Test-layer note: this assertion path pins expected behavior to prevent regressions.
     fn bond_in_cycle(mol: &ferrum_core::mol::molecule::Molecule) -> Vec<bool> {
-        use ferrum_core::types::BondType;
         let n = mol.num_atoms();
         let m = mol.num_bonds();
         let mut disc = vec![usize::MAX; n];
@@ -433,7 +432,7 @@ fn debug_rotatable_failures() {
     }
 
     for (name, smiles, ferrum_count, rdkit_count) in cases {
-        let mut mol = parse_smiles(smiles).expect("parse");
+        let mol = parse_smiles(smiles).expect("parse");
         let in_cycle = bond_in_cycle(&mol);
         let hdeg = heavy_degrees(&mol);
         let has_triple = has_triple_nbr(&mol);
@@ -634,7 +633,7 @@ fn debug_hka_failures() {
     };
 
     for (name, smiles, rdkit_val, expected_diff) in cases {
-        let mut mol = parse_smiles(smiles).expect("parse");
+        let mol = parse_smiles(smiles).expect("parse");
         eprintln!("\n══════════════════════════════════════════════════");
         eprintln!("  {name}");
         eprintln!("  SMILES: {smiles}");

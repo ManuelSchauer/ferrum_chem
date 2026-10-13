@@ -1,219 +1,238 @@
+//! 3D shape descriptors of the first conformer (RDKit `PMI.cpp`).
+//!
+//! - `PMI1..3`: principal moments of inertia, mass weighted, ascending
+//!   (`rdMolDescriptors.CalcPMI1..3`, `useAtomicMasses=True`).
+//! - `Asphericity`: from the eigenvalues of the mass-weighted gyration
+//!   (covariance) matrix (`rdMolDescriptors.CalcAsphericity`).
+//!
+//! Atom weights are RDKit `Atom::getMass()` (isotope mass when an isotope is
+//! set, otherwise the standard atomic weight); implicit hydrogens do not
+//! contribute, explicit hydrogen atoms do. Molecules without a conformer
+//! (e.g. from SMILES) give NaN.
+
 use crate::desc::context::CalculationContext;
 use crate::desc::Descriptor;
-use crate::mol::elements::ATOMIC_MASSES;
-use crate::mol::molecule::Molecule;
 use crate::desc::DescriptorValue;
+use crate::mol::molecule::Molecule;
+use crate::mol::rdkit_data::atom_mass;
 
-/// Calculates the center of mass and the principal moments of inertia (PMI)
-/// of the first conformer. Returns (PMI1, PMI2, PMI3) sorted such that PMI1 <= PMI2 <= PMI3.
-fn compute_pmis(mol: &Molecule) -> Option<(f64, f64, f64)> {
-    if mol.conformers.is_empty() {
-        return None;
-    }
-    
-    let conf = &mol.conformers[0];
+/// Positions of the first conformer and RDKit atom masses, if available.
+fn weighted_positions(mol: &Molecule) -> Option<(&[[f64; 3]], Vec<f64>)> {
+    let conf = mol.conformers.first()?;
     if conf.positions.len() != mol.atoms.len() {
-        return None; // Mismatch
-    }
-    
-    let mut total_mass = 0.0;
-    let mut com = [0.0; 3];
-    let mut masses = Vec::with_capacity(mol.atoms.len());
-    
-    for (i, atom) in mol.atoms.iter().enumerate() {
-        let z = atom.atomic_number as usize;
-        let mass = if z < ATOMIC_MASSES.len() { ATOMIC_MASSES[z] as f64 } else { 0.0 };
-        masses.push(mass);
-        total_mass += mass;
-        
-        com[0] += mass * conf.positions[i][0];
-        com[1] += mass * conf.positions[i][1];
-        com[2] += mass * conf.positions[i][2];
-    }
-    
-    if total_mass == 0.0 {
         return None;
     }
-    
-    com[0] /= total_mass;
-    com[1] /= total_mass;
-    com[2] /= total_mass;
-    
-    // Compute inertia tensor
-    let mut ixx = 0.0;
-    let mut iyy = 0.0;
-    let mut izz = 0.0;
-    let mut ixy = 0.0;
-    let mut ixz = 0.0;
-    let mut iyz = 0.0;
-    
-    for (i, p) in conf.positions.iter().enumerate() {
-        let dx = p[0] - com[0];
-        let dy = p[1] - com[1];
-        let dz = p[2] - com[2];
-        let mass = masses[i];
-        
-        ixx += mass * (dy * dy + dz * dz);
-        iyy += mass * (dx * dx + dz * dz);
-        izz += mass * (dx * dx + dy * dy);
-        ixy -= mass * dx * dy;
-        ixz -= mass * dx * dz;
-        iyz -= mass * dy * dz;
+    let weights = mol
+        .atoms
+        .iter()
+        .map(|a| atom_mass(a.atomic_number, a.isotope))
+        .collect();
+    Some((&conf.positions, weights))
+}
+
+/// RDKit `MolTransforms::computeCentroid` with weights.
+fn centroid(positions: &[[f64; 3]], weights: &[f64]) -> [f64; 3] {
+    let mut c = [0.0f64; 3];
+    let mut w_sum = 0.0;
+    for (p, &w) in positions.iter().zip(weights) {
+        w_sum += w;
+        for k in 0..3 {
+            c[k] += p[k] * w;
+        }
     }
-    
-    // Diagonalize 3x3 symmetric matrix (Inertia Tensor) using Jacobi or standard eigenvalue solver.
-    // For simplicity, we use a basic analytical or iterative approach for 3x3 symmetric.
-    // Here we use a robust Jacobi eigenvalue algorithm for a 3x3 matrix.
-    let mut a = [
-        [ixx, ixy, ixz],
-        [ixy, iyy, iyz],
-        [ixz, iyz, izz],
-    ];
-    let mut d = [a[0][0], a[1][1], a[2][2]];
-    
-    for _step in 0..50 {
-        let mut sm = 0.0;
-        sm += a[0][1].abs() + a[0][2].abs() + a[1][2].abs();
-        if sm == 0.0 {
+    c.map(|x| x / w_sum)
+}
+
+/// Eigenvalues of a symmetric 3x3 matrix in ascending order (cyclic Jacobi).
+fn sym3_eigenvalues(mut a: [[f64; 3]; 3]) -> [f64; 3] {
+    for _sweep in 0..64 {
+        if a[0][1] == 0.0 && a[0][2] == 0.0 && a[1][2] == 0.0 {
             break;
         }
-        
-        for p in 0..2 {
-            for q in (p+1)..3 {
-                let h = d[q] - d[p];
-                if a[p][q].abs() > 1e-12 {
-                    let t = if h.abs() > 1e-12 {
-                        let theta = 0.5 * h / a[p][q];
-                        let t = 1.0 / (theta.abs() + (1.0 + theta * theta).sqrt());
-                        if theta < 0.0 { -t } else { t }
-                    } else {
-                        1.0
-                    };
-                    
-                    let c = 1.0 / (1.0 + t * t).sqrt();
-                    let s = t * c;
-                    let tau = s / (1.0 + c);
-                    let h2 = t * a[p][q];
-                    
-                    d[p] -= h2;
-                    d[q] += h2;
-                    a[p][q] = 0.0;
-                    
-                    for j in 0..p {
-                        let g = a[j][p];
-                        let h = a[j][q];
-                        a[j][p] = g - s * (h + g * tau);
-                        a[j][q] = h + s * (g - h * tau);
-                    }
-                    for j in (p+1)..q {
-                        let g = a[p][j];
-                        let h = a[j][q];
-                        a[p][j] = g - s * (h + g * tau);
-                        a[j][q] = h + s * (g - h * tau);
-                    }
-                    for j in (q+1)..3 {
-                        let g = a[p][j];
-                        let h = a[q][j];
-                        a[p][j] = g - s * (h + g * tau);
-                        a[q][j] = h + s * (g - h * tau);
-                    }
-                }
+        for (p, q) in [(0, 1), (0, 2), (1, 2)] {
+            let apq = a[p][q];
+            if apq == 0.0 {
+                continue;
             }
+            let theta = (a[q][q] - a[p][p]) / (2.0 * apq);
+            // smaller root of t^2 + 2 theta t - 1 = 0 (|rotation angle| <= pi/4)
+            let t = if theta.abs() > 1e150 {
+                0.5 / theta
+            } else {
+                theta.signum() / (theta.abs() + (theta * theta + 1.0).sqrt())
+            };
+            let c = 1.0 / (t * t + 1.0).sqrt();
+            let s = t * c;
+            for row in a.iter_mut() {
+                let (akp, akq) = (row[p], row[q]);
+                row[p] = c * akp - s * akq;
+                row[q] = s * akp + c * akq;
+            }
+            for k in 0..3 {
+                let (apk, aqk) = (a[p][k], a[q][k]);
+                a[p][k] = c * apk - s * aqk;
+                a[q][k] = s * apk + c * aqk;
+            }
+            a[p][q] = 0.0;
+            a[q][p] = 0.0;
         }
     }
-    
-    let mut pmis = [d[0], d[1], d[2]];
-    pmis.sort_by(|a, b| a.partial_cmp(b).unwrap());
-    Some((pmis[0], pmis[1], pmis[2]))
+    let mut d = [a[0][0], a[1][1], a[2][2]];
+    d.sort_by(f64::total_cmp);
+    d
 }
 
+/// RDKit `computePrincipalAxesAndMoments` (mass weighted, H included):
+/// eigenvalues of the inertia tensor about the centre of mass, ascending.
+pub(crate) fn principal_moments(mol: &Molecule) -> Option<[f64; 3]> {
+    let (positions, weights) = weighted_positions(mol)?;
+    let c = centroid(positions, &weights);
+    let (mut xx, mut xy, mut xz, mut yy, mut yz, mut zz) =
+        (0.0f64, 0.0f64, 0.0f64, 0.0f64, 0.0f64, 0.0f64);
+    for (p, &w) in positions.iter().zip(&weights) {
+        let (x, y, z) = (p[0] - c[0], p[1] - c[1], p[2] - c[2]);
+        xx += w * (y * y + z * z);
+        yy += w * (x * x + z * z);
+        zz += w * (y * y + x * x);
+        xy -= w * x * y;
+        xz -= w * x * z;
+        yz -= w * z * y;
+    }
+    Some(sym3_eigenvalues([[xx, xy, xz], [xy, yy, yz], [xz, yz, zz]]))
+}
+
+/// RDKit `computePrincipalAxesAndMomentsFromGyrationMatrix` (mass weighted,
+/// normalised covariance about the centre of mass), ascending.
+pub(crate) fn gyration_moments(mol: &Molecule) -> Option<[f64; 3]> {
+    let (positions, weights) = weighted_positions(mol)?;
+    let c = centroid(positions, &weights);
+    let (mut xx, mut xy, mut xz, mut yy, mut yz, mut zz) =
+        (0.0f64, 0.0f64, 0.0f64, 0.0f64, 0.0f64, 0.0f64);
+    let mut w_sum = 0.0;
+    for (p, &w) in positions.iter().zip(&weights) {
+        let (x, y, z) = (p[0] - c[0], p[1] - c[1], p[2] - c[2]);
+        w_sum += w;
+        xx += w * x * x;
+        xy += w * x * y;
+        xz += w * x * z;
+        yy += w * y * y;
+        yz += w * y * z;
+        zz += w * z * z;
+    }
+    let [xx, xy, xz, yy, yz, zz] = [xx, xy, xz, yy, yz, zz].map(|v| v / w_sum);
+    Some(sym3_eigenvalues([[xx, xy, xz], [xy, yy, yz], [xz, yz, zz]]))
+}
+
+fn float_or_nan(v: Option<f64>) -> DescriptorValue {
+    DescriptorValue::Float(v.unwrap_or(f64::NAN))
+}
+
+/// Smallest principal moment of inertia (RDKit `CalcPMI1`).
 #[derive(Debug, Clone)]
-/// Implements Pmi1.
-///
-/// Function context: `crates/ferrum_core/src/desc/shape_3d.rs`.
-/// Descriptor-layer note: computes molecular properties for ML pipelines.
 pub struct Pmi1;
 impl Descriptor for Pmi1 {
-    /// Implements name.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/shape_3d.rs`.
-    /// Descriptor-layer note: computes molecular properties for ML pipelines.
-    fn name(&self) -> &str { "PMI1" }
-    /// Implements calculate.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/shape_3d.rs`.
-    /// Descriptor-layer note: computes molecular properties for ML pipelines.
+    fn name(&self) -> &str {
+        "PMI1"
+    }
     fn calculate(&self, mol: &mut Molecule, _: &mut CalculationContext) -> DescriptorValue {
-        compute_pmis(mol).map(|p| DescriptorValue::Float64(p.0)).unwrap_or(DescriptorValue::Float64(f64::NAN))
+        float_or_nan(principal_moments(mol).map(|m| m[0]))
     }
 }
 
+/// Middle principal moment of inertia (RDKit `CalcPMI2`).
 #[derive(Debug, Clone)]
-/// Implements Pmi2.
-///
-/// Function context: `crates/ferrum_core/src/desc/shape_3d.rs`.
-/// Descriptor-layer note: computes molecular properties for ML pipelines.
 pub struct Pmi2;
 impl Descriptor for Pmi2 {
-    /// Implements name.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/shape_3d.rs`.
-    /// Descriptor-layer note: computes molecular properties for ML pipelines.
-    fn name(&self) -> &str { "PMI2" }
-    /// Implements calculate.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/shape_3d.rs`.
-    /// Descriptor-layer note: computes molecular properties for ML pipelines.
+    fn name(&self) -> &str {
+        "PMI2"
+    }
     fn calculate(&self, mol: &mut Molecule, _: &mut CalculationContext) -> DescriptorValue {
-        compute_pmis(mol).map(|p| DescriptorValue::Float64(p.1)).unwrap_or(DescriptorValue::Float64(f64::NAN))
+        float_or_nan(principal_moments(mol).map(|m| m[1]))
     }
 }
 
+/// Largest principal moment of inertia (RDKit `CalcPMI3`).
 #[derive(Debug, Clone)]
-/// Implements Pmi3.
-///
-/// Function context: `crates/ferrum_core/src/desc/shape_3d.rs`.
-/// Descriptor-layer note: computes molecular properties for ML pipelines.
 pub struct Pmi3;
 impl Descriptor for Pmi3 {
-    /// Implements name.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/shape_3d.rs`.
-    /// Descriptor-layer note: computes molecular properties for ML pipelines.
-    fn name(&self) -> &str { "PMI3" }
-    /// Implements calculate.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/shape_3d.rs`.
-    /// Descriptor-layer note: computes molecular properties for ML pipelines.
+    fn name(&self) -> &str {
+        "PMI3"
+    }
     fn calculate(&self, mol: &mut Molecule, _: &mut CalculationContext) -> DescriptorValue {
-        compute_pmis(mol).map(|p| DescriptorValue::Float64(p.2)).unwrap_or(DescriptorValue::Float64(f64::NAN))
+        float_or_nan(principal_moments(mol).map(|m| m[2]))
     }
 }
 
+/// Asphericity (RDKit `CalcAsphericity`): with the gyration-matrix
+/// eigenvalues `l1 <= l2 <= l3`,
+/// `0.5 * ((l1-l2)^2 + (l1-l3)^2 + (l2-l3)^2) / (l1+l2+l3)^2`, and 0 when
+/// `l3 < 1e-4` (no extent).
 #[derive(Debug, Clone)]
-/// Implements Asphericity.
-///
-/// Function context: `crates/ferrum_core/src/desc/shape_3d.rs`.
-/// Descriptor-layer note: computes molecular properties for ML pipelines.
 pub struct Asphericity;
 impl Descriptor for Asphericity {
-    /// Implements name.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/shape_3d.rs`.
-    /// Descriptor-layer note: computes molecular properties for ML pipelines.
-    fn name(&self) -> &str { "Asphericity" }
-    /// Implements calculate.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/shape_3d.rs`.
-    /// Descriptor-layer note: computes molecular properties for ML pipelines.
+    fn name(&self) -> &str {
+        "Asphericity"
+    }
     fn calculate(&self, mol: &mut Molecule, _: &mut CalculationContext) -> DescriptorValue {
-        compute_pmis(mol)
-            .map(|(pmi1, pmi2, pmi3)| {
-                // Asphericity = 0.5 * ((I3-I2)^2 + (I3-I1)^2 + (I2-I1)^2) / (I1^2 + I2^2 + I3^2)
-                let num = (pmi3 - pmi2).powi(2) + (pmi3 - pmi1).powi(2) + (pmi2 - pmi1).powi(2);
-                let den = pmi1.powi(2) + pmi2.powi(2) + pmi3.powi(2);
-                if den == 0.0 { DescriptorValue::Float64(0.0) } else { DescriptorValue::Float64(0.5 * num / den) }
-            })
-            .unwrap_or(DescriptorValue::Float64(f64::NAN))
+        float_or_nan(gyration_moments(mol).map(|[p1, p2, p3]| {
+            if p3 < 1e-4 {
+                0.0
+            } else {
+                let denom = p1 + p2 + p3;
+                0.5 * ((p1 - p2).powi(2) + (p1 - p3).powi(2) + (p2 - p3).powi(2)) / (denom * denom)
+            }
+        }))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::io::sdf::parse_mol_block;
+
+    fn calc(desc: &dyn Descriptor, mol: &mut Molecule) -> f64 {
+        match desc.calculate(mol, &mut CalculationContext::new()) {
+            DescriptorValue::Float(x) => x,
+            other => panic!("expected Float, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn eigenvalues_of_symmetric_matrix() {
+        let d = sym3_eigenvalues([[2.0, -1.0, 0.0], [-1.0, 2.0, -1.0], [0.0, -1.0, 2.0]]);
+        let s = 2f64.sqrt();
+        for (got, exp) in d.iter().zip([2.0 - s, 2.0, 2.0 + s]) {
+            assert!((got - exp).abs() < 1e-14, "{d:?}");
+        }
+        assert_eq!(
+            sym3_eigenvalues([[3.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 2.0]]),
+            [1.0, 2.0, 3.0]
+        );
+    }
+
+    /// Linear O=C=O: PMI1 = 0, PMI2 = PMI3 = 2 m_O d^2, asphericity 1
+    /// (RDKit 2026.03.2 gives the same values).
+    #[test]
+    fn linear_molecule() {
+        let block = "\n     RDKit          3D\n\n  3  2  0  0  0  0  0  0  0  0999 V2000\n   \
+            -1.1600    0.0000    0.0000 O   0  0  0  0  0  0  0  0  0  0  0  0\n    \
+            0.0000    0.0000    0.0000 C   0  0  0  0  0  0  0  0  0  0  0  0\n    \
+            1.1600    0.0000    0.0000 O   0  0  0  0  0  0  0  0  0  0  0  0\n  \
+            1  2  2  0\n  2  3  2  0\nM  END\n";
+        let mut mol = parse_mol_block(block).expect("valid mol block");
+        let o = atom_mass(8, 0);
+        let expected = 2.0 * o * 1.16 * 1.16;
+        assert!(calc(&Pmi1, &mut mol).abs() < 1e-12);
+        assert!((calc(&Pmi2, &mut mol) - expected).abs() < 1e-9);
+        assert!((calc(&Pmi3, &mut mol) - expected).abs() < 1e-9);
+        // linear: one non-zero gyration eigenvalue -> asphericity 1
+        assert!((calc(&Asphericity, &mut mol) - 1.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn no_conformer_gives_nan() {
+        let mut mol = crate::io::smiles::parse_smiles("CCO").unwrap();
+        assert!(calc(&Pmi1, &mut mol).is_nan());
+        assert!(calc(&Asphericity, &mut mol).is_nan());
     }
 }

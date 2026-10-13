@@ -72,93 +72,7 @@ static LABUTE_CACHE_ENABLED: Lazy<bool> =
 /// Function context: `crates/ferrum_core/src/desc/vsa.rs`.
 /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
 pub fn rb0_radius(an: u8) -> f64 {
-    match an {
-        1 => 0.330,
-        2 => 0.700,
-        3 => 1.230,
-        4 => 0.900,
-        5 => 0.820,
-        6 => 0.770,
-        7 => 0.700,
-        8 => 0.660,
-        9 => 0.611,
-        10 => 0.700,
-        11 => 1.540,
-        12 => 1.360,
-        13 => 1.180,
-        14 => 0.937,
-        15 => 0.890,
-        16 => 1.040,
-        17 => 0.997,
-        18 => 1.740,
-        19 => 2.030,
-        20 => 1.740,
-        21 => 1.440,
-        22 => 1.320,
-        23 => 1.220,
-        24 => 1.180,
-        25 => 1.170,
-        26 => 1.170,
-        27 => 1.160,
-        28 => 1.150,
-        29 => 1.170,
-        30 => 1.250,
-        31 => 1.260,
-        32 => 1.188,
-        33 => 1.200,
-        34 => 1.170,
-        35 => 1.167,
-        36 => 1.910,
-        37 => 2.160,
-        38 => 1.910,
-        39 => 1.620,
-        40 => 1.450,
-        41 => 1.340,
-        42 => 1.300,
-        43 => 1.270,
-        44 => 1.250,
-        45 => 1.250,
-        46 => 1.280,
-        47 => 1.340,
-        48 => 1.480,
-        49 => 1.440,
-        50 => 1.385,
-        51 => 1.400,
-        52 => 1.378,
-        53 => 1.387,
-        54 => 1.980,
-        55 => 2.350,
-        56 => 1.980,
-        // Lanthanides (57-71) and 3rd-row transition metals (72-80)
-        57 => 1.690,
-        58 => 1.650,
-        59 => 1.650,
-        60 => 1.640,
-        61 => 1.630,
-        62 => 1.620,
-        63 => 1.850,
-        64 => 1.610,
-        65 => 1.590,
-        66 => 1.590,
-        67 => 1.580,
-        68 => 1.570,
-        69 => 1.560,
-        70 => 1.700,
-        71 => 1.560,
-        72 => 1.440,
-        73 => 1.340,
-        74 => 1.300,
-        75 => 1.280,
-        76 => 1.260,
-        77 => 1.270,
-        78 => 1.300,
-        79 => 1.340,
-        80 => 1.490,
-        81 => 1.480,
-        82 => 1.470,
-        83 => 1.460,
-        _ => 0.770,
-    }
+    crate::mol::rdkit_data::ELEMENTS[(an as usize).min(118)].r_b0
 }
 
 // Bond-type scaling factors: aromatic=0.1, single=0.0, double=0.2, triple=0.3
@@ -175,7 +89,10 @@ fn bond_scale_factor(bond: &crate::mol::bond::Bond) -> f64 {
         crate::types::BondType::Double => 0.2,
         crate::types::BondType::Triple => 0.3,
         crate::types::BondType::Aromatic => 0.1,
-        _ => 0.0,
+        // RDKit indexes {.1, 0, .2, .3} by bond type: UNSPECIFIED (0) -> 0.1,
+        // dative and other types (>= 4) -> no correction.
+        crate::types::BondType::Unknown => 0.1,
+        crate::types::BondType::Dative => 0.0,
     }
 }
 
@@ -211,9 +128,6 @@ fn compute_labute_contribs_uncached<'a>(
         let j = bond.target as usize;
         let ai = mol.atoms[i].atomic_number;
         let aj = mol.atoms[j].atomic_number;
-        if ai <= 1 || aj <= 1 {
-            continue;
-        }
 
         let ri = rb0_radius(ai);
         let rj = rb0_radius(aj);
@@ -225,12 +139,10 @@ fn compute_labute_contribs_uncached<'a>(
         overlap[j] += ri * ri - (rj - dij) * (rj - dij) / dij;
     }
 
-    // Implicit H bonds: one correction per heavy atom (Labute approximation)
+    // Implicit H: one correction per atom (RDKit's Labute approximation,
+    // applied to every graph atom including explicit H atoms)
     for i in 0..n {
         let ai = mol.atoms[i].atomic_number;
-        if ai <= 1 {
-            continue;
-        }
         let ri = rb0_radius(ai);
         let bij = ri + r_h;
         let dij = (ri + r_h).min((ri - r_h).abs().max(bij));
@@ -242,12 +154,8 @@ fn compute_labute_contribs_uncached<'a>(
     // Convert overlap sums to surface area contributions
     let vsa = &mut ctx.vec_b;
     for i in 0..n {
-        let ai = mol.atoms[i].atomic_number;
-        if ai <= 1 {
-            continue;
-        }
-        let ri = rb0_radius(ai);
-        vsa[i] = 4.0 * PI * ri * ri - PI * ri * overlap[i];
+        let ri = rb0_radius(mol.atoms[i].atomic_number);
+        vsa[i] = PI * ri * (4.0 * ri - overlap[i]);
     }
     let h_contrib = 4.0 * PI * r_h * r_h - PI * r_h * h_overlap;
 
@@ -258,7 +166,7 @@ fn compute_labute_contribs_uncached<'a>(
 ///
 /// Function context: `crates/ferrum_core/src/desc/vsa.rs`.
 /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-fn compute_labute_contribs(
+pub(crate) fn compute_labute_contribs(
     mol: &Molecule,
     ctx: &mut crate::desc::context::CalculationContext,
 ) -> (Vec<f64>, f64) {
@@ -314,15 +222,12 @@ fn fill_binned_vsa(
     atom_property: &[f64],
     atom_vsa: &[f64],
     bins: &[f64],
-    out: &mut [f32],
+    out: &mut [f64],
 ) {
     out.fill(0.0);
     for i in 0..mol.atoms.len() {
-        if mol.atoms[i].atomic_number <= 1 {
-            continue;
-        }
         let bin = find_bin(atom_property[i], bins);
-        out[bin] += atom_vsa[i] as f32;
+        out[bin] += atom_vsa[i];
     }
 }
 
@@ -332,7 +237,7 @@ fn fill_binned_vsa(
 /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
 pub(crate) fn fill_slogp_vsa_into(
     mol: &mut Molecule,
-    out: &mut [f32],
+    out: &mut [f64],
     ctx: &mut crate::desc::context::CalculationContext,
 ) {
     assert_eq!(
@@ -374,7 +279,7 @@ impl Descriptor for SlogpVSA {
         mol: &mut Molecule,
         ctx: &mut crate::desc::context::CalculationContext,
     ) -> DescriptorValue {
-        let mut values = vec![0.0f32; 12];
+        let mut values = vec![0.0f64; 12];
         fill_slogp_vsa_into(mol, &mut values, ctx);
         DescriptorValue::FloatVec(values)
     }
@@ -408,7 +313,7 @@ const SMR_BINS: [f64; 10] = [
 /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
 pub(crate) fn fill_smr_vsa_into(
     mol: &mut Molecule,
-    out: &mut [f32],
+    out: &mut [f64],
     ctx: &mut crate::desc::context::CalculationContext,
 ) {
     assert_eq!(out.len(), SMR_BINS.len(), "SMR_VSA output length mismatch");
@@ -446,7 +351,7 @@ impl Descriptor for SmrVSA {
         mol: &mut Molecule,
         ctx: &mut crate::desc::context::CalculationContext,
     ) -> DescriptorValue {
-        let mut values = vec![0.0f32; 10];
+        let mut values = vec![0.0f64; 10];
         fill_smr_vsa_into(mol, &mut values, ctx);
         DescriptorValue::FloatVec(values)
     }
@@ -486,7 +391,7 @@ impl Descriptor for LabuteASA {
             let (vsa, h_contrib) = compute_labute_contribs_uncached(mol, ctx);
             (vsa.iter().sum::<f64>(), h_contrib)
         };
-        DescriptorValue::Float((total + h_contrib) as f32)
+        DescriptorValue::Float(total + h_contrib)
     }
 }
 
@@ -522,7 +427,7 @@ const PEOE_BINS: [f64; 14] = [
 /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
 pub(crate) fn fill_peoe_vsa_into(
     mol: &mut Molecule,
-    out: &mut [f32],
+    out: &mut [f64],
     ctx: &mut crate::desc::context::CalculationContext,
 ) {
     assert_eq!(
@@ -564,7 +469,7 @@ impl Descriptor for PeoeVsa {
         mol: &mut Molecule,
         ctx: &mut crate::desc::context::CalculationContext,
     ) -> DescriptorValue {
-        let mut values = vec![0.0f32; 14];
+        let mut values = vec![0.0f64; 14];
         fill_peoe_vsa_into(mol, &mut values, ctx);
         DescriptorValue::FloatVec(values)
     }
@@ -612,7 +517,7 @@ mod tests {
     ///
     /// Function context: `crates/ferrum_core/src/desc/vsa.rs`.
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-    fn calc_float_vec(d: &dyn Descriptor, smiles: &str) -> Vec<f32> {
+    fn calc_float_vec(d: &dyn Descriptor, smiles: &str) -> Vec<f64> {
         let mut mol = parse_smiles(smiles).expect("valid SMILES");
         match d.calculate(
             &mut mol,
@@ -627,7 +532,7 @@ mod tests {
     ///
     /// Function context: `crates/ferrum_core/src/desc/vsa.rs`.
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-    fn calc_float(d: &dyn Descriptor, smiles: &str) -> f32 {
+    fn calc_float(d: &dyn Descriptor, smiles: &str) -> f64 {
         let mut mol = parse_smiles(smiles).expect("valid SMILES");
         match d.calculate(
             &mut mol,
@@ -686,7 +591,7 @@ mod tests {
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_slogp_vsa_nonzero() {
         let v = calc_float_vec(&SlogpVSA, "c1ccccc1");
-        let total: f32 = v.iter().sum();
+        let total: f64 = v.iter().sum();
         assert!(total > 0.0, "total SlogP_VSA = {}", total);
     }
 
@@ -698,7 +603,7 @@ mod tests {
     fn test_slogp_vsa_bins_sum_approx_labute() {
         let slogp = calc_float_vec(&SlogpVSA, "CCO");
         let labute = calc_float(&LabuteASA, "CCO");
-        let bin_sum: f32 = slogp.iter().sum();
+        let bin_sum: f64 = slogp.iter().sum();
         // Bin sum = heavy atom contributions only; LabuteASA includes H contribution
         assert!(
             bin_sum > 0.0 && bin_sum < labute + 1.0,
@@ -715,7 +620,7 @@ mod tests {
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_slogp_vsa_larger_molecule() {
         let v = calc_float_vec(&SlogpVSA, "CC(=O)Oc1ccccc1C(=O)O");
-        let total: f32 = v.iter().sum();
+        let total: f64 = v.iter().sum();
         assert!(total > 50.0, "aspirin total VSA = {}", total);
     }
 
@@ -728,7 +633,7 @@ mod tests {
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_smr_vsa_nonzero() {
         let v = calc_float_vec(&SmrVSA, "c1ccccc1");
-        let total: f32 = v.iter().sum();
+        let total: f64 = v.iter().sum();
         assert!(total > 0.0, "total SMR_VSA = {}", total);
     }
 
@@ -740,7 +645,7 @@ mod tests {
     fn test_smr_vsa_bins_sum_approx_labute() {
         let smr = calc_float_vec(&SmrVSA, "CCO");
         let labute = calc_float(&LabuteASA, "CCO");
-        let bin_sum: f32 = smr.iter().sum();
+        let bin_sum: f64 = smr.iter().sum();
         // Bin sum = heavy atom contributions only; LabuteASA includes H contribution
         assert!(
             bin_sum > 0.0 && bin_sum < labute + 1.0,
@@ -806,7 +711,7 @@ mod tests {
         let v = calc_float_vec(&PeoeVsa, "c1ccccc1");
         let nonzero: Vec<_> = v.iter().filter(|&&x| x > 0.0).collect();
         assert!(!nonzero.is_empty(), "should have at least one nonzero bin");
-        let total: f32 = v.iter().sum();
+        let total: f64 = v.iter().sum();
         // Total should be positive and reasonable
         assert!(total > 0.0, "PEOE_VSA sum {} should be positive", total);
     }
@@ -832,8 +737,8 @@ mod tests {
         // C=O: O is more electronegative → negative charge, C → positive
         let v = calc_float_vec(&PeoeVsa, "C=O");
         // Bins 0-6 are negative charges, bins 7-13 are non-negative
-        let neg_sum: f32 = v[..7].iter().sum();
-        let pos_sum: f32 = v[7..].iter().sum();
+        let neg_sum: f64 = v[..7].iter().sum();
+        let pos_sum: f64 = v[7..].iter().sum();
         assert!(
             neg_sum > 0.0,
             "O should contribute to negative bins: {:?}",
@@ -854,7 +759,7 @@ mod tests {
     fn test_peoe_vsa_sum() {
         for smi in &["CCO", "CC(=O)O", "c1ccccc1", "CCCCCC"] {
             let peoe = calc_float_vec(&PeoeVsa, smi);
-            let bin_sum: f32 = peoe.iter().sum();
+            let bin_sum: f64 = peoe.iter().sum();
             // Bin sums only heavy atoms; should be positive and reasonable
             assert!(
                 bin_sum > 0.0,

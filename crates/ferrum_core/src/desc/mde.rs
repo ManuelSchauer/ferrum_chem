@@ -1,290 +1,197 @@
-//! Molecular Distance Edge (MDE) descriptors.
+//! Molecular Distance Edge descriptors (CDK `MDEDescriptor`).
 //!
-//! Distance edge vectors based on atom-pair topological distances,
-//! partitioned by bond type. Encodes molecular shape and heteroatom
-//! distribution.
+//! Atoms of one element are split by the number of non-hydrogen neighbours
+//! (degree 1-4 for carbon, 1-2 for oxygen, 1-3 for nitrogen). For two such
+//! classes i, j the descriptor is
 //!
-//! For each pair type (C-C, C-N, C-O, N-N, N-O, O-O, C-X, etc.):
-//!   MDE(type) = Σ 1/d²  for all pairs of that type at distance d.
+//! ```text
+//! MDE(i, j) = n / (prod d)^(1/n)
+//! ```
 //!
-//! Reference: Liu, S. et al. (1998) "Molecular Distance Edge (MDE)
-//!            Vector", JCICS 38, 536-540.
+//! over the n atom pairs of the two classes, i.e. the pair count divided by
+//! the geometric mean of their topological distances. Output order (19
+//! values): MDEC-11, 12, 13, 14, 22, 23, 24, 33, 34, 44, MDEO-11, 12, 22,
+//! MDEN-11, 12, 13, 22, 23, 33.
+//!
+//! The product is accumulated in `f64` in CDK's loop order (ordered pairs and
+//! a square root for equal classes), so CDK's overflow to infinity (value 0)
+//! on large classes is reproduced; disconnected pairs use CDK's distance
+//! 999 999 999.
+//!
+//! Reference: Liu, S. et al. (1998) "Molecular Distance Edge (MDE) Vector",
+//! JCICS 38, 536-540.
 
-//! ## File guide: Mde
-//!
-//! This file belongs to FerrumChem's **descriptor/fingerprint feature layer**.
-//!
-//! What to learn here:
-//! - Which chemistry/ML concern this file owns in the pipeline.
-//! - How Rust types and control-flow encode that concern.
-//! - Which public symbols are the best entry points for reading/debugging.
-//!
-//! Key symbols in this file:
-//! - `fn _compute_distance_matrix_unused`
-//! - `fn atom_class`
-//! - `fn pair_index`
-//! - `struct MDE`
-//! - `fn name`
-//!
-//! Suggested reading workflow:
-//! 1. Read top-level type definitions and public APIs.
-//! 2. Trace helper functions used in hot/critical paths.
-//! 3. Cross-reference tests/examples that exercise this file.
-
-//!
-//! ### Algorithmic assumptions for this file
-//! - `Mde` assumes molecule preprocessing (implicit hydrogens, aromaticity flags, and ring annotations) is current before calculation.
-//! - `Mde` remains deterministic for identical atom/bond indexing so batch and single-molecule runs agree bit-for-bit.
-//! - Typed `DescriptorValue` output is part of the contract; downstream ML code should not rely on ad-hoc coercions.
-//! - Specific scope anchor: `crates/ferrum_core/src/desc/mde.rs` defines mde behavior and should be updated together with its direct tests.
-//! ### Chemistry/ML references
-//! - Todeschini & Consonni. Handbook of Molecular Descriptors (general descriptor taxonomy).
-//! - RDKit descriptor/fingerprint APIs used as practical parity baselines for `Mde` workflows.
-//! - Repository unit and parity tests covering `Mde` behavior and edge molecules.
-//! - Code-local source of truth: symbols and tests declared in `crates/ferrum_core/src/desc/mde.rs`.
-
+use super::cdk_graph::cdk_distance;
 use super::typed::{Descriptor, DescriptorValue};
 use crate::mol::molecule::Molecule;
-use crate::types::AtomIdx;
-use std::collections::VecDeque;
 
-#[allow(dead_code)]
-/// Computes distance matrix unused.
-///
-/// Function context: `crates/ferrum_core/src/desc/mde.rs`.
-/// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-fn _compute_distance_matrix_unused(mol: &Molecule) -> Vec<u32> {
-    let n = mol.num_atoms();
-    let mut distances = vec![u32::MAX; n * n];
-    for start in 0..n {
-        distances[start * n + start] = 0;
-        let mut queue = VecDeque::new();
-        queue.push_back(start as AtomIdx);
-        while let Some(current) = queue.pop_front() {
-            let current_dist = distances[start * n + current as usize];
-            for &bond_idx in &mol.adjacency[current as usize] {
-                let bond = &mol.bonds[bond_idx as usize];
-                let nb = if bond.source == current {
-                    bond.target
-                } else {
-                    bond.source
-                };
-                let nd = &mut distances[start * n + nb as usize];
-                if *nd == u32::MAX {
-                    *nd = current_dist + 1;
-                    queue.push_back(nb);
-                }
+/// (element, class i, class j) for each output, in CDK order.
+const MDE_TERMS: [(u8, u8, u8); 19] = [
+    (6, 1, 1),
+    (6, 1, 2),
+    (6, 1, 3),
+    (6, 1, 4),
+    (6, 2, 2),
+    (6, 2, 3),
+    (6, 2, 4),
+    (6, 3, 3),
+    (6, 3, 4),
+    (6, 4, 4),
+    (8, 1, 1),
+    (8, 1, 2),
+    (8, 2, 2),
+    (7, 1, 1),
+    (7, 1, 2),
+    (7, 1, 3),
+    (7, 2, 2),
+    (7, 2, 3),
+    (7, 3, 3),
+];
+
+/// CDK `MDEDescriptor.evalCValue` for the atom lists `v1`, `v2`.
+fn eval_c_value(dist: &[u16], n_atoms: usize, v1: &[usize], v2: &[usize], same: bool) -> f64 {
+    let mut lambda = 1.0f64;
+    let mut n = 0.0f64;
+    for &a in v1 {
+        let row = &dist[a * n_atoms..(a + 1) * n_atoms];
+        for &b in v2 {
+            if a == b {
+                continue;
             }
+            lambda *= cdk_distance(row[b]) as f64;
+            n += 1.0;
         }
     }
-    distances
-}
-
-/// Classify an atom into a coarse type for MDE.
-/// 0=C, 1=N, 2=O, 3=S, 4=halogen, 5=other
-fn atom_class(atomic_number: u8) -> usize {
-    match atomic_number {
-        6 => 0,
-        7 => 1,
-        8 => 2,
-        16 => 3,
-        9 | 17 | 35 | 53 => 4,
-        _ => 5,
+    if same {
+        lambda = lambda.sqrt();
+        n /= 2.0;
+    }
+    if n == 0.0 {
+        0.0
+    } else {
+        let root = lambda.powf(1.0 / (2.0 * n));
+        n / (root * root)
     }
 }
 
-// Pair types: (0,0)=CC, (0,1)=CN, (0,2)=CO, (0,3)=CS, (0,4)=CX,
-//             (1,1)=NN, (1,2)=NO, (1,3)=NS, (1,4)=NX,
-//             (2,2)=OO, (2,3)=OS, (2,4)=OX,
-//             (3,3)=SS, (3,4)=SX, (4,4)=XX
-// Total: 15 pair types (upper triangle of 6×6, but we only count 5 classes: 0-4)
-const NUM_PAIR_TYPES: usize = 15;
-
-/// Implements index.
-///
-/// Function context: `crates/ferrum_core/src/desc/mde.rs`.
-/// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-fn pair_index(a: usize, b: usize) -> Option<usize> {
-    let (lo, hi) = if a <= b { (a, b) } else { (b, a) };
-    if lo > 4 || hi > 4 {
-        return None;
-    }
-    // Map (lo, hi) to index in upper triangle of 5×5
-    // Row lo, col hi: offset = sum(5-i for i in 0..lo) + (hi - lo)
-    let offset: usize = (0..lo).map(|i| 5 - i).sum();
-    Some(offset + (hi - lo))
-}
-
-/// MDE descriptors.
-///
-/// Returns FloatVec with 15 values (one per atom-pair type).
-/// Each value is the sum of 1/d² for all atom pairs of that type.
+/// MDE descriptors (CDK `MDEDescriptor`), 19 values.
 pub struct MDE;
 
 impl Descriptor for MDE {
-    /// Implements the behavior encoded by this function.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/mde.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn name(&self) -> &str {
         "MDE"
     }
 
-    /// Calculates the behavior encoded by this function.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/mde.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-    fn calculate(
-        &self,
-        mol: &mut Molecule,
-        ctx: &mut crate::desc::context::CalculationContext,
-    ) -> DescriptorValue {
-        let mut values = vec![0.0f32; NUM_PAIR_TYPES];
-
-        let n = mol.num_atoms();
-        if n < 2 {
-            return DescriptorValue::FloatVec(values);
+    fn calculate(&self, mol: &mut Molecule, ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
+        // CDK computes on `removeHydrogens(container)`
+        if let Some(mut suppressed) = crate::algo::sanitize::cdk_remove_hydrogens(mol) {
+            return self.calculate(&mut suppressed, ctx);
         }
-
-        let dist = crate::algo::paths::compute_unweighted_distance_matrix_cached(mol, ctx);
-        let classes: Vec<usize> = mol
-            .atoms
-            .iter()
-            .map(|a| atom_class(a.atomic_number))
-            .collect();
-
-        for i in 0..n {
-            for j in i + 1..n {
-                let d = dist[i * n + j];
-                if d > 0 && d < 255 {
-                    if let Some(pidx) = pair_index(classes[i], classes[j]) {
-                        values[pidx] += 1.0 / (d * d) as f32;
-                    }
-                }
+        let n = mol.num_atoms();
+        // classes[element][degree]: atom indices in ascending order
+        let mut classes: [[Vec<usize>; 5]; 3] = Default::default();
+        let mut any_pair = false;
+        for (a, atom) in mol.atoms.iter().enumerate() {
+            let e = match atom.atomic_number {
+                6 => 0,
+                8 => 1,
+                7 => 2,
+                _ => continue,
+            };
+            let degree = mol.adjacency[a].len();
+            if (1..=4).contains(&degree) {
+                classes[e][degree].push(a);
+                any_pair = true;
             }
         }
-
+        let mut values = vec![0.0f64; MDE_TERMS.len()];
+        if !any_pair || n < 2 {
+            return DescriptorValue::FloatVec(values);
+        }
+        let dist = crate::algo::paths::compute_unweighted_distance_matrix_cached(mol, ctx);
+        for (out, &(z, i, j)) in values.iter_mut().zip(MDE_TERMS.iter()) {
+            let e = match z {
+                6 => 0,
+                8 => 1,
+                _ => 2,
+            };
+            let (v1, v2) = (&classes[e][i as usize], &classes[e][j as usize]);
+            if v1.is_empty() || v2.is_empty() {
+                continue;
+            }
+            *out = eval_c_value(dist, n, v1, v2, i == j) as f64;
+        }
         DescriptorValue::FloatVec(values)
     }
 }
 
 const _: () = {
-    /// Asserts send sync to guard invariants.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/mde.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     const fn assert_send_sync<T: Send + Sync>() {}
     let _ = assert_send_sync::<MDE>;
 };
 
 #[cfg(test)]
 mod tests {
-    use super::super::typed::Descriptor;
     use super::*;
     use crate::io::smiles::parse_smiles;
 
-    /// Implements mde.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/mde.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-    fn calc_mde(smiles: &str) -> Vec<f32> {
+    fn calc_mde(smiles: &str) -> Vec<f64> {
         let mut mol = parse_smiles(smiles).expect("valid SMILES");
-        match MDE.calculate(
-            &mut mol,
-            &mut crate::desc::context::CalculationContext::new(),
-        ) {
-            DescriptorValue::FloatVec(v) => v,
-            other => panic!("expected FloatVec, got {:?}", other),
-        }
+        MDE.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()).as_float_vec().to_vec()
+    }
+
+    fn close(a: f64, b: f64) -> bool {
+        (a as f64 - b).abs() < 1e-5
     }
 
     #[test]
-    /// Runs regression test for mde len.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/mde.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_mde_len() {
-        let m = calc_mde("CC");
-        assert_eq!(m.len(), 15);
+        assert_eq!(calc_mde("CC").len(), 19);
+        assert_eq!(calc_mde("C").len(), 19);
     }
 
+    // Expected values from CDK 2.13 MDEDescriptor.
     #[test]
-    /// Runs regression test for mde ethane.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/mde.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-    fn test_mde_ethane() {
-        let m = calc_mde("CC");
-        let cc_idx = pair_index(0, 0).unwrap();
-        assert!((m[cc_idx] - 1.0).abs() < 0.01, "CC = {}", m[cc_idx]);
-    }
-
-    #[test]
-    /// Runs regression test for mde ethanol.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/mde.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-    fn test_mde_ethanol() {
-        let m = calc_mde("CCO");
-        let cc = pair_index(0, 0).unwrap();
-        let co = pair_index(0, 2).unwrap();
-        assert!(m[cc] > 0.0, "should have C-C pairs");
-        assert!(m[co] > 0.0, "should have C-O pairs");
-    }
-
-    #[test]
-    /// Runs regression test for mde no nitrogen in ethane.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/mde.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-    fn test_mde_no_nitrogen_in_ethane() {
-        let m = calc_mde("CC");
-        let cn = pair_index(0, 1).unwrap();
-        assert!(m[cn].abs() < 0.001, "no C-N pairs in ethane");
-    }
-
-    #[test]
-    /// Runs regression test for mde benzene.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/mde.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_mde_benzene() {
         let m = calc_mde("c1ccccc1");
-        let cc = pair_index(0, 0).unwrap();
-        assert!(m[cc] > 5.0, "many CC pairs in benzene: {}", m[cc]);
+        // 15 pairs of degree-2 carbons: distances 1 (x6), 2 (x6), 3 (x3)
+        assert!(close(m[4], 15.0 / (64.0f64 * 27.0).powf(1.0 / 15.0)), "MDEC-22 = {}", m[4]);
+        assert!(m.iter().enumerate().all(|(i, &v)| i == 4 || v == 0.0));
     }
 
     #[test]
-    /// Runs regression test for mde deterministic.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/mde.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
+    fn test_mde_ethanol() {
+        // C1 (degree 1) - C2 (degree 2) - O (degree 1)
+        let m = calc_mde("CCO");
+        assert!(close(m[1], 1.0), "MDEC-12 = {}", m[1]);
+        assert_eq!(m[10], 0.0); // a single degree-1 O: no O-O pair
+    }
+
+    #[test]
+    fn test_mde_isobutane() {
+        // three methyls at mutual distance 2 -> 3 / 2
+        let m = calc_mde("CC(C)C");
+        assert!(close(m[0], 1.5), "MDEC-11 = {}", m[0]);
+        assert!(close(m[2], 3.0), "MDEC-13 = {}", m[2]);
+    }
+
+    #[test]
+    fn test_mde_nitrogen() {
+        // NCCN: two degree-1 N at distance 3
+        let m = calc_mde("NCCN");
+        assert!(close(m[13], 1.0 / 3.0), "MDEN-11 = {}", m[13]);
+    }
+
+    #[test]
+    fn test_mde_disconnected_uses_cdk_sentinel() {
+        let m = calc_mde("CC.CC");
+        // methyl pairs: 2 at distance 1, 4 at 999999999
+        let expected = 6.0 / (999_999_999.0f64.powi(4)).powf(1.0 / 6.0);
+        assert!(close(m[0], expected), "MDEC-11 = {}", m[0]);
+    }
+
+    #[test]
     fn test_mde_deterministic() {
-        let a = calc_mde("CCCC");
-        let b = calc_mde("CCCC");
-        assert_eq!(a, b);
-    }
-
-    #[test]
-    /// Runs regression test for mde halogen.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/mde.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-    fn test_mde_halogen() {
-        let m = calc_mde("CCl");
-        let cx = pair_index(0, 4).unwrap();
-        assert!(m[cx] > 0.0, "should have C-X pair");
-    }
-
-    #[test]
-    /// Runs regression test for pair index.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/mde.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-    fn test_pair_index() {
-        assert_eq!(pair_index(0, 0), Some(0));
-        assert_eq!(pair_index(0, 1), Some(1));
-        assert_eq!(pair_index(0, 2), Some(2));
-        assert_eq!(pair_index(1, 1), Some(5));
+        assert_eq!(calc_mde("CCCC"), calc_mde("CCCC"));
     }
 }

@@ -101,13 +101,7 @@ pub enum DescriptorValue {
     Int(u32),
 
     /// Single floating point value (e.g., molecular weight, LogP)
-    Float(f32),
-
-    /// High-precision scalar floating point value.
-    ///
-    /// Used for descriptors that can span very large dynamic ranges (e.g. Ipc),
-    /// where f32 precision is insufficient for RDKit parity.
-    Float64(f64),
+    Float(f64),
 
     /// Multiple integer values (e.g., atom counts by element)
     IntVec(Vec<u32>),
@@ -117,7 +111,7 @@ pub enum DescriptorValue {
     IntU16Vec(Vec<u16>),
 
     /// Multiple floating point values (e.g., Chi indices, E-State)
-    FloatVec(Vec<f32>),
+    FloatVec(Vec<f64>),
 
     /// Binary fingerprint (bit-packed, 4x memory savings)
     ///
@@ -129,7 +123,7 @@ pub enum DescriptorValue {
 }
 
 impl DescriptorValue {
-    /// Convert to flat f32 vector for ML pipelines.
+    /// Append the values as f64 (bits as 0.0 / 1.0).
     ///
     /// This is the bridge to existing ML infrastructure (linfa, ndarray).
     /// Conversion is efficient:
@@ -153,13 +147,12 @@ impl DescriptorValue {
     /// value.to_floats(&mut vec);
     /// assert_eq!(vec, vec![1.0, 0.0, 1.0]);
     /// ```
-    pub fn to_floats(&self, output: &mut Vec<f32>) {
+    pub fn to_floats(&self, output: &mut Vec<f64>) {
         match self {
-            DescriptorValue::Int(v) => output.push(*v as f32),
+            DescriptorValue::Int(v) => output.push(*v as f64),
             DescriptorValue::Float(v) => output.push(*v),
-            DescriptorValue::Float64(v) => output.push(*v as f32),
-            DescriptorValue::IntVec(v) => output.extend(v.iter().map(|&x| x as f32)),
-            DescriptorValue::IntU16Vec(v) => output.extend(v.iter().map(|&x| x as f32)),
+            DescriptorValue::IntVec(v) => output.extend(v.iter().map(|&x| x as f64)),
+            DescriptorValue::IntU16Vec(v) => output.extend(v.iter().map(|&x| x as f64)),
             DescriptorValue::FloatVec(v) => output.extend_from_slice(v),
             DescriptorValue::Binary(bv) => {
                 for bit in bv.iter().by_vals() {
@@ -178,10 +171,6 @@ impl DescriptorValue {
                 1
             }
             DescriptorValue::Float(v) => {
-                slice[0] = *v as f64;
-                1
-            }
-            DescriptorValue::Float64(v) => {
                 slice[0] = *v;
                 1
             }
@@ -198,9 +187,7 @@ impl DescriptorValue {
                 v.len()
             }
             DescriptorValue::FloatVec(v) => {
-                for (i, &val) in v.iter().enumerate() {
-                    slice[i] = val as f64;
-                }
+                slice[..v.len()].copy_from_slice(v);
                 v.len()
             }
             DescriptorValue::Binary(bv) => {
@@ -225,7 +212,7 @@ impl DescriptorValue {
     /// ```
     pub fn len(&self) -> usize {
         match self {
-            DescriptorValue::Int(_) | DescriptorValue::Float(_) | DescriptorValue::Float64(_) => 1,
+            DescriptorValue::Int(_) | DescriptorValue::Float(_) => 1,
             DescriptorValue::IntVec(v) => v.len(),
             DescriptorValue::IntU16Vec(v) => v.len(),
             DescriptorValue::FloatVec(v) => v.len(),
@@ -265,20 +252,10 @@ impl DescriptorValue {
     }
 
     /// Extract as Float (panics if not Float).
-    pub fn as_float(&self) -> f32 {
+    pub fn as_float(&self) -> f64 {
         match self {
             DescriptorValue::Float(v) => *v,
-            DescriptorValue::Float64(v) => *v as f32,
             _ => panic!("Expected Float, got {:?}", self),
-        }
-    }
-
-    /// Extract as f64 scalar (panics if not scalar float).
-    pub fn as_f64(&self) -> f64 {
-        match self {
-            DescriptorValue::Float(v) => *v as f64,
-            DescriptorValue::Float64(v) => *v,
-            _ => panic!("Expected Float/Float64, got {:?}", self),
         }
     }
 
@@ -291,7 +268,7 @@ impl DescriptorValue {
     }
 
     /// Extract as FloatVec (panics if not FloatVec).
-    pub fn as_float_vec(&self) -> &[f32] {
+    pub fn as_float_vec(&self) -> &[f64] {
         match self {
             DescriptorValue::FloatVec(v) => v,
             _ => panic!("Expected FloatVec, got {:?}", self),
@@ -361,7 +338,7 @@ pub trait Descriptor: Send + Sync {
     }
 }
 
-/// ML vector builder — collects descriptors into flat f32 vector.
+/// ML vector builder — collects descriptors into a flat f64 vector.
 ///
 /// # Example
 ///
@@ -379,7 +356,7 @@ pub trait Descriptor: Send + Sync {
 /// let ml_vector = build_ml_vector(&mut mol, &descriptors);
 /// // Use with linfa, ndarray, etc.
 /// ```
-pub fn build_ml_vector(mol: &mut Molecule, descriptors: &[Box<dyn Descriptor>]) -> Vec<f32> {
+pub fn build_ml_vector(mol: &mut Molecule, descriptors: &[Box<dyn Descriptor>]) -> Vec<f64> {
     let mut ctx = crate::desc::context::CalculationContext::new();
     let mut output = Vec::new();
     for desc in descriptors {
@@ -407,12 +384,12 @@ pub fn build_ml_vector(mol: &mut Molecule, descriptors: &[Box<dyn Descriptor>]) 
 ///     // ... descriptors
 /// ];
 ///
-/// let vectors: Vec<Vec<f32>> = build_ml_vectors_parallel(&mut molecules, &descriptors);
+/// let vectors: Vec<Vec<f64>> = build_ml_vectors_parallel(&mut molecules, &descriptors);
 /// ```
 pub fn build_ml_vectors_parallel(
     molecules: &mut [Molecule],
     descriptors: &[Box<dyn Descriptor>],
-) -> Vec<Vec<f32>> {
+) -> Vec<Vec<f64>> {
     use rayon::prelude::*;
     molecules
         .par_iter_mut()
@@ -680,7 +657,7 @@ mod tests {
         fn calculate(
             &self,
             mol: &mut Molecule,
-            ctx: &mut crate::desc::context::CalculationContext,
+            _ctx: &mut crate::desc::context::CalculationContext,
         ) -> DescriptorValue {
             DescriptorValue::Int(mol.num_atoms() as u32)
         }

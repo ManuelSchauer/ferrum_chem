@@ -1,4 +1,4 @@
-use crate::algo::canon::{rank_atoms, reorder_molecule};
+use crate::algo::canon::rank_atoms;
 use crate::mol::elements::ELEMENT_SYMBOLS;
 use crate::mol::molecule::Molecule;
 use crate::types::BondType;

@@ -141,7 +141,6 @@ const _: () = {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::algo::aromaticity::perceive_aromaticity;
     use crate::io::smiles::parse_smiles;
 
     #[test]
@@ -151,7 +150,6 @@ mod tests {
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_aromatic_ring_count_benzene() {
         let mut mol = parse_smiles("c1ccccc1").unwrap();
-        perceive_aromaticity(&mut mol);
         assert_eq!(
             AromaticRingCount
                 .calculate(
@@ -170,7 +168,6 @@ mod tests {
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_aromatic_ring_count_naphthalene() {
         let mut mol = parse_smiles("c1ccc2ccccc2c1").unwrap();
-        perceive_aromaticity(&mut mol);
         assert_eq!(
             AromaticRingCount
                 .calculate(
@@ -189,7 +186,6 @@ mod tests {
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_aromatic_ring_count_cyclohexane() {
         let mut mol = parse_smiles("C1CCCCC1").unwrap();
-        perceive_aromaticity(&mut mol);
         assert_eq!(
             AromaticRingCount
                 .calculate(
@@ -208,7 +204,6 @@ mod tests {
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_aromatic_ring_count_pyridine() {
         let mut mol = parse_smiles("c1ccncc1").unwrap();
-        perceive_aromaticity(&mut mol);
         assert_eq!(
             AromaticRingCount
                 .calculate(
@@ -227,7 +222,6 @@ mod tests {
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_aromatic_ring_count_pyrrole() {
         let mut mol = parse_smiles("c1cc[nH]c1").unwrap();
-        perceive_aromaticity(&mut mol);
         assert_eq!(
             AromaticRingCount
                 .calculate(
@@ -246,7 +240,6 @@ mod tests {
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_aromatic_ring_count_no_rings() {
         let mut mol = parse_smiles("CCCC").unwrap();
-        perceive_aromaticity(&mut mol);
         assert_eq!(
             AromaticRingCount
                 .calculate(
@@ -264,8 +257,7 @@ mod tests {
     /// Function context: `crates/ferrum_core/src/desc/aromatic_ring_count.rs`.
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_compute_aromatic_ring_count() {
-        let mut mol = parse_smiles("c1ccccc1").unwrap();
-        perceive_aromaticity(&mut mol);
+        let mol = parse_smiles("c1ccccc1").unwrap();
         assert_eq!(compute_aromatic_ring_count(&mol), 1);
     }
 
@@ -275,8 +267,7 @@ mod tests {
     /// Function context: `crates/ferrum_core/src/desc/aromatic_ring_count.rs`.
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_aromatic_ring_count_requires_aromatic_ring_bonds() {
-        let mut mol = parse_smiles("CC1=CC2=C(C=C1C)N(C[C@H](O)[C@H](O)[C@H](O)COP(=O)(O)OP(=O)(O)OC[C@H]1O[C@@H](N3C=NC4=C(N)N=CN=C43)[C@H](O)[C@@H]1O)C1=NC(=O)N=C(O)C1=N2").unwrap();
-        perceive_aromaticity(&mut mol);
+        let mol = parse_smiles("CC1=CC2=C(C=C1C)N(C[C@H](O)[C@H](O)[C@H](O)COP(=O)(O)OP(=O)(O)OC[C@H]1O[C@@H](N3C=NC4=C(N)N=CN=C43)[C@H](O)[C@@H]1O)C1=NC(=O)N=C(O)C1=N2").unwrap();
         assert_eq!(compute_aromatic_ring_count(&mol), 3);
     }
 }

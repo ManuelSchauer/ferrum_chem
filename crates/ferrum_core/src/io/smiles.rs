@@ -44,7 +44,10 @@
 use crate::error::{FerrumError, Result};
 use crate::mol::elements::{is_aromatic_symbol, symbol_to_atomic_number};
 use crate::mol::molecule::Molecule;
-use crate::mol::{atom::Atom, bond::Bond};
+use crate::mol::{
+    atom::{Atom, ChiralTag},
+    bond::Bond,
+};
 use crate::types::{AtomIdx, BondType};
 use smallvec::SmallVec;
 
@@ -82,43 +85,69 @@ use smallvec::SmallVec;
 /// assert!(mol.atoms[0].is_aromatic()); // aromatic carbon
 /// ```
 pub fn parse_smiles(smiles: &str) -> Result<Molecule> {
+    // Like RDKit, everything after the first whitespace is a name, not SMILES.
+    let smiles = smiles.trim_start().split_whitespace().next().unwrap_or("");
     let mut parser = SmilesParser::new(smiles);
     let mut mol = parser.parse()?;
-    let saw_ring_closure = parser.saw_ring_closure;
-    let has_transition_metal = parser.has_transition_metal;
-
-    // First pass: establish baseline valence/implicit-H before aromaticity.
-    crate::algo::valency::assign_implicit_hydrogens(&mut mol)?;
-
-    // ✅ Automatically perceive aromaticity when pi candidates are present.
-    // Molecules without aromatic atoms or multiple bonds cannot become aromatic,
-    // but they still need ring flags for SMARTS ring primitives.
-    let needs_aromaticity = mol.atoms.iter().any(|atom| atom.is_aromatic())
-        || mol
-            .bonds
-            .iter()
-            .any(|bond| matches!(bond.bond_type, BondType::Double | BondType::Aromatic));
-    if needs_aromaticity {
-        crate::algo::aromaticity::perceive_aromaticity(&mut mol);
-        // Second pass: re-evaluate implicit H after aromatic flags/bond types settle.
-        // This aligns Kekule inputs with aromatic-context valence assignment.
-        crate::algo::valency::assign_implicit_hydrogens(&mut mol)?;
-    } else if saw_ring_closure {
-        crate::algo::rings::find_sssr(&mut mol);
-    }
-
-    // ✅ Detect dative (coordinate) bonds for transition metal complexes.
-    // Use parser-time metal detection to avoid an O(N_atoms) scan here.
-    if has_transition_metal {
-        crate::algo::valency::assign_dative_bonds(&mut mol);
-    }
-
-    // ❌ Do NOT kekulize by default
-    // RDKit keeps aromatic bonds as type AROMATIC (bond value = 1.5)
-    // Kekulization is only needed for specific algorithms that require it
-    // TPSA, LogP, and most descriptors work correctly with AROMATIC bond type
-
+    adjust_chirality_for_removed_hs(&mut mol);
+    // One chemistry model: RDKit's sanitization (H removal, cleanup, valence
+    // check, rings, kekulization, aromaticity, conjugation, hybridization).
+    crate::algo::sanitize::sanitize(&mut mol)?;
     Ok(mol)
+}
+
+/// RDKit's `removeHs` moves the bond to a removed H to the end of a chiral
+/// atom's bond list before deleting it (adjusting the tag). Mirror that for
+/// the hydrogens `sanitize::remove_hs` is about to remove.
+fn adjust_chirality_for_removed_hs(mol: &mut Molecule) {
+    let other = |mol: &Molecule, bi: usize, a: usize| {
+        let b = &mol.bonds[bi];
+        if b.source as usize == a { b.target as usize } else { b.source as usize }
+    };
+    for c in 0..mol.atoms.len() {
+        if mol.atoms[c].chiral_tag() == crate::mol::atom::ChiralTag::Unspecified {
+            continue;
+        }
+        let mut bonds: SmallVec<[usize; 6]> = mol.adjacency[c].iter().map(|&b| b as usize).collect();
+        let mut h_nbrs: SmallVec<[usize; 4]> = SmallVec::new();
+        for &bi in &bonds {
+            let h = other(mol, bi, c);
+            let atom = &mol.atoms[h];
+            // same criteria as `sanitize::remove_hs`
+            if atom.atomic_number != 1 || atom.isotope != 0 || mol.adjacency[h].len() != 1 {
+                continue;
+            }
+            let z = mol.atoms[c].atomic_number;
+            if z == 0 || z == 1 {
+                continue;
+            }
+            if mol.bonds[bi].has_direction()
+                && mol.adjacency[c].len() == 2
+                && mol.adjacency[c]
+                    .iter()
+                    .any(|&b| mol.bonds[b as usize].bond_type == BondType::Double)
+            {
+                continue;
+            }
+            h_nbrs.push(h);
+        }
+        if h_nbrs.is_empty() {
+            continue;
+        }
+        h_nbrs.sort_unstable();
+        let mut odd = false;
+        for h in h_nbrs {
+            let k = bonds.iter().position(|&bi| other(mol, bi, c) == h).unwrap();
+            if (bonds.len() - 1 - k) % 2 == 1 {
+                odd = !odd;
+            }
+            bonds.remove(k);
+        }
+        if odd {
+            let tag = mol.atoms[c].chiral_tag().inverted();
+            mol.atoms[c].set_chiral_tag(tag);
+        }
+    }
 }
 
 /// SMILES parser state machine.
@@ -128,16 +157,28 @@ struct SmilesParser<'a> {
     mol: Molecule,
     // Stack for branch points
     branch_stack: SmallVec<[usize; 16]>,
-    // Ring closures: ring_number -> (atom_idx, explicit bond if provided at opening side)
-    rings: [Option<(AtomIdx, Option<BondType>)>; 100],
+    // Ring closures: ring_number -> (atom_idx, explicit bond if provided at
+    // opening side, closure id, `/` (true) or `\\` (false) at the opening side)
+    rings: Vec<Option<(AtomIdx, Option<BondType>, usize, Option<bool>)>>,
+    // Ring-closure bonds, added after all chain bonds in closing order (RDKit
+    // bond ordering): (begin = closing atom, end = opening atom, type).
+    closure_bonds: Vec<(AtomIdx, AtomIdx, BondType)>,
+    // `<-` dative bond: next bond is directed from the following atom to the previous one.
+    pending_dative_reverse: bool,
+    // `/` (true) or `\\` (false) seen for the pending bond.
+    pending_direction: Option<bool>,
+    // Direction of each ring-closure bond relative to its closing atom.
+    closure_directions: Vec<Option<bool>>,
+    // Stereo bookkeeping (RDKit `GetBondOrdering` inputs): SMILES chirality
+    // per atom as written, whether the atom starts a SMILES fragment, the
+    // ring-closure digits on each atom in order, and each closure's atom pair.
+    chiral_atoms: Vec<(AtomIdx, ChiralTag, bool, bool)>,
+    atom_closures: Vec<(AtomIdx, usize)>,
+    closure_pairs: Vec<(AtomIdx, AtomIdx)>,
     // Last atom added
     last_atom: Option<u16>,
     // Pending bond type (for next atom connection)
     pending_bond: Option<BondType>,
-    // Tracks whether ring-closure syntax was encountered.
-    saw_ring_closure: bool,
-    // O(1) trigger for dative-bond scan after parsing.
-    has_transition_metal: bool,
 }
 
 impl<'a> SmilesParser<'a> {
@@ -146,17 +187,22 @@ impl<'a> SmilesParser<'a> {
     /// Function context: `crates/ferrum_core/src/io/smiles.rs`.
     /// I/O-layer note: parsing/ingestion should surface explicit errors instead of silently repairing malformed input.
     fn new(input: &'a str) -> Self {
-        let capacity = input.len(); // Exact preallocation based on string length to guarantee NO reallocations
+        let capacity = input.len() / 2 + 1;
         Self {
             input,
             cursor: input.as_bytes(),
             mol: Molecule::with_capacity(capacity),
             branch_stack: SmallVec::new(),
-            rings: [None; 100],
+            rings: Vec::new(),
+            closure_bonds: Vec::new(),
+            pending_dative_reverse: false,
+            pending_direction: None,
+            closure_directions: Vec::new(),
+            chiral_atoms: Vec::new(),
+            atom_closures: Vec::new(),
+            closure_pairs: Vec::new(),
             last_atom: None,
             pending_bond: None,
-            saw_ring_closure: false,
-            has_transition_metal: false,
         }
     }
 
@@ -174,7 +220,7 @@ impl<'a> SmilesParser<'a> {
             self.parse_token()?;
         }
 
-        // Validate all ring closures are matched
+        // Validate all ring closures and branches are matched
         for (i, ring) in self.rings.iter().enumerate() {
             if ring.is_some() {
                 return Err(FerrumError::ParseError(format!(
@@ -183,6 +229,22 @@ impl<'a> SmilesParser<'a> {
                 )));
             }
         }
+        if !self.branch_stack.is_empty() {
+            return Err(FerrumError::ParseError("Unclosed branch".to_string()));
+        }
+        if self.pending_bond.is_some() {
+            return Err(FerrumError::ParseError("Dangling bond at end of SMILES".to_string()));
+        }
+
+        // Ring-closure bonds come after all chain bonds (RDKit bond order).
+        let directions = std::mem::take(&mut self.closure_directions);
+        for (k, (begin, end, bond_type)) in std::mem::take(&mut self.closure_bonds).into_iter().enumerate() {
+            self.push_bond(begin, end, bond_type)?;
+            if let Some(up) = directions.get(k).copied().flatten() {
+                crate::algo::stereo::set_bond_direction(self.mol.bonds.last_mut().unwrap(), up);
+            }
+        }
+        self.assign_chiral_tags();
 
         Ok(std::mem::take(&mut self.mol))
     }
@@ -218,8 +280,22 @@ impl<'a> SmilesParser<'a> {
             }
             // Bond symbols
             b'-' => {
-                self.pending_bond = Some(BondType::Single);
+                if self.cursor.get(1) == Some(&b'>') {
+                    self.pending_bond = Some(BondType::Dative);
+                    self.cursor = &self.cursor[2..];
+                } else {
+                    self.pending_bond = Some(BondType::Single);
+                    self.cursor = &self.cursor[1..];
+                }
+            }
+            b'<' if self.cursor.get(1) == Some(&b'-') => {
+                self.pending_bond = Some(BondType::Dative);
+                self.pending_dative_reverse = true;
+                self.cursor = &self.cursor[2..];
+            }
+            b'*' => {
                 self.cursor = &self.cursor[1..];
+                self.add_atom(0, false, 0, 0, 0, false)?;
             }
             b'=' => {
                 self.pending_bond = Some(BondType::Double);
@@ -234,7 +310,9 @@ impl<'a> SmilesParser<'a> {
                 self.cursor = &self.cursor[1..];
             }
             b'/' | b'\\' => {
-                // Stereochemistry - ignore for now
+                // Directional single bond (RDKit ENDUPRIGHT / ENDDOWNRIGHT).
+                self.pending_bond = Some(BondType::Single);
+                self.pending_direction = Some(c == b'/');
                 self.cursor = &self.cursor[1..];
             }
             // Ring closures (digits)
@@ -272,6 +350,9 @@ impl<'a> SmilesParser<'a> {
             }
             b'.' => {
                 // Disconnected fragment - reset connection
+                if self.pending_bond.is_some() {
+                    return Err(FerrumError::ParseError("Bond before '.'".to_string()));
+                }
                 self.last_atom = None;
                 self.pending_bond = None;
                 self.cursor = &self.cursor[1..];
@@ -364,7 +445,10 @@ impl<'a> SmilesParser<'a> {
         // Parse isotope (optional digits)
         while !self.cursor.is_empty() && self.cursor[0].is_ascii_digit() {
             let digit = (self.cursor[0] - b'0') as u16;
-            isotope = isotope * 10 + digit;
+            isotope = isotope
+                .checked_mul(10)
+                .and_then(|v| v.checked_add(digit))
+                .ok_or_else(|| FerrumError::ParseError("Isotope out of range".to_string()))?;
             self.cursor = &self.cursor[1..];
         }
 
@@ -372,7 +456,9 @@ impl<'a> SmilesParser<'a> {
         let start = self.pos();
         let c = self.current_byte()?;
 
-        if is_aromatic_symbol(c as char) {
+        if c == b'*' {
+            self.cursor = &self.cursor[1..];
+        } else if is_aromatic_symbol(c as char) {
             is_aromatic = true;
             self.cursor = &self.cursor[1..];
             // Aromatic two-letter bracket atoms supported by RDKit/OpenSMILES.
@@ -396,15 +482,38 @@ impl<'a> SmilesParser<'a> {
         }
 
         let symbol = &self.input[start..self.pos()];
-        let atomic_num = symbol_to_atomic_number(symbol).ok_or_else(|| {
-            FerrumError::ParseError(format!("Unknown element symbol: {}", symbol))
-        })?;
+        let atomic_num = if symbol == "*" {
+            0
+        } else {
+            symbol_to_atomic_number(symbol).ok_or_else(|| {
+                FerrumError::ParseError(format!("Unknown element symbol: {}", symbol))
+            })?
+        };
 
-        // Parse @/@@ for chirality (skip for now)
+        // Parse @/@@ chirality. `@TH1`/`@TH2` are `@`/`@@`; the other
+        // classes (@AL, @SP, @TB, @OH) are kept as `ChiralTag::Other`.
+        let mut chiral = ChiralTag::Unspecified;
         if !self.cursor.is_empty() && self.current_byte()? == b'@' {
             self.cursor = &self.cursor[1..];
+            chiral = ChiralTag::TetrahedralCCW;
             if !self.cursor.is_empty() && self.current_byte()? == b'@' {
                 self.cursor = &self.cursor[1..];
+                chiral = ChiralTag::TetrahedralCW;
+            }
+            if self.cursor.len() >= 2
+                && matches!(&self.cursor[..2], b"TH" | b"AL" | b"SP" | b"TB" | b"OH")
+            {
+                let class = &self.cursor[..2];
+                self.cursor = &self.cursor[2..];
+                let start = self.pos();
+                while !self.cursor.is_empty() && self.cursor[0].is_ascii_digit() {
+                    self.cursor = &self.cursor[1..];
+                }
+                chiral = match (class, &self.input[start..self.pos()]) {
+                    (b"TH", "1") => ChiralTag::TetrahedralCCW,
+                    (b"TH", "2") => ChiralTag::TetrahedralCW,
+                    _ => ChiralTag::Other,
+                };
             }
         }
 
@@ -412,7 +521,7 @@ impl<'a> SmilesParser<'a> {
         if !self.cursor.is_empty() && self.current_byte()? == b'H' {
             self.cursor = &self.cursor[1..];
             if !self.cursor.is_empty() && self.cursor[0].is_ascii_digit() {
-                h_count = (self.cursor[0] - b'0') as u8;
+                h_count = self.cursor[0] - b'0';
                 self.cursor = &self.cursor[1..];
             } else {
                 h_count = 1;
@@ -426,18 +535,39 @@ impl<'a> SmilesParser<'a> {
                 let sign = if c == b'+' { 1 } else { -1 };
                 self.cursor = &self.cursor[1..];
 
-                // Count repeated +/- or parse digit
+                // Count repeated +/- or parse digits
+                let mut magnitude: i32 = 0;
                 if !self.cursor.is_empty() && self.cursor[0].is_ascii_digit() {
-                    charge = ((self.cursor[0] - b'0') as i8) * sign;
-                    self.cursor = &self.cursor[1..];
+                    while !self.cursor.is_empty() && self.cursor[0].is_ascii_digit() {
+                        magnitude = magnitude * 10 + (self.cursor[0] - b'0') as i32;
+                        self.cursor = &self.cursor[1..];
+                        if magnitude > 99 {
+                            break;
+                        }
+                    }
                 } else {
-                    charge = sign;
+                    magnitude = 1;
                     // Count additional +/- symbols
                     while !self.cursor.is_empty() && self.current_byte()? == c {
-                        charge += sign;
+                        magnitude += 1;
                         self.cursor = &self.cursor[1..];
+                        if magnitude > 99 {
+                            break;
+                        }
                     }
                 }
+                if magnitude > 15 {
+                    return Err(FerrumError::ParseError("Formal charge out of range".to_string()));
+                }
+                charge = (magnitude as i8) * sign;
+            }
+        }
+
+        // Atom map number (ignored)
+        if self.cursor.first() == Some(&b':') {
+            self.cursor = &self.cursor[1..];
+            while !self.cursor.is_empty() && self.cursor[0].is_ascii_digit() {
+                self.cursor = &self.cursor[1..];
             }
         }
 
@@ -449,7 +579,12 @@ impl<'a> SmilesParser<'a> {
         }
         self.cursor = &self.cursor[1..];
 
+        let is_start = self.last_atom.is_none();
         self.add_atom(atomic_num, is_aromatic, isotope, charge, h_count, true)?;
+        if chiral != ChiralTag::Unspecified {
+            let idx = (self.mol.atoms.len() - 1) as AtomIdx;
+            self.chiral_atoms.push((idx, chiral, is_start, false));
+        }
         Ok(())
     }
 
@@ -466,12 +601,12 @@ impl<'a> SmilesParser<'a> {
         h_count: u8,
         is_bracket: bool,
     ) -> Result<()> {
+        if self.mol.atoms.len() >= u16::MAX as usize {
+            return Err(FerrumError::ParseError("Too many atoms (max 65535)".to_string()));
+        }
         let new_idx = self.mol.atoms.len() as u16;
         self.mol.atoms.push(Atom::new(atomic_num));
         self.mol.adjacency.push(smallvec::SmallVec::new());
-        if crate::mol::elements::is_transition_metal(atomic_num) {
-            self.has_transition_metal = true;
-        }
 
         {
             let atom = &mut self.mol.atoms[new_idx as usize];
@@ -503,13 +638,19 @@ impl<'a> SmilesParser<'a> {
                     BondType::Single
                 }
             });
-            let bond_idx = self.mol.bonds.len() as u16;
-            self.mol.bonds.push(Bond::new(prev_idx, new_idx, bond_type));
-            self.mol.adjacency[prev_idx as usize].push(bond_idx);
-            self.mol.adjacency[new_idx as usize].push(bond_idx);
+            if std::mem::take(&mut self.pending_dative_reverse) {
+                self.push_bond(new_idx, prev_idx, bond_type)?;
+            } else {
+                self.push_bond(prev_idx, new_idx, bond_type)?;
+            }
+            if let Some(up) = self.pending_direction.take() {
+                crate::algo::stereo::set_bond_direction(self.mol.bonds.last_mut().unwrap(), up);
+            }
+        } else if self.pending_bond.is_some() {
+            return Err(FerrumError::ParseError("Bond without preceding atom".to_string()));
         }
 
-        self.last_atom = Some(new_idx as u16);
+        self.last_atom = Some(new_idx);
         self.pending_bond = None;
 
         Ok(())
@@ -539,7 +680,22 @@ impl<'a> SmilesParser<'a> {
     /// I/O-layer note: parsing/ingestion should surface explicit errors instead of silently repairing malformed input.
     fn parse_multi_digit_ring(&mut self) -> Result<usize> {
         // SMILES spec: multi-digit ring closures use % prefix
-        // After %, read exactly 2 digits for ring numbers 10-99
+        // After %, read exactly 2 digits (%nn) or a parenthesised number (%(nnn)).
+        if self.cursor.first() == Some(&b'(') {
+            self.cursor = &self.cursor[1..];
+            let start = self.pos();
+            while !self.cursor.is_empty() && self.cursor[0].is_ascii_digit() {
+                self.cursor = &self.cursor[1..];
+            }
+            let num_str = &self.input[start..self.pos()];
+            if self.cursor.first() != Some(&b')') || num_str.is_empty() {
+                return Err(FerrumError::ParseError("Invalid %(...) ring closure".to_string()));
+            }
+            self.cursor = &self.cursor[1..];
+            return num_str
+                .parse::<usize>()
+                .map_err(|_| FerrumError::ParseError(format!("Invalid ring number: {}", num_str)));
+        }
         let start = self.pos();
 
         // Read up to 2 digits
@@ -566,21 +722,25 @@ impl<'a> SmilesParser<'a> {
     /// Function context: `crates/ferrum_core/src/io/smiles.rs`.
     /// I/O-layer note: parsing/ingestion should surface explicit errors instead of silently repairing malformed input.
     fn handle_ring_closure(&mut self, ring_num: usize) -> Result<()> {
-        if ring_num >= 100 {
+        if ring_num > 99_999 {
             return Err(FerrumError::ParseError(format!(
-                "Ring number {} exceeds maximum (99)",
+                "Ring number {} exceeds maximum",
                 ring_num
             )));
         }
-        self.saw_ring_closure = true;
+        if ring_num >= self.rings.len() {
+            self.rings.resize(ring_num + 1, None);
+        }
 
         let current_atom = self
             .last_atom
             .ok_or_else(|| FerrumError::ParseError("Ring closure without atom".to_string()))?;
+        self.check_ring_closure_branch_status(current_atom);
 
-        if let Some((ring_atom, opening_bond)) = self.rings[ring_num] {
+        if let Some((ring_atom, opening_bond, closure_id, opening_dir)) = self.rings[ring_num] {
             // Close the ring
             let closing_bond = self.pending_bond.take();
+            self.pending_dative_reverse = false;
 
             if let (Some(ob), Some(cb)) = (opening_bond, closing_bond) {
                 if ob != cb {
@@ -589,6 +749,18 @@ impl<'a> SmilesParser<'a> {
                         ring_num
                     )));
                 }
+            }
+            if ring_atom == current_atom {
+                return Err(FerrumError::ParseError(format!(
+                    "Ring closure {} bonds atom {} to itself",
+                    ring_num, current_atom
+                )));
+            }
+            if self.has_bond(ring_atom, current_atom) {
+                return Err(FerrumError::ParseError(format!(
+                    "Duplicate bond between atoms {} and {}",
+                    ring_atom, current_atom
+                )));
             }
 
             let bond_type = closing_bond.or(opening_bond).unwrap_or_else(|| {
@@ -601,18 +773,122 @@ impl<'a> SmilesParser<'a> {
                     BondType::Single
                 }
             });
-            let bond_idx = self.mol.bonds.len() as u16;
-            self.mol
-                .bonds
-                .push(Bond::new(ring_atom, current_atom, bond_type));
-            self.mol.adjacency[ring_atom as usize].push(bond_idx);
-            self.mol.adjacency[current_atom as usize].push(bond_idx);
+            self.closure_bonds.push((current_atom, ring_atom, bond_type));
+            // RDKit keeps the closing-side direction, else the opening-side
+            // one flipped (the bond begins at the closing atom here).
+            let closing_dir = self.pending_direction.take();
+            self.closure_directions.push(closing_dir.or(opening_dir.map(|up| !up)));
+            self.closure_pairs[closure_id] = (ring_atom, current_atom);
+            self.atom_closures.push((current_atom, closure_id));
             self.rings[ring_num] = None;
         } else {
             // Open the ring
-            self.rings[ring_num] = Some((current_atom, self.pending_bond.take()));
+            let closure_id = self.closure_pairs.len();
+            self.closure_pairs.push((current_atom, current_atom));
+            self.atom_closures.push((current_atom, closure_id));
+            let opening_dir = self.pending_direction.take();
+            self.rings[ring_num] = Some((current_atom, self.pending_bond.take(), closure_id, opening_dir));
+            self.pending_dative_reverse = false;
         }
 
+        Ok(())
+    }
+
+    /// Stores the chirality of each `@`/`@@` atom relative to the atom's
+    /// bond order in `adjacency` (implicit H last), reproducing RDKit's
+    /// `AdjustAtomChiralityFlags`: the SMILES neighbour order is the
+    /// preceding atom, then ring-closure partners in digit order, then the
+    /// following atoms; plus RDKit's `chiralAtomNeedsTagInversion` quirk.
+    fn assign_chiral_tags(&mut self) {
+        for k in 0..self.chiral_atoms.len() {
+            let (atom, tag, is_start, flip) = self.chiral_atoms[k];
+            let a = atom as usize;
+            if !tag.is_tetrahedral() {
+                self.mol.atoms[a].set_chiral_tag(tag);
+                continue;
+            }
+            let built: SmallVec<[usize; 6]> = self.mol.adjacency[a]
+                .iter()
+                .map(|&bi| {
+                    let b = &self.mol.bonds[bi as usize];
+                    if b.source == atom { b.target as usize } else { b.source as usize }
+                })
+                .collect();
+            let closures: SmallVec<[usize; 4]> = self
+                .atom_closures
+                .iter()
+                .filter(|&&(x, _)| x == atom)
+                .map(|&(_, id)| {
+                    let (p, q) = self.closure_pairs[id];
+                    if p == atom { q as usize } else { p as usize }
+                })
+                .collect();
+            let mut chain: SmallVec<[usize; 6]> =
+                built.iter().copied().filter(|n| !closures.contains(n)).collect();
+            chain.sort_unstable();
+            let mut smiles_order: SmallVec<[usize; 6]> = SmallVec::new();
+            let self_pos = if chain.first().is_some_and(|&n| n < a) { 1 } else { 0 };
+            smiles_order.extend(chain[..self_pos].iter().copied());
+            smiles_order.extend(closures.iter().copied());
+            smiles_order.extend(chain[self_pos..].iter().copied());
+            let mut odd = crate::algo::stereo::permutation_is_odd(&smiles_order, &built) ^ flip;
+            let degree = built.len();
+            let bracket_h = self.mol.atoms[a].num_explicit_h;
+            let unsaturated = self.mol.adjacency[a].iter().any(|&bi| {
+                matches!(
+                    self.mol.bonds[bi as usize].bond_type,
+                    BondType::Double | BondType::Triple | BondType::Aromatic
+                )
+            });
+            if degree == 3
+                && ((is_start && bracket_h == 1)
+                    || (bracket_h != 1 && closures.len() == 1 && !unsaturated))
+            {
+                odd = !odd;
+            }
+            self.mol.atoms[a].set_chiral_tag(if odd { tag.inverted() } else { tag });
+        }
+    }
+
+    /// RDKit `CheckRingClosureBranchStatus`: a ring-closure digit written
+    /// after a branch (e.g. `[C@@](F)1(C)CCO1`) inverts the atom's chirality.
+    fn check_ring_closure_branch_status(&mut self, atom: AtomIdx) {
+        let idx = atom as usize;
+        if idx + 1 == self.mol.atoms.len() {
+            return;
+        }
+        let degree = self.mol.adjacency[idx].len();
+        if degree == 1 || (degree == 2 && idx != 0) || (degree == 3 && idx == 0) {
+            if let Some(entry) = self.chiral_atoms.iter_mut().rev().find(|e| e.0 == atom) {
+                if entry.1.is_tetrahedral() {
+                    entry.3 = !entry.3;
+                }
+            }
+        }
+    }
+
+    fn has_bond(&self, a: AtomIdx, b: AtomIdx) -> bool {
+        self.mol.adjacency[a as usize].iter().any(|&bi| {
+            let bond = &self.mol.bonds[bi as usize];
+            (bond.source == b && bond.target == a) || (bond.source == a && bond.target == b)
+        }) || self
+            .closure_bonds
+            .iter()
+            .any(|&(x, y, _)| (x == a && y == b) || (x == b && y == a))
+    }
+
+    fn push_bond(&mut self, begin: AtomIdx, end: AtomIdx, bond_type: BondType) -> Result<()> {
+        if self.mol.bonds.len() >= u16::MAX as usize {
+            return Err(FerrumError::ParseError("Too many bonds (max 65535)".to_string()));
+        }
+        let bond_idx = self.mol.bonds.len() as u16;
+        let mut bond = Bond::new(begin, end, bond_type);
+        if bond_type == BondType::Aromatic {
+            bond.set_aromatic(true);
+        }
+        self.mol.bonds.push(bond);
+        self.mol.adjacency[begin as usize].push(bond_idx);
+        self.mol.adjacency[end as usize].push(bond_idx);
         Ok(())
     }
 
@@ -722,7 +998,9 @@ mod tests {
         let mol = parse_smiles("[se]1cccc1").unwrap();
         assert_eq!(mol.atoms[0].atomic_number, 34);
 
-        let mol = parse_smiles("[as]1cccc1").unwrap();
+        // RDKit rejects [as]1cccc1 (cannot be kekulized without an H on As)
+        assert!(parse_smiles("[as]1cccc1").is_err());
+        let mol = parse_smiles("[asH]1cccc1").unwrap();
         assert_eq!(mol.atoms[0].atomic_number, 33);
 
         let mol = parse_smiles("[te]1cccc1").unwrap();
@@ -773,7 +1051,7 @@ mod tests {
         assert!(pyridine.atoms[n_idx].is_aromatic());
         assert_eq!(pyridine.atoms[n_idx].num_implicit_h, 0);
 
-        // Kekulized pyrrole: aromatic N should remain pyrrolic (implicit H = 1).
+        // Kekulized pyrrole: aromatic N keeps its H (RDKit stores it as explicit H).
         let pyrrole = parse_smiles("C1=CC=CN1").unwrap();
         let n_idx = pyrrole
             .atoms
@@ -781,7 +1059,7 @@ mod tests {
             .position(|atom| atom.atomic_number == 7)
             .expect("contains nitrogen");
         assert!(pyrrole.atoms[n_idx].is_aromatic());
-        assert_eq!(pyrrole.atoms[n_idx].num_implicit_h, 1);
+        assert_eq!(pyrrole.atoms[n_idx].total_h(), 1);
     }
 }
 

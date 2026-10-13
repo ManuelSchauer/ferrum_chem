@@ -1,115 +1,357 @@
-<div align="center">
-  <h1>🧪 FerrumChem ⚡</h1>
-  <p><strong>A Blazingly Fast, Pure-Rust Cheminformatics and AutoQSAR Engine</strong></p>
+# FerrumChem
 
-  [![Build Status](https://img.shields.io/badge/build-passing-brightgreen)]()
-  [![Validation](https://img.shields.io/badge/validation-RDKit_Verified-brightgreen)]()
-  [![Throughput](https://img.shields.io/badge/Throughput->300k_mol/s-blue)]()
-  [![Memory](https://img.shields.io/badge/Memory-Zero_Copy_ML-purple)]()
-  [![Rayon](https://img.shields.io/badge/Parallel-Rayon_Native-orange)]()
-</div>
+**A molecular descriptor engine in Rust that reproduces RDKit, CDK, Mordred and
+Biosynfoni exactly, and computes them 10–900× faster.**
+
+FerrumChem calculates 531 scalar descriptors and 6 fingerprints (9,239 bits)
+per molecule: the complete RDKit descriptor catalogue, the CDK and Mordred
+descriptors that are commonly used in QSAR, the Biosynfoni natural-product
+fingerprint and a few extras. It is available as a Rust crate
+(`ferrum_core`), a command-line tool with an interactive terminal UI
+(`ferrum_cli`) and Python bindings (`ferrum_py`).
+
+There are no options for aromaticity models, hydrogen handling or charge
+schemes: the chemistry is preconfigured to match the reference toolkits, so
+the same molecule always gives the same numbers as RDKit/CDK/Mordred would.
 
 ---
 
-FerrumChem is a next-generation molecular descriptor calculation engine designed specifically for high-performance Machine Learning pipelines. Built entirely in Rust, it aims to deliver maximum multi-core throughput and memory efficiency without sacrificing chemical accuracy.
+## Why FerrumChem
 
-## ✨ Key Features
+- **Exact, not approximate.** 512 of the 531 scalar columns and all 6
+  fingerprints are compared molecule by molecule against the original
+  implementation of RDKit 2026.03.2, CDK 2.13, Mordred 1.2.0 and Biosynfoni
+  (`|a − b| ≤ 1e-9 + 1e-9·|b|`; fingerprints and atom perception bit-exact).
+  The tests fail when any column gets worse.
+- **Fast.** On one core: SMILES parsing 4× faster than RDKit, the complete
+  RDKit descriptor catalogue 25–28× faster, the five RDKit fingerprints
+  7–10× faster, all tested CDK descriptors ~900× faster than CDK. On all cores
+  the CLI processes about 14,000 molecules per second with the full bundle.
+- **Constant memory.** Input is streamed in chunks; 100,000 molecules need
+  about 400 MB peak, the same order as 10,000.
+- **One chemistry model.** A port of RDKit's `SanitizeMol` (valence model,
+  Kekulé assignment, aromaticity, conjugation, hybridization, ring
+  perception) is used everywhere. Where CDK descriptors depend on CDK's own
+  perception (atom types, cdkLegacy/Daylight aromaticity, explicit
+  hydrogens), that view is rebuilt locally inside those descriptors only.
+- **ML-ready output.** All scalars are `f64` end to end; fingerprints are
+  bit-packed (`u64` words, NumPy `packbits(bitorder="little")` layout); invalid
+  input gives NaN rows plus a validity mask, so rows always line up with the
+  input.
+- **Thread-safe by construction.** Descriptors are stateless `Send + Sync`
+  types; parallelism is built in (Rayon) and every core is used without
+  locks.
 
-- **🚀 Unprecedented Speeds**: Capable of parsing >300,000 SMILES per second via Rayon parallelization, vastly outperforming traditional Python/C++ bindings.
-- **⚡ 80+ Descriptors & Fingerprints**: Deep coverage including MACCS Keys, PubChem881, ECFP/FCFP, Biosynfoni, and 72+ physicochemical descriptors.
-- **🔬 RDKit Parity Assured**: Backed by a deterministic data-driven validation suite achieving 99.8% scalar parity against RDKit on dense 100,000-molecule datasets.
-- **🧠 Native AutoQSAR Pipeline**: Built-in, zero-copy machine learning primitives (Random Forest, K-NN, Elastic Net, PLS) operating directly on `ndarray` memory buffers. No intermediate Python allocations required.
-- **🛡️ Thread-Safe by Design**: Every single `Molecule` and `BatchDescriptor` is fully `Send + Sync`, unlocking fearless concurrency.
+## At a glance
 
-## 🚀 Quick Start
+| | |
+|---|---|
+| scalar descriptors | 531 (88 descriptor families) |
+| fingerprints | MACCS (166), PubChem (881), ECFP4, FCFP4, AtomPair, TopologicalTorsion (2,048 each) |
+| validated against a reference | 512 scalar columns + all 6 fingerprints + per-atom perception |
+| references | RDKit 2026.03.2 (2D + 3D), CDK 2.13, Mordred 1.2.0, Biosynfoni `full_1103` |
+| input | SMILES (`.smi`), CSV with a SMILES column, SDF (V2000/V3000, incl. 3D conformers) |
+| output | CSV (exact round-trip `f64`, fingerprints as hex / on-bits / 0-1 columns), NumPy arrays, Rust `DescriptorTable` |
+| throughput (Apple M4 Pro, 14 cores) | ~14,000 molecules/s, full bundle, end to end |
 
-### Installation
+---
 
-Add FerrumChem to your `Cargo.toml`:
-```toml
-[dependencies]
-ferrum_core = { path = "crates/ferrum_core" }
-```
+## Quick tutorial
 
-### Fluent Molecule Building & Parallel SMILES Parsing
+### Build
 
-FerrumChem exposes a highly ergonomic, builder-pattern API for molecular manipulation alongside native `rayon` support for batch parsing.
-
-```rust
-use ferrum_core::io::smiles::parse_smiles_batch;
-
-fn main() {
-    let smiles_list = vec![
-        "CC(=O)OC1=CC=CC=C1C(=O)O", // Aspirin
-        "CN1C=NC2=C1C(=O)N(C(=O)N2C)C", // Caffeine
-        "c1ccccc1" // Benzene
-    ];
-    
-    // Automatically uses all available CPU cores to parse molecules
-    let molecules = parse_smiles_batch(&smiles_list);
-    println!("Successfully parsed {} molecules", molecules.len());
-}
-```
-
-### High-Throughput Batch Descriptors
-
-Run complex cheminformatics descriptors (like LogP, QED, or ECFP Fingerprints) across millions of molecules in seconds.
-
-```rust
-use ferrum_core::desc::batch::{BatchDescriptor, calculate_batch_flat_static};
-use ferrum_core::io::smiles::parse_smiles_batch;
-
-fn main() {
-    let smiles = vec!["CC(=O)O", "c1ccccc1"];
-    let mut mols = parse_smiles_batch(&smiles);
-    
-    // Select the "Fast ML" descriptor preset
-    let descriptors = BatchDescriptor::fast_ml_preset();
-    
-    // Compute directly into a flattened f32 vector for instant ML consumption
-    let feature_matrix = calculate_batch_flat_static(&mut mols, descriptors);
-    
-    println!("Matrix dimensions: {} rows, {} columns", feature_matrix.rows(), feature_matrix.cols());
-}
-```
-
-## 📊 Performance Benchmarks
-
-When benchmarked natively on Apple Silicon (M-Series):
-
-| Operation | FerrumChem Speed | RDKit Speed | Improvement |
-|-----------|------------------|-------------|-------------|
-| SMILES Batch Parsing | **294,000 mol/s** | ~11,800 mol/s | **25x Faster** |
-| 57-Bundle Descriptors | **2,488 mol/s** | ~612 mol/s | **4x Faster** |
-| Memory Footprint (10k) | **10.11 MB** | 128.38 MB | **12x Lighter** |
-
-FerrumChem achieves this by maintaining a strict Zero-Copy philosophy. Structural queries (like `IsoTarget` for Subgraph Isomorphism) are compiled exactly once and applied simultaneously across worker threads without allocations.
-
-## 🧬 Scientific Accuracy & Validation
-
-FerrumChem implements a strict data-driven approach to scientific accuracy.
-
-All descriptors are validated against **exact RDKit reference floating-point arrays** and established chemical literature. We utilize a comprehensive testing suite located in `crates/ferrum_core/tests/parity_ground_truth.rs` that automatically asserts mathematical parity across edge-case molecules (macrocycles, charged species, and dense aromatic networks).
-
-**Current Validated Parity on 100k Dataset:**
-- Scalar Descriptors (MW, LogP, TPSA): **99.3% Parity**
-- VSA Surface Bins: **99.5% Parity**
-- Ring System Math: **99.2% Parity**
-
-## 🏗️ Interactive TUI & AutoQSAR
-
-FerrumChem ships with a fully non-blocking, 60FPS Terminal User Interface (`ferrum_cli`) meant for rapid laboratory prototyping. 
-It features:
-- File-picker modals for importing CSV and SDF datasets.
-- 1-Click AutoQSAR to automatically iterate through K-NN, Random Forest, and Elastic Net regressors.
-- Live-updating PCA visualizations and regression diagnostic plots.
-
-To launch the interface:
 ```bash
-cargo run -p ferrum_cli --release --bin tui
+cargo build --release -p ferrum_cli
 ```
 
-## 🤝 Contributing
-FerrumChem is actively under development! If you're interested in implementing new 3D Descriptors, speeding up the Subgraph Isomorphism algorithms, or writing Python bindings via `PyO3`, we'd love your contributions.
+### Command line
 
-Built with Rust 🦀 for maximum performance and reliability.
+```bash
+# all descriptors for a SMILES, CSV or SDF file
+target/release/ferrum_cli calc -i molecules.smi -o descriptors.csv
+
+# fingerprints as on-bit lists instead of hex, smaller chunks for less memory
+target/release/ferrum_cli calc -i molecules.sdf -o descriptors.csv --fingerprints onbits --chunk-size 1024
+
+# interactive terminal UI: load a dataset, pick descriptors, preview, export
+target/release/ferrum_cli tui
+```
+
+`--fingerprints` takes `hex` (default; one column per fingerprint), `onbits`,
+`bits` (one 0/1 column per bit) or `none`. Every input record gives one output
+row; records that cannot be parsed have empty cells.
+
+### Python
+
+```bash
+cd crates/ferrum_py && maturin develop --release
+```
+
+```python
+import numpy as np
+import ferrum_py
+
+smiles = ["CC(=O)Oc1ccccc1C(=O)O", "CN1C=NC2=C1C(=O)N(C(=O)N2C)C", "not a smiles"]
+
+names, X, fps, valid = ferrum_py.compute_descriptors(smiles)
+# names: 531 column names; X: float64 (3, 531), NaN rows where valid is False
+# fps:   {"MACCS": uint8 (3, 21), "PubChem": (3, 111), "ECFP4": (3, 256), ...}
+
+bits = ferrum_py.fingerprint_bits()            # {"MACCS": 166, "ECFP4": 2048, ...}
+ecfp4 = np.unpackbits(fps["ECFP4"], axis=1, bitorder="little", count=bits["ECFP4"])
+
+names, X, _, valid = ferrum_py.compute_descriptors(smiles, fingerprints=False)  # scalars only
+bio_names, bio = ferrum_py.compute_biosynfoni(smiles)                            # 39 counts
+```
+
+The calculation runs in parallel and releases the GIL.
+
+### Rust
+
+```rust
+use ferrum_core::desc::table::{calculate_table, TableLayout};
+use ferrum_core::io::smiles::parse_smiles;
+
+let layout = TableLayout::all(); // or TableLayout::new(&[BatchDescriptor::MolecularWeight, ...])
+let mut molecules = vec![parse_smiles("c1ccccc1O").ok(), parse_smiles("CCN").ok()];
+let table = calculate_table(&mut molecules, &layout); // parallel
+
+let logp = table.scalar_row(0)[table.scalar_names.iter().position(|n| n == "MolLogP").unwrap()];
+let ecfp4_bits: Vec<usize> = table.fingerprint("ECFP4").unwrap().on_bits(0).collect();
+```
+
+For large files, `ferrum_core::io::stream::MoleculeReader` reads SMILES, CSV
+and SDF in chunks, and `desc::table::{write_csv_header, write_csv_rows}`
+write the CSV format used by the CLI.
+
+---
+
+## Descriptor catalogue
+
+531 scalar columns in 88 families, plus 6 fingerprints. "Reference" is the
+implementation each column is tested against; column names follow that
+reference.
+
+### RDKit (321 scalar columns + 5 fingerprints)
+
+| family | columns |
+|---|---|
+| Molecular weight | `MolWt`, `HeavyAtomMolWt`, `ExactMolWt` |
+| Crippen | `MolLogP`, `MolMR` |
+| Polar surface / H-bonding | `TPSA`, `NumHDonors`, `NumHAcceptors`, `NHOHCount`, `NOCount`, `LipinskiViolations` (MolWt > 500, MolLogP > 5, HBD > 5, HBA > 10) |
+| Counts | `HeavyAtomCount`, `NumHeteroatoms`, `NumRotatableBonds`, `NumValenceElectrons`, `NumRadicalElectrons`, `FormalCharge`, `NumAmideBonds`, `FractionCSP3`, `AromaticProportion`, element counts `nC`, `nN`, `nO`, `nS`, `nP`, `nF`, `nCl`, `nBr`, `nI`, `nH`, … (12), atom and bond counts (`nAtom`, `nAromAtom`, `nBonds`, `nBondsS/D/T/A`, …) |
+| Rings | `RingCount`, `NumAromaticRings`, `NumSaturatedRings`, `NumAliphaticRings`, `NumAromatic/Aliphatic/Saturated Carbo-/Heterocycles`, `NumHeterocycles`, `NumSpiroAtoms`, `NumBridgeheadAtoms` |
+| Topology | `BalabanJ`, `BertzCT`, `Ipc`, `AvgIpc`, `Phi`, `HallKierAlpha`, `Kappa1–3`, `Chi0`, `Chi1`, `Chi0v–Chi4v`, `Chi0n–Chi4n` |
+| E-state | `SumEState`, `MinEStateIndex`, `MaxEStateIndex`, `MaxAbsEStateIndex`, `MinAbsEStateIndex`, 79 E-state atom-type sums `SEstate_*` (RDKit `EState.Fingerprinter`) |
+| Surface area / VSA | `LabuteASA`, `SlogP_VSA1–12`, `SMR_VSA1–10`, `PEOE_VSA1–14`, `EState_VSA1–11`, `VSA_EState1–10` |
+| Partial charges (Gasteiger) | `MaxPartialCharge`, `MinPartialCharge`, `MaxAbsPartialCharge`, `MinAbsPartialCharge` |
+| Drug-likeness | `qed` |
+| Fragments | all 85 `fr_*` counts of `rdkit.Chem.Fragments` |
+| BCUT2D | `BCUT2D_MWHI/LOW`, `BCUT2D_CHGHI/LO`, `BCUT2D_LOGPHI/LOW`, `BCUT2D_MRHI/LOW` |
+| Morgan density | `FpDensityMorgan1–3` |
+| Stereo | `NumAtomStereoCenters`, `NumUnspecifiedAtomStereoCenters`, `SPS` |
+| 3D (needs a conformer, e.g. from SDF; NaN for SMILES) | `PMI1`, `PMI2`, `PMI3`, `Asphericity` |
+| Fingerprints | MACCS keys (166 bits), ECFP4 and FCFP4 (Morgan radius 2, 2,048 bits), AtomPair (2,048), TopologicalTorsion (2,048) |
+
+This covers every entry of `rdkit.Chem.Descriptors._descList` (217 of 217).
+
+### CDK (123 scalar columns + PubChem fingerprint)
+
+| family | columns |
+|---|---|
+| Chi indices | `SP-0..7`, `VP-0..7`, `SC-3..6`, `VC-3..6`, `SPC-4..6`, `VPC-4..6`, `SCH-3..7`, `VCH-3..7` (40) |
+| Autocorrelation | `ATSm1–5` (mass), `ATSp1–5` (polarizability), `ATSc1–5` (charge) |
+| BCUT | `BCUTw-1l/h`, `BCUTc-1l/h`, `BCUTp-1l/h` |
+| Molecular distance edge | `MDEC-11` … `MDEN-33` (19) |
+| Weighted path | `WTPT-1..5` |
+| Carbon types / hybridization | `C1SP1` … `C4SP3` (9), `HybRatio` |
+| Topology | `WienerPath`, `WienerPolarity`, `Zagreb1`, `PetitjeanNumber`, `ECCEN`, `VAdjMat`, `fragC`, `Kier1–3` |
+| Rings and chains | `nSmallRings`, `nAromRings`, `nRingBlocks`, `nAromBlocks`, `nRings3–9`, `nAtomLC`, `nAtomLAC`, `nAtomP` |
+| Polarizability | `apol`, `bpol` |
+| Acid/base groups | `nAcidicGroups`, `nBasicGroups` |
+| Fingerprint | PubChem (881 bits, CDK `PubchemFingerprinter`) |
+
+### Mordred (25 columns)
+
+`Radius`, `Diameter`, `Zagreb2`, `ATS0pe–ATS8pe` (Pauling electronegativity),
+`ATS0v–ATS8v` (van der Waals volume), `BCUTpe-1l/h`, `BCUTv-1l/h`.
+
+### Biosynfoni (39 columns)
+
+The `full_1103` substructure counts of the Biosynfoni natural-product
+fingerprint (`Biosynfoni_*`: coenzymes, amino acids, sugars, biosynthetic
+building blocks, halogens, ring sizes), with the default overlap settings.
+
+### FerrumChem only (19 columns, unit-tested, no external reference)
+
+`ElementEntropy`, `LargestPiSystemSize`, `nPiSystems` and 16 functional-group
+counts `fg_Hydroxyl`, `fg_Aldehyde`, `fg_Ketone`, `fg_CarboxylicAcid`,
+`fg_Ester`, `fg_Amide`, `fg_PrimaryAmine`, `fg_SecondaryAmine`,
+`fg_TertiaryAmine`, `fg_Nitro`, `fg_Sulfonamide`, `fg_Sulfone`, `fg_Thiol`,
+`fg_Ether`, `fg_Nitrile`, `fg_Halide`.
+
+---
+
+## Parity with the reference toolkits
+
+Each reference has a CSV generated by the original software from the same
+1,277 test molecules (drugs, natural products, metals, isotopes, radicals,
+charged and unusual valence states), and an integration test that recomputes
+everything with FerrumChem:
+
+| test | reference | molecules | columns that match on every molecule |
+|---|---|---|---|
+| `rdkit_parity` | RDKit 2026.03.2 | 1,277 | 325 of 327 (321 scalars, 5 fingerprints, atom perception) |
+| `rdkit_3d_parity` | RDKit 2026.03.2, ETKDG conformers | 296 | 4 of 5 (PMI1–3, Asphericity; perception see below) |
+| `cdk_parity` | CDK 2.13 | 1,277 | 124 of 124 |
+| `mordred_parity` | Mordred 1.2.0 | 1,277 | 25 of 25 |
+| `biosynfoni_parity` | Biosynfoni (original Python package) | 1,277 | 39 of 39 |
+
+Known deviations, tracked per column in `tests/data/*_baseline.tsv` (a column
+may never get worse):
+
+- **`Ipc`, `AvgIpc` (31 of 1,277 molecules):** RDKit evaluates the characteristic
+  polynomial with a float64 recurrence that is numerically unstable for large,
+  flexible molecules; its result depends on BLAS rounding (e.g. 2.2e24 for a
+  lipid whose exact value is 3.7e21). FerrumChem uses the same recurrence and
+  matches wherever RDKit's value is stable.
+- **3D perception of `N[Pt](N)(Cl)Cl`:** RDKit's mol-block reader marks Pt as
+  chiral from the 3D coordinates and then reports SP3 instead of unspecified
+  hybridization. The 3D descriptors themselves match.
+
+Beyond the test set:
+
+- **Atom perception:** 715,790 of 715,822 COCONUT natural products identical to
+  RDKit (aromaticity, H counts, hybridization, radicals, rings).
+- **Stereo descriptors:** identical on all of COCONUT except 3 SPS values.
+- **Biosynfoni:** identical on 20,000 COCONUT molecules.
+- **RDKit, 5,000 mixed molecules:** identical except Ipc/AvgIpc (as above).
+
+All descriptors that the CDK computes on its own perception (atom typing,
+Kekulé structure from its SMILES parser, cdkLegacy or Daylight aromaticity,
+explicit hydrogens, neutral nitro groups) reconstruct that view locally, so
+the shared RDKit perception is never changed for them.
+
+---
+
+## Performance
+
+Apple M4 Pro, 14 cores; all numbers for identical results (see
+[docs/PERFORMANCE.md](docs/PERFORMANCE.md) for methodology, datasets and
+more tables).
+
+| single thread, µs per molecule | RDKit | FerrumChem | speed-up |
+|---|---|---|---|
+| parse SMILES + sanitize | 52–79 | 13–18 | 4× |
+| full RDKit catalogue (217 descriptors) | 3,874–6,605 | 152–240 | 25–28× |
+| 5 fingerprints | 658–1,119 | 89–114 | 7–10× |
+| FerrumChem full bundle (531 scalars + 6 fingerprints) | – | 399–627 | – |
+
+| | reference | FerrumChem |
+|---|---|---|
+| all CDK descriptors, 1,273 molecules, 1 thread | CDK 147.5 s | 0.165 s |
+| all cores, catalogue + fingerprints, 5,000 molecules | RDKit (multiprocessing) 744 mol/s | 7,629 mol/s with the full bundle |
+| CLI, 100,000 molecules, all cores | – | 7.0 s, 14,203 mol/s, 406 MB peak RSS |
+| CLI, 10,000 molecules, 1 thread | – | 6.8 s, 148 MB peak RSS |
+
+Peak memory depends on the largest molecules and the number of threads, not
+on the input size. The most expensive families are now PubChem (69 µs/mol),
+MACCS (67) and the CDK Chi indices (53); the CDK weighted-path descriptor,
+whose cost grows exponentially with fused rings in CDK, is computed exactly
+with a memoised search (a 30-ring ladder polyether: 40 s → < 10 ms).
+
+Reproduce with `python scripts/benchmark.py MOLECULES.smi` and
+`cargo run --release -p ferrum_core --example descriptor_timing -- MOLECULES.smi`.
+
+---
+
+## Output format
+
+**Scalars** are `f64`. Counts are exact; values that cannot be computed (e.g.
+3D descriptors without a conformer, or where the reference reports an error)
+are NaN. In CSV, values are written in their shortest exact round-trip form,
+integers without a fraction, and rows of unparseable input are empty.
+
+**Fingerprints** are bit-packed per row: bit `i` is bit `i % 64` of `u64` word
+`i / 64`; as bytes, bit `i % 8` of byte `i / 8`. This is NumPy's
+`packbits(bitorder="little")` layout, so
+`np.unpackbits(a, axis=1, bitorder="little", count=n_bits)` restores the bit
+matrix. In CSV, `hex` writes these bytes as one hex string per fingerprint.
+
+**`DescriptorTable`** (Rust) holds `scalar_names`, the row-major `scalars`, one
+`FingerprintBlock` per fingerprint (`row`, `get`, `on_bits`, `count_ones`,
+`to_bytes`) and the `valid` mask.
+
+---
+
+## Thread safety and architecture
+
+- **Descriptors are stateless.** Every descriptor is a type without mutable
+  state (at most immutable settings such as a fingerprint's radius and bit
+  count) or a value of the `BatchDescriptor` enum, and implements
+  `Descriptor: Send + Sync`, checked at compile time. Precompiled SMARTS
+  patterns and data tables live in `OnceLock` statics: built once,
+  thread-safely, then read-only. The library uses no locks and no
+  `static mut`; the only shared mutable value is an atomic id counter for
+  compiled SMARTS patterns, and two small `thread_local!` scratch caches
+  (eigenvalue buffers, SMARTS search orders) are private to each thread.
+- **Per-molecule caches** (ring information, Gasteiger and Crippen
+  contributions, distance matrices) are stored in the molecule, which a
+  calculation borrows exclusively (`&mut Molecule`).
+- **Per-thread scratch space** (`CalculationContext`) holds reusable buffers
+  and the results shared between descriptors of the same molecule
+  (characteristic polynomial, path tables, stereo perception, CDK atom-type
+  view, …); `calculate_table` creates one per worker thread and resets it for
+  every molecule.
+- **Parallelism** comes from Rayon: one `TableLayout` (immutable) is shared by
+  all threads, molecules are distributed across the pool, and the CLI keeps
+  several chunks in flight so a single slow molecule does not stall the other
+  cores.
+
+Repository layout:
+
+```
+crates/ferrum_core/   library
+  src/io/             SMILES, SMARTS, SDF (V2000/V3000), CSV, chunked readers
+  src/mol/            molecule graph, element and isotope data (generated from RDKit)
+  src/algo/           sanitize (RDKit port), SSSR, stereo/CIP, SMARTS matcher,
+                      distance matrices, paths, eigenvalues
+  src/desc/           descriptor families, batch registry, table output
+  tests/              parity tests and reference data
+  examples/           descriptor_timing (per-family benchmark)
+crates/ferrum_cli/    `calc` command and terminal UI
+crates/ferrum_py/     Python bindings (PyO3 + NumPy)
+scripts/              reference generators, data generators, benchmarks
+docs/PERFORMANCE.md   benchmark methodology and results
+```
+
+---
+
+## Development
+
+```bash
+# all tests, including every parity test
+cargo test -p ferrum_core --release
+
+# details of deviating columns / tighten a baseline after a fix
+FERRUM_PARITY_VERBOSE=1 cargo test -p ferrum_core --release --test rdkit_parity -- --nocapture
+FERRUM_UPDATE_PARITY_BASELINE=1 cargo test -p ferrum_core --release --test cdk_parity
+```
+
+Regenerating the references (only needed after upgrading a reference toolkit):
+
+| reference | command |
+|---|---|
+| RDKit (2D + 3D) | `python scripts/generate_parity_reference.py` (`--check` verifies, `--embed-3d` re-embeds the 3D set) |
+| CDK | `bash scripts/cdk_reference/run.sh` (`CDK_JAR` points to a CDK bundle jar; also prints CDK timings) |
+| Mordred | `MORDRED_SRC=~/mordred python scripts/generate_mordred_reference.py` |
+| Biosynfoni | `BIOSYNFONI_SRC=~/biosynfoni/src python scripts/generate_biosynfoni_reference.py` |
+| data tables | `scripts/gen_element_data.py`, `gen_fragment_data.py`, `gen_mordred_data.py` |
+
+CI (`.github/workflows/ci.yml`) runs the tests in release mode, verifies the
+committed RDKit reference against `rdkit==2026.3.2`, and smoke-tests the Python
+bindings.
+
+## License
+
+No license has been chosen yet.

@@ -40,7 +40,6 @@
 //! - Code-local source of truth: symbols and tests declared in `crates/ferrum_core/src/desc/context.rs`.
 
 use crate::mol::molecule::Molecule;
-use rustc_hash::FxHashMap;
 use smallvec::SmallVec;
 
 #[derive(Default)]
@@ -51,9 +50,9 @@ use smallvec::SmallVec;
 pub struct CalculationContext {
     pub active_molecule_key: Option<u64>,
 
-    pub dist_u8: Vec<u8>,
-    pub has_dist_u8: bool,
-    pub dist_u8_global_cache: FxHashMap<u64, Vec<u8>>,
+    /// Topological distance matrix (row-major, `DIST_INF` = disconnected).
+    pub dist: Vec<u16>,
+    pub has_dist: bool,
     pub dist_bo: Vec<f64>,
     pub has_dist_bo: bool,
 
@@ -87,7 +86,27 @@ pub struct CalculationContext {
     pub morgan_dead_atoms: Vec<bool>,
     pub morgan_neighbor_invariants: Vec<(i32, u32)>,
     pub morgan_features: Vec<u64>,
-    pub morgan_features_global_cache: FxHashMap<(u64, u32, u8), Vec<u64>>,
+
+    /// CDK atom-type view with `Aromaticity.cdkLegacy()` perceived, keyed by
+    /// `molecule_cache_key` (shared by Autocorrelation, BCUT, APol, BPol).
+    pub(crate) cdk_legacy_view: Option<(u64, crate::desc::cdk_perception::CdkView)>,
+    // --- topological caches (keyed by `molecule_cache_key`) ---
+    /// `|characteristic polynomial|` coefficients shared by Ipc and AvgIpc.
+    pub char_poly_abs: Vec<f64>,
+    pub char_poly_key: Option<u64>,
+    /// Bond-order weighted distances in sixths (BalabanJ, BertzCT).
+    pub bo_dist6: Vec<u32>,
+    pub bo_dist6_key: Option<u64>,
+    /// Legacy stereo perception (StereoCenters, SPS).
+    pub legacy_stereo: Option<crate::algo::stereo::LegacyStereo>,
+    pub legacy_stereo_key: Option<u64>,
+    /// Atom paths of 1..=4 bonds (`algo::paths::cached_paths_of_length`;
+    /// ChiIndices, ChiNIndices, KappaIndices).
+    pub paths_by_len: Vec<Vec<crate::types::AtomIdx>>,
+    pub paths_key: Option<u64>,
+    /// E-State indices (EStateIndices, EStateAbs, EState_VSA, VSA_EState).
+    pub estates: Vec<f64>,
+    pub estates_key: Option<u64>,
 }
 
 #[inline]
@@ -147,9 +166,8 @@ impl CalculationContext {
     pub fn new() -> Self {
         Self {
             active_molecule_key: None,
-            dist_u8: Vec::new(),
-            has_dist_u8: false,
-            dist_u8_global_cache: FxHashMap::default(),
+            dist: Vec::new(),
+            has_dist: false,
             dist_bo: Vec::new(),
             has_dist_bo: false,
             dist_f64: Vec::new(),
@@ -169,10 +187,20 @@ impl CalculationContext {
             morgan_dead_atoms: Vec::new(),
             morgan_neighbor_invariants: Vec::new(),
             morgan_features: Vec::new(),
-            morgan_features_global_cache: FxHashMap::default(),
             bfs_visited_u64: Vec::new(),
             bfs_frontier_u64: Vec::new(),
             bfs_next_frontier_u64: Vec::new(),
+            cdk_legacy_view: None,
+            char_poly_abs: Vec::new(),
+            char_poly_key: None,
+            bo_dist6: Vec::new(),
+            bo_dist6_key: None,
+            legacy_stereo: None,
+            legacy_stereo_key: None,
+            paths_by_len: Vec::new(),
+            paths_key: None,
+            estates: Vec::new(),
+            estates_key: None,
         }
     }
 
@@ -182,7 +210,7 @@ impl CalculationContext {
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     pub fn reset_for_new_molecule(&mut self) {
         self.active_molecule_key = None;
-        self.has_dist_u8 = false;
+        self.has_dist = false;
         self.has_dist_bo = false;
         self.bfs_queue.clear();
         self.bfs_dist.clear();
@@ -205,5 +233,11 @@ impl CalculationContext {
         self.morgan_dead_atoms.clear();
         self.morgan_neighbor_invariants.clear();
         self.morgan_features.clear();
+        self.cdk_legacy_view = None;
+        self.char_poly_key = None;
+        self.bo_dist6_key = None;
+        self.legacy_stereo_key = None;
+        self.paths_key = None;
+        self.estates_key = None;
     }
 }

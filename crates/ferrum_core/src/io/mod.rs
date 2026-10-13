@@ -52,3 +52,4 @@ pub mod sdf;
 pub mod smarts;
 pub mod smiles;
 pub mod smiles_writer;
+pub mod stream;

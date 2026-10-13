@@ -44,7 +44,7 @@
 use super::typed::Descriptor;
 #[cfg(test)]
 use crate::algo::iso::find_all_matches;
-use crate::algo::iso::{visit_matches_target, IsoTarget};
+use crate::algo::iso::{visit_start_atoms_target, IsoTarget};
 use crate::io::smarts::{QueryGraph, parse_smarts};
 use crate::mol::molecule::Molecule;
 use crate::types::BondType;
@@ -81,12 +81,6 @@ fn is_hydrogen_label(label: &str) -> bool {
 /// Pre-filtered Crippen patterns used for heavy-atom typing.
 ///
 /// Hydrogen patterns are handled separately via `classify_implicit_h()`.
-static PARSED_HEAVY_PATTERNS: Lazy<Vec<&'static ParsedPattern>> = Lazy::new(|| {
-    PARSED_PATTERNS
-        .iter()
-        .filter(|p| !is_hydrogen_label(p.label))
-        .collect()
-});
 
 /// Parsed SMARTS pattern with contributions.
 struct ParsedPattern {
@@ -110,23 +104,23 @@ pub fn crippen_atom_contributions(mol: &Molecule) -> (Vec<f64>, Vec<f64>) {
     let mut logp = vec![0.0f64; n];
     let mut mr = vec![0.0f64; n];
     let mut assigned = vec![false; n];
-    let mut remaining_heavy = mol.atoms.iter().filter(|a| a.atomic_number > 1).count();
+    // RDKit getCrippenAtomContribs: every graph atom (explicit H atoms
+    // included) gets the first matching pattern.
+    let mut remaining_heavy = n;
 
-    for pattern in PARSED_HEAVY_PATTERNS.iter() {
+    for pattern in PARSED_PATTERNS.iter() {
         if !pattern.screen.passes_target(&target) {
             continue;
         }
-        visit_matches_target(&target, &pattern.query, |m: &[u16]| {
-            if m.is_empty() {
-                return true;
-            }
-            let idx = m[0] as usize;
-            if mol.atoms[idx].atomic_number > 1 && !assigned[idx] {
-                assigned[idx] = true;
-                logp[idx] = pattern.logp;
-                mr[idx] = pattern.mr;
-                remaining_heavy = remaining_heavy.saturating_sub(1);
-            }
+        // Only the first atom of each match is typed, so a rooted existence
+        // search per still-unassigned atom is equivalent to enumerating matches.
+        let assigned_cells = std::cell::Cell::from_mut(&mut assigned[..]).as_slice_of_cells();
+        visit_start_atoms_target(&target, &pattern.query, |a| !assigned_cells[a as usize].get(), |a| {
+            let idx = a as usize;
+            assigned_cells[idx].set(true);
+            logp[idx] = pattern.logp;
+            mr[idx] = pattern.mr;
+            remaining_heavy = remaining_heavy.saturating_sub(1);
             remaining_heavy > 0
         });
         if remaining_heavy == 0 {
@@ -146,22 +140,20 @@ fn crippen_mr_contributions(mol: &Molecule) -> Vec<f64> {
     let n = mol.atoms.len();
     let mut mr = vec![0.0f64; n];
     let mut assigned = vec![false; n];
-    let mut remaining_heavy = mol.atoms.iter().filter(|a| a.atomic_number > 1).count();
+    // RDKit getCrippenAtomContribs: every graph atom (explicit H atoms
+    // included) gets the first matching pattern.
+    let mut remaining_heavy = n;
 
-    for pattern in PARSED_HEAVY_PATTERNS.iter() {
+    for pattern in PARSED_PATTERNS.iter() {
         if !pattern.screen.passes_target(&target) {
             continue;
         }
-        visit_matches_target(&target, &pattern.query, |m: &[u16]| {
-            if m.is_empty() {
-                return true;
-            }
-            let idx = m[0] as usize;
-            if mol.atoms[idx].atomic_number > 1 && !assigned[idx] {
-                assigned[idx] = true;
-                mr[idx] = pattern.mr;
-                remaining_heavy = remaining_heavy.saturating_sub(1);
-            }
+        let assigned_cells = std::cell::Cell::from_mut(&mut assigned[..]).as_slice_of_cells();
+        visit_start_atoms_target(&target, &pattern.query, |a| !assigned_cells[a as usize].get(), |a| {
+            let idx = a as usize;
+            assigned_cells[idx].set(true);
+            mr[idx] = pattern.mr;
+            remaining_heavy = remaining_heavy.saturating_sub(1);
             remaining_heavy > 0
         });
         if remaining_heavy == 0 {
@@ -242,8 +234,10 @@ fn classify_implicit_h(mol: &Molecule, atom_idx: usize) -> (f64, f64) {
             }
         }
 
-        // H2b: [#1]O[!C;!N;!O;!S] — O has neighbor not aliphatic C/N/O/S
-        // In SMARTS, !C means not ALIPHATIC carbon (aromatic c still matches)
+        // H2b: [#1]O[!#6;!#7;!#8;!#16] — O has a neighbour that is not C/N/O/S
+        // (by atomic number: RDKit's built-in Crippen table, which differs from
+        // `Data/Crippen.txt`'s aromaticity-dependent `[!C;!N;!O;!S]`). Another
+        // H on the O counts as such a neighbour.
         if atom.total_h() >= 2 {
             return (-0.2677, 1.395);
         }
@@ -254,17 +248,13 @@ fn classify_implicit_h(mol: &Molecule, atom_idx: usize) -> (f64, f64) {
             } else {
                 bond.source
             };
-            let nbr = &mol.atoms[nbr_idx as usize];
-            let na = nbr.atomic_number;
-            let is_aliphatic_cnos =
-                !nbr.is_aromatic() && (na == 6 || na == 7 || na == 8 || na == 16);
-            if !is_aliphatic_cnos {
+            if !matches!(mol.atoms[nbr_idx as usize].atomic_number, 6 | 7 | 8 | 16) {
                 return (-0.2677, 1.395);
             }
         }
     }
 
-    // H2c: [#1][!C;!N;!O] — parent is not (aliphatic) C, N, or O.
+    // H2c: [#1][!#6;!#7;!#8] — parent is not C, N or O (by atomic number).
     // We must NOT intercept H on any nitrogen here (aromatic or aliphatic),
     // because H3 ([#1][#7]) is supposed to handle ALL N-H bonds.
     // The original code incorrectly fired H2c for aromatic N-H (e.g. indole
@@ -279,6 +269,10 @@ fn classify_implicit_h(mol: &Molecule, atom_idx: usize) -> (f64, f64) {
     // H3: [#1][#7] or [#1]O[#7] — H on N, or H on O with N neighbor
     if anum == 7 {
         return (0.2142, 0.9627);
+    }
+    // the remaining patterns start with `[#1]O`: an aliphatic O
+    if anum == 8 && atom.is_aromatic() {
+        return (0.1125, 1.112);
     }
     if anum == 8 {
         for &bidx in mol.adjacency[atom_idx].iter() {
@@ -304,8 +298,9 @@ fn classify_implicit_h(mol: &Molecule, atom_idx: usize) -> (f64, f64) {
                 bond.source
             };
             let nbr = &mol.atoms[nbr_idx as usize];
-            // [#1]OC=[#6,#7,O,S]: O bonded to C that has double bond to C/N/O/S
-            if nbr.atomic_number == 6 {
+            // [#1]OC=[#6,#7,O,S]: O bonded to an aliphatic C with a double bond
+            // to any C/N or an aliphatic O/S
+            if nbr.atomic_number == 6 && !nbr.is_aromatic() {
                 for &bidx2 in mol.adjacency[nbr_idx as usize].iter() {
                     let bond2 = &mol.bonds[bidx2 as usize];
                     if bond2.bond_type == BondType::Double {
@@ -314,15 +309,16 @@ fn classify_implicit_h(mol: &Molecule, atom_idx: usize) -> (f64, f64) {
                         } else {
                             bond2.source
                         };
-                        let na2 = mol.atoms[nbr2_idx as usize].atomic_number;
-                        if na2 == 6 || na2 == 7 || na2 == 8 || na2 == 16 {
+                        let nbr2 = &mol.atoms[nbr2_idx as usize];
+                        let na2 = nbr2.atomic_number;
+                        if na2 == 6 || na2 == 7 || ((na2 == 8 || na2 == 16) && !nbr2.is_aromatic()) {
                             return (0.298, 1.805);
                         }
                     }
                 }
             }
-            // [#1]O[O,S]: O bonded to O or S
-            if nbr.atomic_number == 8 || nbr.atomic_number == 16 {
+            // [#1]O[O,S]: O bonded to an aliphatic O or S
+            if (nbr.atomic_number == 8 || nbr.atomic_number == 16) && !nbr.is_aromatic() {
                 return (0.298, 1.805);
             }
         }
@@ -428,7 +424,7 @@ pub(crate) fn compute_molar_refractivity_cached(mol: &mut Molecule) -> f64 {
 
 /// Wildman-Crippen LogP descriptor.
 ///
-/// Returns `DescriptorValue::Float(f32)`: the predicted octanol-water
+/// Returns `DescriptorValue::Float(f64)`: the predicted octanol-water
 /// partition coefficient. Higher values indicate more lipophilic compounds.
 ///
 /// Uses SMARTS patterns from RDKit's Crippen parameters, matching each atom
@@ -458,7 +454,7 @@ impl Descriptor for LogP {
         _ctx: &mut crate::desc::context::CalculationContext,
     ) -> super::typed::DescriptorValue {
         let (logp, _) = compute_logp_cached(mol);
-        super::typed::DescriptorValue::Float(logp as f32)
+        super::typed::DescriptorValue::Float(logp)
     }
 }
 
@@ -488,7 +484,7 @@ impl Descriptor for MolarRefractivity {
         mol: &mut Molecule,
         _ctx: &mut crate::desc::context::CalculationContext,
     ) -> super::typed::DescriptorValue {
-        super::typed::DescriptorValue::Float(compute_molar_refractivity_cached(mol) as f32)
+        super::typed::DescriptorValue::Float(compute_molar_refractivity_cached(mol))
     }
 }
 
@@ -1186,9 +1182,6 @@ static CRIPPEN_PATTERNS: &[CrippenPattern] = &[
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::algo::aromaticity::perceive_aromaticity;
-    use crate::algo::kekulize::kekulize;
-    use crate::algo::valency::assign_implicit_hydrogens;
     use crate::io::smiles::parse_smiles;
 
     /// Calculates logp.
@@ -1196,52 +1189,9 @@ mod tests {
     /// Function context: `crates/ferrum_core/src/desc/logp.rs`.
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn calculate_logp(smiles: &str) -> f64 {
-        let mut mol = parse_smiles(smiles).unwrap();
-        assign_implicit_hydrogens(&mut mol).unwrap();
-        perceive_aromaticity(&mut mol);
+        let mol = parse_smiles(smiles).unwrap();
         let (logp, _) = compute_logp(&mol);
         logp
-    }
-
-    #[test]
-    /// Runs regression test for cached logp invalidated by assign implicit hydrogens.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/logp.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-    fn test_cached_logp_invalidated_by_assign_implicit_hydrogens() {
-        let mut mol = parse_smiles("C").unwrap();
-        mol.atoms[0].num_implicit_h = 0;
-
-        let before = compute_logp_cached(&mut mol).0;
-        assign_implicit_hydrogens(&mut mol).unwrap();
-        let after = compute_logp_cached(&mut mol).0;
-
-        assert_eq!(mol.atoms[0].num_implicit_h, 4);
-        assert!((after - compute_logp(&mol).0).abs() < 1e-9);
-        assert!((before - after).abs() > 1e-6);
-    }
-
-    #[test]
-    /// Runs regression test for cached logp invalidated by aromaticity perception.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/logp.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-    fn test_cached_logp_invalidated_by_aromaticity_perception() {
-        let mut mol = parse_smiles("c1ccccc1").unwrap();
-        kekulize(&mut mol);
-        for atom in &mut mol.atoms {
-            atom.set_aromatic(false);
-        }
-        for bond in &mut mol.bonds {
-            bond.set_aromatic(false);
-        }
-
-        let before = compute_logp_cached(&mut mol).0;
-        perceive_aromaticity(&mut mol);
-        let after = compute_logp_cached(&mut mol).0;
-
-        assert!((after - compute_logp(&mol).0).abs() < 1e-9);
-        assert!((before - after).abs() > 1e-6);
     }
 
     #[test]
@@ -1250,9 +1200,7 @@ mod tests {
     /// Function context: `crates/ferrum_core/src/desc/logp.rs`.
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_pattern_matching_debug() {
-        let mut mol = parse_smiles("C").unwrap();
-        assign_implicit_hydrogens(&mut mol).unwrap();
-        perceive_aromaticity(&mut mol);
+        let mol = parse_smiles("C").unwrap();
 
         println!("Testing methane (CH4):");
         println!("  Atoms: {}", mol.atoms.len());
@@ -1728,5 +1676,15 @@ mod tests {
         let mr = calculate_mr("CC(=O)O");
         println!("Acetic acid MR: {}", mr);
         assert!(mr > 0.0);
+    }
+
+    #[test]
+    fn all_crippen_patterns_parse() {
+        let failed: Vec<_> = CRIPPEN_PATTERNS
+            .iter()
+            .filter(|p| crate::io::smarts::parse_smarts(p.smarts).is_err())
+            .map(|p| (p.label, p.smarts))
+            .collect();
+        assert!(failed.is_empty(), "unparseable Crippen SMARTS: {:?}", failed);
     }
 }

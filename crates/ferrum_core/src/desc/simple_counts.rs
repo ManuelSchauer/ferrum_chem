@@ -83,7 +83,7 @@ impl Descriptor for ValenceElectrons {
             let total_h = atom.total_h() as i32;
             count += outer_elec - formal_charge + total_h;
         }
-        DescriptorValue::Float(count as f32)
+        DescriptorValue::Float(count as f64)
     }
 }
 
@@ -117,7 +117,7 @@ impl Descriptor for RadicalElectrons {
         let count: u32 = mol
             .atoms
             .iter()
-            .map(|_atom| 0u32) // No radical electron field in Atom yet
+            .map(|atom| atom.num_radicals() as u32)
             .sum();
         DescriptorValue::Int(count)
     }
@@ -159,60 +159,47 @@ impl Descriptor for HeteroatomCount {
     }
 }
 
-/// Hybridization Ratio: Ratio of sp³ to sp² carbons.
-///
-/// Measures molecular saturation/flatness.
-/// Higher values indicate more 3D character ("escape from flatland").
-/// Returns infinity if no sp² carbons exist.
+/// Hybridization ratio (CDK `HybridizationRatioDescriptor`, `HybRatio`):
+/// nsp3 / (nsp2 + nsp3) over carbon atoms, with the hybridization of CDK's
+/// carbon atom types (see [`super::carbon_types::cdk_carbon_hybridization`]).
+/// NaN when the molecule has no sp2 or sp3 carbon (CDK reports an error).
 ///
 /// # Thread Safety
 /// Stateless and thread-safe.
 pub struct HybridizationRatio;
 
 impl Descriptor for HybridizationRatio {
-    /// Implements the behavior encoded by this function.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/simple_counts.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn name(&self) -> &str {
         "HybridizationRatio"
     }
 
-    /// Calculates the behavior encoded by this function.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/simple_counts.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn calculate(
         &self,
         mol: &mut Molecule,
         _ctx: &mut crate::desc::context::CalculationContext,
     ) -> DescriptorValue {
-        let mut sp3_count = 0u32;
-        let mut sp2_count = 0u32;
-        for (idx, atom) in mol.atoms.iter().enumerate() {
-            if atom.atomic_number != 6 {
+        use super::carbon_types::{cdk_carbon_hybridization, CdkCarbonHybridization};
+        let mut nsp2 = 0u32;
+        let mut nsp3 = 0u32;
+        for a in 0..mol.num_atoms() {
+            if mol.atoms[a].atomic_number != 6 {
                 continue;
             }
-            let total_neighbors = mol.get_degree(idx as u16) + atom.total_h() as usize;
-            match total_neighbors {
-                4 => sp3_count += 1,
-                3 => sp2_count += 1,
+            match cdk_carbon_hybridization(mol, a) {
+                Some(CdkCarbonHybridization::Sp2) => nsp2 += 1,
+                Some(CdkCarbonHybridization::Sp3) => nsp3 += 1,
                 _ => {}
             }
         }
-        let ratio = if sp2_count == 0 {
-            if sp3_count > 0 { f32::INFINITY } else { 0.0 }
-        } else {
-            sp3_count as f32 / sp2_count as f32
-        };
+        let ratio = if nsp2 + nsp3 == 0 { f64::NAN } else { nsp3 as f64 / (nsp2 + nsp3) as f64 };
         DescriptorValue::Float(ratio)
     }
 }
 
 /// VAdjMa: Vertex Adjacency Magnitude.
 ///
-/// Defined as: 1 + log₂(m) where m = number of heavy-heavy bonds.
-/// Simple topological descriptor based on bond count.
+/// CDK `VAdjMaDescriptor` (`VAdjMat`): 1 + log₂(m) where m is the number of
+/// bonds between non-hydrogen atoms (0 without such bonds).
 ///
 /// # Thread Safety
 /// Stateless and thread-safe.
@@ -236,8 +223,12 @@ impl Descriptor for VAdjMa {
         mol: &mut Molecule,
         _ctx: &mut crate::desc::context::CalculationContext,
     ) -> DescriptorValue {
-        let m = mol.num_bonds() as f32;
-        let val = if m == 0.0 { 0.0 } else { 1.0 + m.log2() };
+        let m = mol
+            .bonds
+            .iter()
+            .filter(|b| mol.atoms[b.source as usize].atomic_number != 1 && mol.atoms[b.target as usize].atomic_number != 1)
+            .count();
+        let val = if m == 0 { 0.0 } else { (m as f64).ln() / 2f64.ln() + 1.0 };
         DescriptorValue::Float(val)
     }
 }
@@ -264,7 +255,7 @@ mod tests {
     ///
     /// Function context: `crates/ferrum_core/src/desc/simple_counts.rs`.
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-    fn calc_float(desc: &dyn Descriptor, smiles: &str) -> f32 {
+    fn calc_float(desc: &dyn Descriptor, smiles: &str) -> f64 {
         let mut mol = parse_smiles(smiles).expect("Invalid SMILES");
         desc.calculate(
             &mut mol,
@@ -357,8 +348,10 @@ mod tests {
     /// Function context: `crates/ferrum_core/src/desc/simple_counts.rs`.
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_hybridization_cyclohexane() {
-        let ratio = calc_float(&HybridizationRatio, "C1CCCCC1");
-        assert!(ratio.is_infinite() && ratio.is_sign_positive());
+        assert_eq!(calc_float(&HybridizationRatio, "C1CCCCC1"), 1.0);
+        // no sp2/sp3 carbon: CDK reports an error (NaN)
+        assert!(calc_float(&HybridizationRatio, "O").is_nan());
+        assert!(calc_float(&HybridizationRatio, "C#C").is_nan());
     }
 
     #[test]
@@ -378,8 +371,8 @@ mod tests {
     fn test_hybridization_mixed() {
         let ratio = calc_float(&HybridizationRatio, "CCc1ccccc1");
         assert!(
-            (ratio - 2.0 / 6.0).abs() < 0.01,
-            "Ethylbenzene should have ratio ~0.33"
+            (ratio - 2.0 / 8.0).abs() < 1e-6,
+            "Ethylbenzene: 2 sp3 of 8 carbons"
         );
     }
 

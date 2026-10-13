@@ -1,9 +1,8 @@
-use crate::algo::iso::find_all_matches;
 use crate::io::smarts::{parse_smarts, QueryGraph};
 use crate::Molecule;
 use once_cell::sync::Lazy;
 
-/// Biosynfoni version `full_1103`
+/// Biosynfoni fingerprint (39 features, version `full_1103`)
 pub const BIOSYNFONI_FEATURES: &[(&str, &str, &str)] = &[
     ("co_coa", "coenzyme_a", "SCCN~C(~O)CCN~C(~O)C(C(C)(C)COP(O)(~O)OP(~O)(O)OCC1C(C(C(O1)[#7]2~[#6]~[#7]~[#6]~3~[#6](~[#7]~[#6]~[#7]~[#6]~3~2)~[#7])O)OP(~O)(O)O)~O"),
     ("co_nadh", "nadh", "[#6]~1~[#6]~[#6]~[#7](~[#6]~[#6]~1~[#6](~O)~[#7])~[#6]~2~[#6](~[#6](~[#6](~O~2)~[#6]~O~P(~O)(~O)~O~P(~O)(~O)~O~[#6]~[#6]~3~[#6](~[#6](~[#6](~O~3)~[#7]~4~[#6]~[#7]~[#6]~5~[#6](~[#7]~[#6]~[#7]~[#6]~5~4)~[#7])~O)~O)~O)~O"),
@@ -46,6 +45,17 @@ pub const BIOSYNFONI_FEATURES: &[(&str, &str, &str)] = &[
     ("r_c10", "C10_ring", "[#6]~1~[#6]~[#6]~[#6]~[#6]~[#6]~[#6]~[#6]~[#6]~[#6]~1"),
 ];
 
+// Correct the typo if any in SMARTS string
+static CLEANED_FEATURES: Lazy<Vec<(&'static str, &'static str, String)>> = Lazy::new(|| {
+    BIOSYNFONI_FEATURES
+        .iter()
+        .map(|&(k, n, s)| {
+            let s_clean = s.replace(" timescale=1", "");
+            (k, n, s_clean)
+        })
+        .collect()
+});
+
 /// Lazy-loaded parsed SMARTS graphs. If a SMARTS fails to parse, it logs an error and stores `None`.
 pub(crate) struct ScreenedQuery {
     pub query: QueryGraph,
@@ -53,7 +63,7 @@ pub(crate) struct ScreenedQuery {
 }
 
 pub(crate) static BIOSYNFONI_GRAPHS: Lazy<Vec<Option<ScreenedQuery>>> = Lazy::new(|| {
-    BIOSYNFONI_FEATURES
+    CLEANED_FEATURES
         .iter()
         .map(|(key, _, smarts)| {
             match parse_smarts(smarts) {
@@ -81,19 +91,9 @@ pub fn compute_biosynfoni_fingerprint(mol: &Molecule) -> Vec<usize> {
                 if !screened.screen.passes_target(&iso_target) {
                     return 0;
                 }
-                let graph = &screened.query;
-                let mut unique_sets = std::collections::HashSet::new();
-                let mut iters = 0;
-                crate::algo::iso::visit_matches_target(&iso_target, graph, |mapping| {
-                    iters += 1;
-                    let mut sorted_mapping = mapping.to_vec();
-                    sorted_mapping.sort_unstable();
-                    unique_sets.insert(sorted_mapping);
-                    // RDKit default maxMatches is 1000. 
-                    // Stop early to prevent combinatorial explosion on highly symmetric targets.
-                    iters < 100_000 && unique_sets.len() < 1000
-                });
-                unique_sets.len()
+                // RDKit default maxMatches is 1000.
+                // Stop early to prevent combinatorial explosion on highly symmetric targets.
+                crate::algo::iso::count_unique_matches_capped(&iso_target, &screened.query, 1000, 100_000)
             } else {
                 0
             }
@@ -105,6 +105,13 @@ pub fn get_biosynfoni_feature_names() -> Vec<String> {
     BIOSYNFONI_FEATURES
         .iter()
         .map(|(_, name, _)| name.to_string())
+        .collect()
+}
+
+pub fn get_biosynfoni_feature_keys() -> Vec<String> {
+    BIOSYNFONI_FEATURES
+        .iter()
+        .map(|(key, _, _)| key.to_string())
         .collect()
 }
 
@@ -125,5 +132,77 @@ impl crate::desc::typed::Descriptor for Biosynfoni {
     ) -> crate::desc::typed::DescriptorValue {
         let counts = compute_biosynfoni_fingerprint(mol);
         crate::desc::typed::DescriptorValue::IntVec(counts.into_iter().map(|c| c as u32).collect())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::io::smiles::parse_smiles;
+    use crate::algo::rings::find_sssr;
+
+    fn get_biosynfoni(smiles: &str) -> Vec<usize> {
+        let mut mol = parse_smiles(smiles).unwrap();
+        find_sssr(&mut mol);
+        compute_biosynfoni_fingerprint(&mol)
+    }
+
+    fn idx_of(key: &str) -> usize {
+        BIOSYNFONI_FEATURES
+            .iter()
+            .position(|&(k, _, _)| k == key)
+            .unwrap_or_else(|| panic!("Key {} not found in BIOSYNFONI_FEATURES", key))
+    }
+
+    #[test]
+    fn test_biosynfoni_length() {
+        assert_eq!(BIOSYNFONI_FEATURES.len(), 39, "Biosynfoni must have exactly 39 features");
+        let fp = get_biosynfoni("CC");
+        assert_eq!(fp.len(), 39, "Fingerprint vector must have exactly 39 elements");
+    }
+
+    #[test]
+    fn test_biosynfoni_indole() {
+        let fp = get_biosynfoni("C1=CC=C2C(=C1)C(=CN2)CCN"); // Tryptamine
+        let indole_idx = idx_of("d_indoleC2N_12");
+        assert_eq!(indole_idx, 9);
+        assert_eq!(fp[indole_idx], 1, "Tryptamine contains exactly 1 indoleC2N substructure");
+    }
+
+    #[test]
+    fn test_biosynfoni_methyl() {
+        let fp = get_biosynfoni("CC"); // Ethane
+        let methyl_idx = idx_of("d_methyl_1");
+        assert_eq!(methyl_idx, 20);
+        assert_eq!(fp[methyl_idx], 2, "Ethane contains exactly 2 methyl groups");
+    }
+
+    #[test]
+    fn test_biosynfoni_halogens() {
+        let fp = get_biosynfoni("FC(F)(F)c1ccc(Cl)c(Br)c1I");
+        let f_idx = idx_of("hal_f");
+        let cl_idx = idx_of("hal_cl");
+        let br_idx = idx_of("hal_br");
+        let i_idx = idx_of("hal_i");
+
+        assert_eq!(f_idx, 23);
+        assert_eq!(cl_idx, 24);
+        assert_eq!(br_idx, 25);
+        assert_eq!(i_idx, 26);
+
+        assert_eq!(fp[f_idx], 3, "Expected 3 fluorines");
+        assert_eq!(fp[cl_idx], 1, "Expected 1 chlorine");
+        assert_eq!(fp[br_idx], 1, "Expected 1 bromine");
+        assert_eq!(fp[i_idx], 1, "Expected 1 iodine");
+    }
+
+    #[test]
+    fn all_biosynfoni_patterns_parse() {
+        let failed: Vec<_> = CLEANED_FEATURES
+            .iter()
+            .filter(|(_, _, smarts)| crate::io::smarts::parse_smarts(smarts).is_err())
+            .map(|(key, _, _)| *key)
+            .collect();
+        assert!(failed.is_empty(), "unparseable Biosynfoni SMARTS: {:?}", failed);
     }
 }

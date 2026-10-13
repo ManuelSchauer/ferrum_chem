@@ -42,12 +42,10 @@
 
 use super::aromatic_ring_count::AromaticRingCount;
 use super::typed::{Descriptor, DescriptorValue};
-use crate::algo::iso::{has_at_least_matches, has_substruct_match};
-use crate::io::smarts::{AtomPrimitive, QueryAtom, QueryGraph, parse_smarts};
+use crate::io::smarts::{QueryGraph, parse_smarts};
 use crate::mol::molecule::Molecule;
 use bitvec::prelude::*;
 use once_cell::sync::Lazy;
-use smallvec::SmallVec;
 
 
 /// Pre-parsed + screened MACCS keys patterns for fast fingerprint calculation.
@@ -85,6 +83,7 @@ fn required_match_count(key_number: usize) -> Option<usize> {
 struct MaccsKey {
     number: usize,
     smarts: &'static str,
+    #[allow(dead_code)] // documentation only
     description: &'static str,
 }
 
@@ -1006,9 +1005,7 @@ static MACCS_KEYS: &[MaccsKey] = &[
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::algo::aromaticity::perceive_aromaticity;
     use crate::algo::rings::find_sssr;
-    use crate::algo::valency::assign_implicit_hydrogens;
     use crate::io::smiles::parse_smiles;
 
     /// Parses and prepare.
@@ -1017,9 +1014,7 @@ mod tests {
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn parse_and_prepare(smiles: &str) -> Molecule {
         let mut mol = parse_smiles(smiles).unwrap();
-        assign_implicit_hydrogens(&mut mol).unwrap();
         find_sssr(&mut mol);
-        perceive_aromaticity(&mut mol);
         mol
     }
 
@@ -1196,6 +1191,17 @@ mod tests {
             !fp[139],
             "Key 140 (1-based): O count > 3 should be false for glycerol"
         );
+    }
+
+    #[test]
+    fn all_maccs_patterns_parse() {
+        let failed: Vec<_> = MACCS_KEYS
+            .iter()
+            .filter(|k| !k.smarts.is_empty())
+            .filter(|k| crate::io::smarts::parse_smarts(k.smarts).is_err())
+            .map(|k| k.smarts)
+            .collect();
+        assert!(failed.is_empty(), "unparseable MACCS SMARTS: {:?}", failed);
     }
 }
 

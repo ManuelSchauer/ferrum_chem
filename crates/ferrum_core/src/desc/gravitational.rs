@@ -103,14 +103,15 @@ pub fn calculate(mol: &mut Molecule, ctx: &mut crate::desc::context::Calculation
     // Calculate gravitational index
     let mut g = 0.0;
     for i in 0..n {
-        let mass_i = ATOMIC_MASSES[mol.atoms[i].atomic_number as usize] as f64;
+        let mass_i = ATOMIC_MASSES[mol.atoms[i].atomic_number as usize];
 
         for j in (i + 1)..n {
-            let mass_j = ATOMIC_MASSES[mol.atoms[j].atomic_number as usize] as f64;
+            let mass_j = ATOMIC_MASSES[mol.atoms[j].atomic_number as usize];
             let d = dist[i * n + j];
 
-            if d != 255 && d > 0 {
-                let inv_d2 = 1.0 / (d * d) as f64;
+            if d != crate::algo::paths::DIST_INF && d > 0 {
+                let d = d as f64;
+                let inv_d2 = 1.0 / (d * d);
                 g = mass_i.mul_add(mass_j * inv_d2, g);
             }
         }

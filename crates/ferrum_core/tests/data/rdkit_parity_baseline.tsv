@@ -1,0 +1,5 @@
+# Allowed number of molecules per column that differ from RDKit (tests/common/parity.rs).
+# Regenerate with FERRUM_UPDATE_PARITY_BASELINE=1; only ever lower these numbers.
+# molecules: 1277
+AvgIpc	31
+Ipc	31

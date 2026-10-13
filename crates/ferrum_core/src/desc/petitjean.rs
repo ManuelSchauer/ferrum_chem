@@ -7,6 +7,13 @@
 //! - Graph Radius R = minimum eccentricity
 //! - Petitjean Index = (D - R) / D (shape measure, 0 = sphere, 1 = rod)
 //!
+//! Output (3 values, `BatchDescriptor::feature_names` order):
+//! - `Radius`, `Diameter`: Mordred 1.2.0 `TopologicalIndex.Radius` / `Diameter`
+//!   on the hydrogen-suppressed graph. Mordred takes eccentricities from
+//!   RDKit's distance matrix, where unreachable pairs are 1e8, so a
+//!   disconnected molecule has radius = diameter = 100000000.
+//! - `PetitjeanNumber`: CDK 2.13 `PetitjeanNumberDescriptor`.
+//!
 //! Reference: Petitjean (1992) J. Chem. Inf. Comput. Sci.
 
 //! ## File guide: Petitjean
@@ -44,7 +51,13 @@
 
 use super::typed::{Descriptor, DescriptorValue};
 use crate::mol::molecule::Molecule;
+use super::cdk_graph::CDK_UNREACHABLE;
 use std::collections::VecDeque;
+
+/// Initial minimum in CDK `PathTools.getMolecularGraphRadius`.
+const CDK_RADIUS_START: i32 = 999_999;
+/// Distance RDKit's `GetDistanceMatrix` assigns to unreachable atom pairs.
+const RDKIT_UNREACHABLE: u32 = 100_000_000;
 
 /// Compute the distance matrix using BFS from each atom
 #[allow(dead_code)]
@@ -110,25 +123,40 @@ pub fn calculate(
     // Compute distance matrix
     let dist = crate::algo::paths::compute_unweighted_distance_matrix_cached(mol, ctx);
 
-    // Calculate eccentricity for each atom
-    let mut eccentricities = Vec::with_capacity(n);
+    // Mordred `Radius` / `Diameter` (TopologicalIndex): min / max column
+    // maximum of RDKit's distance matrix, in which unreachable pairs are 1e8.
+    // A disconnected molecule therefore has radius = diameter = 1e8.
+    let mut radius = u32::MAX;
+    let mut diameter = 0u32;
+    let mut disconnected = false;
     for i in 0..n {
-        let mut max_dist = 0u8;
-        for j in 0..n {
-            let d = dist[i * n + j];
-            if d != 255 && d > max_dist {
-                max_dist = d;
+        let mut max_dist = 0u16;
+        for &d in &dist[i * n..(i + 1) * n] {
+            if d == crate::algo::paths::DIST_INF {
+                disconnected = true;
+                break;
             }
+            max_dist = max_dist.max(d);
         }
-        eccentricities.push(max_dist as u32);
+        if disconnected {
+            break;
+        }
+        radius = radius.min(max_dist as u32);
+        diameter = diameter.max(max_dist as u32);
+    }
+    if disconnected {
+        radius = RDKIT_UNREACHABLE;
+        diameter = RDKIT_UNREACHABLE;
     }
 
-    // Radius = min eccentricity, Diameter = max eccentricity
-    let radius = *eccentricities.iter().min().unwrap();
-    let diameter = *eccentricities.iter().max().unwrap();
-
-    // Petitjean Index
-    let petitjean = if diameter > 0 {
+    // Petitjean number as CDK's PetitjeanNumberDescriptor computes it. In a
+    // disconnected molecule every CDK eccentricity is the unreachable distance
+    // 999999999, while PathTools.getMolecularGraphRadius starts its minimum
+    // search at 999999, so CDK reports (999999999 - 999999) / 999999999.
+    let petitjean = if disconnected {
+        let d = CDK_UNREACHABLE as f64;
+        (d - CDK_RADIUS_START as f64) / d
+    } else if diameter > 0 {
         (diameter - radius) as f64 / diameter as f64
     } else {
         0.0
@@ -163,8 +191,12 @@ impl Descriptor for PetitjeanIndex {
         mol: &mut Molecule,
         ctx: &mut crate::desc::context::CalculationContext,
     ) -> DescriptorValue {
+        if mol.num_atoms() == 0 {
+            // Mordred: max/min of an empty distance matrix is an error -> missing.
+            return DescriptorValue::FloatVec(vec![f64::NAN, f64::NAN, 0.0]);
+        }
         let (r, d, p) = calculate(mol, ctx);
-        DescriptorValue::FloatVec(vec![r as f32, d as f32, p as f32])
+        DescriptorValue::FloatVec(vec![r as f64, d as f64, p])
     }
 }
 
@@ -247,11 +279,11 @@ mod tests {
         let mut linear = parse("CCCCC"); // Pentane
         let mut branched = parse("CC(C)CC"); // Isopentane
 
-        let (r_lin, d_lin, p_lin) = calculate(
+        let (_r_lin, d_lin, p_lin) = calculate(
             &mut linear,
             &mut crate::desc::context::CalculationContext::new(),
         );
-        let (r_bra, d_bra, p_bra) = calculate(
+        let (_r_bra, d_bra, p_bra) = calculate(
             &mut branched,
             &mut crate::desc::context::CalculationContext::new(),
         );
@@ -304,7 +336,7 @@ mod tests {
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_petitjean_naphthalene() {
         let mut mol = parse("c1ccc2ccccc2c1");
-        let (r, d, p) = calculate(
+        let (_r, d, p) = calculate(
             &mut mol,
             &mut crate::desc::context::CalculationContext::new(),
         );
@@ -334,5 +366,14 @@ mod tests {
         // End atoms have eccentricity 9
         // So radius should be around 5, giving (9-5)/9 ≈ 0.44
         assert!(p > 0.4 && p < 0.6, "Petitjean = {}", p); // Moderately rod-like
+    }
+
+    #[test]
+    fn test_petitjean_disconnected_matches_cdk_and_mordred() {
+        let mut mol = parse("CC.O");
+        let (r, d, p) = calculate(&mut mol, &mut crate::desc::context::CalculationContext::new());
+        assert!((p - (999_999_999.0 - 999_999.0) / 999_999_999.0).abs() < 1e-12);
+        // Mordred Radius / Diameter see RDKit's 1e8 "unreachable" distance
+        assert_eq!((r, d), (100_000_000, 100_000_000));
     }
 }

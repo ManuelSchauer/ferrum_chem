@@ -46,3 +46,4 @@ pub mod bond;
 pub mod conformer;
 pub mod elements;
 pub mod molecule;
+pub mod rdkit_data;

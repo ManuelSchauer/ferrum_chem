@@ -61,8 +61,6 @@ struct MoleculeCache {
     tpsa: Option<f64>,
     balaban_bo_dist: Option<Vec<f64>>,
     min_cycle_basis_bonds: Option<Vec<smallvec::SmallVec<[u16; 8]>>>,
-    symmetrized_sssr_bonds: Option<Vec<smallvec::SmallVec<[u16; 8]>>>,
-    unweighted_dist_matrix: Option<Vec<u8>>,
 }
 
 #[derive(Debug, Clone)]
@@ -92,8 +90,37 @@ pub struct Molecule {
     // 3D conformer data
     pub conformers: Vec<crate::mol::conformer::Conformer>,
 
+    /// Ring perception result (RDKit symmetrized SSSR), set during sanitization.
+    pub(crate) ring_info: Option<Box<RingInfo>>,
+
     // Lazy-initialized cache for expensive properties
     cache: Option<Box<MoleculeCache>>,
+}
+
+/// Ring information as perceived by RDKit's symmetrized SSSR.
+#[derive(Debug, Default, Clone)]
+pub struct RingInfo {
+    /// Atom rings in traversal order (consecutive atoms are bonded).
+    pub atom_rings: Vec<SmallVec<[AtomIdx; 8]>>,
+    /// Bond rings, aligned with `atom_rings` (`bond_rings[i][k]` joins
+    /// `atom_rings[i][k]` and `atom_rings[i][k + 1]`).
+    pub bond_rings: Vec<SmallVec<[BondIdx; 8]>>,
+    /// Number of rings each atom is a member of.
+    pub atom_ring_counts: Vec<u8>,
+    /// Number of rings each bond is a member of.
+    pub bond_ring_counts: Vec<u8>,
+}
+
+impl RingInfo {
+    pub fn num_rings(&self) -> usize {
+        self.atom_rings.len()
+    }
+    pub fn num_atom_rings(&self, atom: usize) -> usize {
+        self.atom_ring_counts.get(atom).copied().unwrap_or(0) as usize
+    }
+    pub fn num_bond_rings(&self, bond: usize) -> usize {
+        self.bond_ring_counts.get(bond).copied().unwrap_or(0) as usize
+    }
 }
 
 // Static assertion: Molecule must be Send + Sync for parallel processing
@@ -125,6 +152,7 @@ impl Molecule {
             bonds: Vec::with_capacity(n_atoms),
             adjacency: Vec::with_capacity(n_atoms),
             conformers: Vec::new(),
+            ring_info: None,
             cache: None,
         }
     }
@@ -143,8 +171,31 @@ impl Molecule {
             bonds,
             adjacency,
             conformers: Vec::new(),
+            ring_info: None,
             cache: None,
         }
+    }
+
+    /// RDKit `getTotalNumHs(true)`: implicit + explicit H plus hydrogen-atom neighbours.
+    pub fn total_hs_with_neighbors(&self, atom: usize) -> u32 {
+        let h_nbrs = self.adjacency[atom]
+            .iter()
+            .filter(|&&b| {
+                let bond = &self.bonds[b as usize];
+                let other = if bond.source as usize == atom { bond.target } else { bond.source };
+                self.atoms[other as usize].atomic_number == 1
+            })
+            .count() as u32;
+        self.atoms[atom].total_h() as u32 + h_nbrs
+    }
+
+    /// Ring information from sanitization (RDKit symmetrized SSSR), if perceived.
+    pub fn ring_info(&self) -> Option<&RingInfo> {
+        self.ring_info.as_deref()
+    }
+
+    pub(crate) fn set_ring_info(&mut self, info: RingInfo) {
+        self.ring_info = Some(Box::new(info));
     }
 
     /// Implements atoms.
@@ -361,40 +412,4 @@ impl Molecule {
         self.cache_mut().min_cycle_basis_bonds = Some(rings);
     }
 
-    /// Implements symmetrized sssr bonds.
-    ///
-    /// Function context: `crates/ferrum_core/src/mol/molecule.rs`.
-    /// Molecule-model note: preserve atom/bond index invariants and cached-property invalidation rules.
-    pub(crate) fn cached_symmetrized_sssr_bonds(
-        &self,
-    ) -> Option<&Vec<smallvec::SmallVec<[u16; 8]>>> {
-        self.cache.as_deref()?.symmetrized_sssr_bonds.as_ref()
-    }
-
-    /// Implements symmetrized sssr bonds.
-    ///
-    /// Function context: `crates/ferrum_core/src/mol/molecule.rs`.
-    /// Molecule-model note: preserve atom/bond index invariants and cached-property invalidation rules.
-    pub(crate) fn store_symmetrized_sssr_bonds(
-        &mut self,
-        rings: Vec<smallvec::SmallVec<[u16; 8]>>,
-    ) {
-        self.cache_mut().symmetrized_sssr_bonds = Some(rings);
-    }
-
-    /// Implements unweighted dist matrix.
-    ///
-    /// Function context: `crates/ferrum_core/src/mol/molecule.rs`.
-    /// Molecule-model note: preserve atom/bond index invariants and cached-property invalidation rules.
-    pub(crate) fn cached_unweighted_dist_matrix(&self) -> Option<&[u8]> {
-        self.cache.as_deref()?.unweighted_dist_matrix.as_deref()
-    }
-
-    /// Implements unweighted dist matrix.
-    ///
-    /// Function context: `crates/ferrum_core/src/mol/molecule.rs`.
-    /// Molecule-model note: preserve atom/bond index invariants and cached-property invalidation rules.
-    pub(crate) fn store_unweighted_dist_matrix(&mut self, matrix: Vec<u8>) {
-        self.cache_mut().unweighted_dist_matrix = Some(matrix);
-    }
 }

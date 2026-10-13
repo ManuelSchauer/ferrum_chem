@@ -52,7 +52,9 @@ use crate::mol::molecule::Molecule;
 ///
 /// # Indices
 /// - **M1 (First Zagreb Index)**: Sum of squared degrees — M1 = Σᵢ deg(i)²
+///   (CDK 2.13 `ZagrebIndexDescriptor`)
 /// - **M2 (Second Zagreb Index)**: Sum of degree products over edges — M2 = Σ(i,j)∈E deg(i) × deg(j)
+///   (Mordred 1.2.0 `Zagreb2`)
 ///
 /// # Properties
 /// - Correlate with molecular branching
@@ -88,12 +90,28 @@ impl Descriptor for ZagrebIndices {
             return DescriptorValue::FloatVec(vec![0.0, 0.0]);
         }
 
+        // Zagreb1 follows CDK's ZagrebIndexDescriptor: hydrogen atoms (e.g. the
+        // isotopic ones kept as atoms) are skipped and not counted as neighbours.
+        let is_h = |a: usize| mol.atoms[a].atomic_number == 1;
         let mut m1: u64 = 0;
         for atom_idx in 0..n {
-            let degree = mol.get_degree(atom_idx as u16);
+            if is_h(atom_idx) {
+                continue;
+            }
+            let degree = mol.adjacency[atom_idx]
+                .iter()
+                .filter(|&&bi| {
+                    let b = &mol.bonds[bi as usize];
+                    let other = if b.source as usize == atom_idx { b.target } else { b.source };
+                    !is_h(other as usize)
+                })
+                .count();
             m1 += (degree * degree) as u64;
         }
 
+        // Zagreb2 follows Mordred 1.2.0 `ZagrebIndex(2, 1)`: Σ_bonds d_i·d_j with
+        // d = RDKit adjacency-matrix degree of the hydrogen-suppressed graph,
+        // so hydrogen atoms kept by RDKit (e.g. [2H]) do count.
         let mut m2: u64 = 0;
         for bond in &mol.bonds {
             let deg_u = mol.get_degree(bond.source);
@@ -101,7 +119,7 @@ impl Descriptor for ZagrebIndices {
             m2 += (deg_u * deg_v) as u64;
         }
 
-        DescriptorValue::FloatVec(vec![m1 as f32, m2 as f32])
+        DescriptorValue::FloatVec(vec![m1 as f64, m2 as f64])
     }
 }
 
@@ -124,7 +142,7 @@ mod tests {
     ///
     /// Function context: `crates/ferrum_core/src/desc/zagreb.rs`.
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-    fn calculate_zagreb(smiles: &str) -> (f32, f32) {
+    fn calculate_zagreb(smiles: &str) -> (f64, f64) {
         let mut mol = parse_smiles(smiles).expect("Invalid SMILES");
         let v = ZagrebIndices
             .calculate(
@@ -233,5 +251,14 @@ mod tests {
         let (m1_linear, _) = calculate_zagreb("CCCC");
         let (m1_branched, _) = calculate_zagreb("CC(C)C");
         assert!(m1_branched > m1_linear);
+    }
+
+    #[test]
+    fn test_zagreb1_ignores_hydrogen_atoms() {
+        // CDK: [2H] atoms are neither counted nor neighbours
+        let (m1, m2) = calculate_zagreb("[2H]C([2H])([2H])Cl");
+        assert_eq!(m1, 2.0);
+        // Mordred: kept hydrogen atoms are graph atoms (3 * 4*1 + 4*1)
+        assert_eq!(m2, 16.0);
     }
 }

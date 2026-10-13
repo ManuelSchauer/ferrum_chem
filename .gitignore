@@ -21,3 +21,7 @@ target
 #.idea/
 coconut_csv_lite-02-2026.csv
 
+
+# Python virtualenv, macOS metadata
+.venv/
+.DS_Store

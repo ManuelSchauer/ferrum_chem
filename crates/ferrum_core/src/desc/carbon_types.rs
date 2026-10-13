@@ -1,400 +1,239 @@
-//! Carbon type classification descriptors
+//! Carbon type classification (CDK `CarbonTypesDescriptor`).
 //!
-//! Classifies carbon atoms by hybridization and neighbor count:
-//! - C1SP1: 1 neighbor, sp hybridization (terminal alkyne)
-//! - C2SP1: 2 neighbors, sp hybridization (internal alkyne)
-//! - C1SP2: 1 neighbor, sp² hybridization (terminal alkene)
-//! - C2SP2: 2 neighbors, sp² hybridization (internal alkene)
-//! - C3SP2: 3 neighbors, sp² hybridization (aromatic, carbonyl)
-//! - C1SP3: 1 neighbor, sp³ hybridization (methyl)
-//! - C2SP3: 2 neighbors, sp³ hybridization (methylene)
-//! - C3SP3: 3 neighbors, sp³ hybridization (methine)
-//! - C4SP3: 4 neighbors, sp³ hybridization (quaternary)
-
-//! ## File guide: Carbon Types
+//! Every carbon is classified by the highest order of its bonds and by the
+//! number of carbon atoms bonded to it:
+//! - C1SP1 / C2SP1: highest bond order triple, 1 / 2 carbon neighbours
+//! - C1SP2 / C2SP2 / C3SP2: highest bond order double, 1 / 2 / 3 carbon neighbours
+//! - C1SP3 .. C4SP3: only single bonds, 1 .. 4 carbon neighbours
 //!
-//! This file belongs to FerrumChem's **descriptor/fingerprint feature layer**.
-//!
-//! What to learn here:
-//! - Which chemistry/ML concern this file owns in the pipeline.
-//! - How Rust types and control-flow encode that concern.
-//! - Which public symbols are the best entry points for reading/debugging.
-//!
-//! Key symbols in this file:
-//! - `fn carbon_types`
-//! - `mod tests`
-//! - `fn parse`
-//! - `fn test_methane`
-//! - `fn test_ethane`
-//!
-//! Suggested reading workflow:
-//! 1. Read top-level type definitions and public APIs.
-//! 2. Trace helper functions used in hot/critical paths.
-//! 3. Cross-reference tests/examples that exercise this file.
-
-//!
-//! ### Algorithmic assumptions for this file
-//! - `Carbon Types` assumes molecule preprocessing (implicit hydrogens, aromaticity flags, and ring annotations) is current before calculation.
-//! - `Carbon Types` remains deterministic for identical atom/bond indexing so batch and single-molecule runs agree bit-for-bit.
-//! - Typed `DescriptorValue` output is part of the contract; downstream ML code should not rely on ad-hoc coercions.
-//! - Specific scope anchor: `crates/ferrum_core/src/desc/carbon_types.rs` defines carbon types behavior and should be updated together with its direct tests.
-//! ### Chemistry/ML references
-//! - Todeschini & Consonni. Handbook of Molecular Descriptors (general descriptor taxonomy).
-//! - RDKit descriptor/fingerprint APIs used as practical parity baselines for `Carbon Types` workflows.
-//! - Repository unit and parity tests covering `Carbon Types` behavior and edge molecules.
-//! - Code-local source of truth: symbols and tests declared in `crates/ferrum_core/src/desc/carbon_types.rs`.
+//! CDK reads bond orders from the Kekulé structure its SMILES parser produces,
+//! while FerrumChem keeps RDKit's aromatic bonds. [`cdk_carbon_bonds`]
+//! recovers the Kekulé bond orders of a carbon locally from its valence, and
+//! [`cdk_carbon_hybridization`] reproduces the hybridization CDK's atom typer
+//! (`CDKAtomTypeMatcher.perceiveCarbons`) assigns to carbons; both are shared
+//! with `HybridizationRatio`.
 
 use crate::desc::typed::{Descriptor, DescriptorValue};
 use crate::mol::molecule::Molecule;
-use crate::types::Hybridization;
+use crate::types::BondType;
 
-/// Count carbon atoms by type: neighbor count and hybridization
+/// Bond-order summary of one carbon in CDK's Kekulé representation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct CdkCarbonBonds {
+    /// Highest bond order (1, 2 or 3).
+    pub max_order: u8,
+    /// Number of double bonds.
+    pub n_double: u8,
+    /// Sum of bond orders (hydrogens not included).
+    pub order_sum: u8,
+}
+
+/// Kekulé bond orders of carbon `a`.
 ///
-/// Returns (C1SP1, C2SP1, C1SP2, C2SP2, C3SP2, C1SP3, C2SP3, C3SP3, C4SP3)
-///
-/// # Examples
-/// - Methane (CH₄): C4SP3=1 (if explicit H) or C1SP3=1 (if implicit)
-/// - Ethane (C₂H₆): C1SP3=2
-/// - Ethene (C₂H₄): C2SP2=2
-/// - Ethyne (C₂H₂): C1SP1=2
-/// - Benzene: C3SP2=6 (aromatic)
-/// - Acetone: C1SP3=2, C3SP2=1 (carbonyl carbon)
-pub fn carbon_types(mol: &Molecule) -> (u32, u32, u32, u32, u32, u32, u32, u32, u32) {
-    use crate::types::BondType;
+/// Non-aromatic bonds keep their order (dative and unknown bonds count as
+/// single, as CDK reads them from SMILES). In any Kekulé structure an aromatic
+/// carbon carries exactly one double bond among its aromatic bonds when its
+/// valence (4 if neutral, 3 if singly charged) is not satisfied by single
+/// bonds, so no global matching is required.
+pub(crate) fn cdk_carbon_bonds(mol: &Molecule, a: usize) -> CdkCarbonBonds {
+    let mut max_order = 1u8;
+    let mut n_double = 0u8;
+    let mut order_sum = 0i32;
+    let mut n_aromatic = 0i32;
+    for &bi in &mol.adjacency[a] {
+        match mol.bonds[bi as usize].bond_type {
+            BondType::Aromatic => n_aromatic += 1,
+            BondType::Double => {
+                order_sum += 2;
+                n_double += 1;
+                max_order = max_order.max(2);
+            }
+            BondType::Triple => {
+                order_sum += 3;
+                max_order = 3;
+            }
+            _ => order_sum += 1,
+        }
+    }
+    if n_aromatic > 0 {
+        let atom = &mol.atoms[a];
+        let valence = if atom.formal_charge == 0 { 4 } else { 3 };
+        if valence - atom.total_h() as i32 - order_sum > n_aromatic {
+            n_double += 1;
+            max_order = max_order.max(2);
+            order_sum += 1;
+        }
+        order_sum += n_aromatic;
+    }
+    CdkCarbonBonds { max_order, n_double, order_sum: order_sum.clamp(0, 255) as u8 }
+}
 
-    let mut counts = (0, 0, 0, 0, 0, 0, 0, 0, 0);
+/// Hybridization of a CDK carbon atom type.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CdkCarbonHybridization {
+    Sp1,
+    Sp2,
+    Sp3,
+    /// `C.plus.planar` / `C.minus.planar`
+    Planar,
+}
 
-    for (idx, atom) in mol.atoms.iter().enumerate() {
-        // Only count carbon atoms
+/// Does `a` (any element) carry a double bond in the Kekulé structure?
+fn has_kekule_double(mol: &Molecule, a: usize) -> bool {
+    if mol.atoms[a].atomic_number == 6 {
+        return cdk_carbon_bonds(mol, a).n_double > 0;
+    }
+    mol.adjacency[a].iter().any(|&bi| {
+        let bt = mol.bonds[bi as usize].bond_type;
+        bt == BondType::Double || bt == BondType::Aromatic
+    })
+}
+
+/// Hybridization CDK's atom typer assigns to carbon `a`
+/// (`AtomContainerManipulator.percieveAtomTypesAndConfigureAtoms` on the
+/// Kekulé form), `None` when CDK finds no carbon atom type.
+pub(crate) fn cdk_carbon_hybridization(mol: &Molecule, a: usize) -> Option<CdkCarbonHybridization> {
+    use CdkCarbonHybridization::*;
+    let atom = &mol.atoms[a];
+    let degree = mol.adjacency[a].len() as i32;
+    let h = atom.total_h() as i32;
+    let b = cdk_carbon_bonds(mol, a);
+    // `isAcceptable`: formal neighbour count, maximum bond order and valency
+    // of the CDK atom type (charge is matched by the branch).
+    let acceptable = |neighbours: i32, max_order: u8, valency: i32| {
+        degree + h <= neighbours && b.max_order <= max_order && b.order_sum as i32 + h <= valency
+    };
+    match atom.formal_charge {
+        0 => {
+            if degree > 4 {
+                return None;
+            }
+            match b.max_order {
+                3 => acceptable(2, 3, 4).then_some(Sp1),         // C.sp
+                2 if b.n_double == 2 => acceptable(2, 2, 4).then_some(Sp1), // C.allene
+                2 if b.n_double == 1 => acceptable(3, 2, 4).then_some(Sp2), // C.sp2
+                2 => None,
+                _ => acceptable(4, 1, 4).then_some(Sp3), // C.sp3
+            }
+        }
+        1 => match b.max_order {
+            3 => acceptable(1, 3, 3).then_some(Sp1), // C.plus.sp1
+            2 => acceptable(2, 2, 3).then_some(Sp2), // C.plus.sp2
+            _ => acceptable(3, 1, 3).then_some(Planar), // C.plus.planar
+        },
+        -1 => match b.max_order {
+            1 if degree <= 3 => {
+                // C.minus.planar needs two sp2 neighbours and a ring atom
+                let sp2_neighbours = mol.adjacency[a]
+                    .iter()
+                    .filter(|&&bi| {
+                        let bond = &mol.bonds[bi as usize];
+                        let other = if bond.source as usize == a { bond.target } else { bond.source };
+                        bond.bond_type == BondType::Aromatic || has_kekule_double(mol, other as usize)
+                    })
+                    .count();
+                if sp2_neighbours >= 2 && atom.is_in_ring() && acceptable(3, 1, 3) {
+                    Some(Planar)
+                } else {
+                    acceptable(3, 1, 3).then_some(Sp3) // C.minus.sp3
+                }
+            }
+            2 if degree <= 3 => acceptable(2, 2, 3).then_some(Sp2), // C.minus.sp2
+            3 if degree <= 1 => acceptable(1, 3, 3).then_some(Sp1), // C.minus.sp1
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// CDK `CarbonTypesDescriptor` counts in output order
+/// (C1SP1, C2SP1, C1SP2, C2SP2, C3SP2, C1SP3, C2SP3, C3SP3, C4SP3).
+pub fn carbon_types(mol: &Molecule) -> [u16; 9] {
+    let mut counts = [0u16; 9];
+    for (a, atom) in mol.atoms.iter().enumerate() {
         if atom.atomic_number != 6 {
             continue;
         }
-
-        let neighbors = mol.get_degree(idx as u16) as u32;
-
-        // Infer hybridization from bond types if not specified
-        let hybridization = if atom.hybridization == Hybridization::Unspecified {
-            // Count double and triple bonds
-            let mut has_triple = false;
-            let mut has_double = false;
-
-            for &bond_idx in &mol.adjacency[idx] {
-                let bond = &mol.bonds[bond_idx as usize];
-                match bond.bond_type {
-                    BondType::Triple => has_triple = true,
-                    BondType::Double => has_double = true,
-                    _ => {}
-                }
-            }
-
-            if has_triple {
-                Hybridization::SP
-            } else if has_double || atom.is_aromatic() {
-                Hybridization::SP2
-            } else {
-                Hybridization::SP3
-            }
-        } else {
-            atom.hybridization
+        let cc = mol.adjacency[a]
+            .iter()
+            .filter(|&&bi| {
+                let bond = &mol.bonds[bi as usize];
+                let other = if bond.source as usize == a { bond.target } else { bond.source };
+                mol.atoms[other as usize].atomic_number == 6
+            })
+            .count();
+        let slot = match (cdk_carbon_bonds(mol, a).max_order, cc) {
+            (3, 1) => 0,
+            (3, 2) => 1,
+            (2, 1) => 2,
+            (2, 2) => 3,
+            (2, 3) => 4,
+            (1, 1) => 5,
+            (1, 2) => 6,
+            (1, 3) => 7,
+            (1, 4) => 8,
+            _ => continue,
         };
-
-        match hybridization {
-            Hybridization::SP => {
-                match neighbors {
-                    1 => counts.0 += 1, // C1SP1
-                    2 => counts.1 += 1, // C2SP1
-                    _ => {}             // Unusual, ignore
-                }
-            }
-            Hybridization::SP2 => {
-                match neighbors {
-                    1 => counts.2 += 1, // C1SP2
-                    2 => counts.3 += 1, // C2SP2
-                    3 => counts.4 += 1, // C3SP2
-                    _ => {}             // Unusual, ignore
-                }
-            }
-            Hybridization::SP3 => {
-                match neighbors {
-                    1 => counts.5 += 1, // C1SP3
-                    2 => counts.6 += 1, // C2SP3
-                    3 => counts.7 += 1, // C3SP3
-                    4 => counts.8 += 1, // C4SP3
-                    _ => {}             // Unusual, ignore
-                }
-            }
-            Hybridization::SP3D | Hybridization::SP3D2 => {
-                // Higher coordination (phosphorus, sulfur), skip
-            }
-            Hybridization::Unspecified => {
-                // Try to infer from neighbors if needed
-                // For now, skip
-            }
-        }
+        counts[slot] += 1;
     }
-
     counts
 }
+
+/// CDK `CarbonTypesDescriptor` (9 counts, see [`carbon_types`]).
+pub struct CarbonTypes;
+
+impl Descriptor for CarbonTypes {
+    fn name(&self) -> &str {
+        "CarbonTypes"
+    }
+
+    fn calculate(&self, mol: &mut Molecule, _ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
+        DescriptorValue::IntU16Vec(carbon_types(mol).to_vec())
+    }
+}
+
+const _: () = {
+    const fn assert_send_sync<T: Send + Sync>() {}
+    let _ = assert_send_sync::<CarbonTypes>;
+};
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::io::smiles::parse_smiles;
 
-    /// Parses the behavior encoded by this function.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/carbon_types.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-    fn parse(smiles: &str) -> Molecule {
-        parse_smiles(smiles).unwrap()
+    fn types(smiles: &str) -> [u16; 9] {
+        carbon_types(&parse_smiles(smiles).unwrap())
+    }
+
+    // Expected values from CDK 2.13 CarbonTypesDescriptor.
+    #[test]
+    fn test_small_molecules() {
+        assert_eq!(types("C"), [0; 9]); // no carbon neighbour
+        assert_eq!(types("CC"), [0, 0, 0, 0, 0, 2, 0, 0, 0]);
+        assert_eq!(types("CCC"), [0, 0, 0, 0, 0, 2, 1, 0, 0]);
+        assert_eq!(types("C=C"), [0, 0, 2, 0, 0, 0, 0, 0, 0]);
+        assert_eq!(types("C#C"), [2, 0, 0, 0, 0, 0, 0, 0, 0]);
+        assert_eq!(types("CC#C"), [1, 1, 0, 0, 0, 1, 0, 0, 0]);
+        assert_eq!(types("CC(=O)C"), [0, 0, 0, 1, 0, 2, 0, 0, 0]); // carbonyl C: C2SP2
+        assert_eq!(types("CC(C)(C)C"), [0, 0, 0, 0, 0, 4, 0, 0, 1]);
     }
 
     #[test]
-    /// Runs regression test for methane.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/carbon_types.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-    fn test_methane() {
-        let mol = parse("C");
-        let (c1sp1, c2sp1, c1sp2, c2sp2, c3sp2, c1sp3, c2sp3, c3sp3, c4sp3) = carbon_types(&mol);
-        assert_eq!(c1sp1, 0);
-        assert_eq!(c2sp1, 0);
-        assert_eq!(c1sp2, 0);
-        assert_eq!(c2sp2, 0);
-        assert_eq!(c3sp2, 0);
-        assert_eq!(c1sp3, 0); // Methane has 4 implicit H, degree=0 in our model
-        assert_eq!(c2sp3, 0);
-        assert_eq!(c3sp3, 0);
-        // Note: Isolated C with implicit H might not be classified correctly
+    fn test_aromatic_uses_kekule_orders() {
+        assert_eq!(types("c1ccccc1"), [0, 0, 0, 6, 0, 0, 0, 0, 0]);
+        assert_eq!(types("C1=CC=CC=C1"), types("c1ccccc1"));
+        // toluene: ipso carbon has 3 carbon neighbours
+        assert_eq!(types("Cc1ccccc1"), [0, 0, 0, 5, 1, 1, 0, 0, 0]);
+        // 2-pyridone: C=O carbon has no ring double bond but an exocyclic one
+        assert_eq!(types("O=c1cccc[nH]1"), [0, 0, 2, 3, 0, 0, 0, 0, 0]);
     }
 
     #[test]
-    /// Runs regression test for ethane.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/carbon_types.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-    fn test_ethane() {
-        let mol = parse("CC");
-        println!("Ethane: {} atoms", mol.num_atoms());
-        for (i, atom) in mol.atoms.iter().enumerate() {
-            println!(
-                "  Atom {}: Z={}, hyb={:?}, degree={}",
-                i,
-                atom.atomic_number,
-                atom.hybridization,
-                mol.get_degree(i as u16)
-            );
-        }
-        let (_c1sp1, _c2sp1, _c1sp2, _c2sp2, _c3sp2, c1sp3, _c2sp3, _c3sp3, _c4sp3) =
-            carbon_types(&mol);
-        println!(
-            "c1sp3={}, c2sp3={}, c3sp3={}, c4sp3={}",
-            c1sp3, _c2sp3, _c3sp3, _c4sp3
-        );
-        assert_eq!(c1sp3, 2); // Two methyls
-    }
-
-    #[test]
-    /// Runs regression test for propane.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/carbon_types.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-    fn test_propane() {
-        let mol = parse("CCC");
-        let (_c1sp1, _c2sp1, _c1sp2, _c2sp2, _c3sp2, c1sp3, c2sp3, _c3sp3, _c4sp3) =
-            carbon_types(&mol);
-        assert_eq!(c1sp3, 2); // Two methyls
-        assert_eq!(c2sp3, 1); // One methylene
-    }
-
-    #[test]
-    /// Runs regression test for ethene.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/carbon_types.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-    fn test_ethene() {
-        let mol = parse("C=C");
-        let (_c1sp1, _c2sp1, c1sp2, _c2sp2, _c3sp2, _c1sp3, _c2sp3, _c3sp3, _c4sp3) =
-            carbon_types(&mol);
-        assert_eq!(c1sp2, 2); // Two sp² carbons, each with 1 neighbor (double bond)
-    }
-
-    #[test]
-    /// Runs regression test for ethyne.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/carbon_types.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-    fn test_ethyne() {
-        let mol = parse("C#C");
-        let (c1sp1, _c2sp1, _c1sp2, _c2sp2, _c3sp2, _c1sp3, _c2sp3, _c3sp3, _c4sp3) =
-            carbon_types(&mol);
-        assert_eq!(c1sp1, 2); // Two sp carbons
-    }
-
-    #[test]
-    /// Runs regression test for benzene.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/carbon_types.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-    fn test_benzene() {
-        let mol = parse("c1ccccc1");
-        let (_c1sp1, _c2sp1, _c1sp2, c2sp2, _c3sp2, _c1sp3, _c2sp3, _c3sp3, _c4sp3) =
-            carbon_types(&mol);
-        assert_eq!(c2sp2, 6); // Six aromatic sp² carbons, each with 2 neighbors
-    }
-
-    #[test]
-    /// Runs regression test for acetone.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/carbon_types.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-    fn test_acetone() {
-        let mol = parse("CC(=O)C");
-        let (_c1sp1, _c2sp1, _c1sp2, _c2sp2, c3sp2, c1sp3, _c2sp3, _c3sp3, _c4sp3) =
-            carbon_types(&mol);
-        assert_eq!(c1sp3, 2); // Two methyls
-        assert_eq!(c3sp2, 1); // Carbonyl carbon
-    }
-
-    #[test]
-    /// Runs regression test for neopentane.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/carbon_types.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-    fn test_neopentane() {
-        let mol = parse("CC(C)(C)C");
-        let (_c1sp1, _c2sp1, _c1sp2, _c2sp2, _c3sp2, c1sp3, _c2sp3, _c3sp3, c4sp3) =
-            carbon_types(&mol);
-        assert_eq!(c1sp3, 4); // Four methyls
-        assert_eq!(c4sp3, 1); // One quaternary carbon
-    }
-
-    #[test]
-    /// Runs regression test for propyne.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/carbon_types.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-    fn test_propyne() {
-        let mol = parse("CC#C");
-        let (c1sp1, c2sp1, _c1sp2, _c2sp2, _c3sp2, c1sp3, _c2sp3, _c3sp3, _c4sp3) =
-            carbon_types(&mol);
-        assert_eq!(c1sp1, 1); // Terminal alkyne C
-        assert_eq!(c2sp1, 1); // Internal alkyne C
-        assert_eq!(c1sp3, 1); // Methyl
+    fn test_hybridization() {
+        let mol = parse_smiles("C=C=CC#CC[CH2-]").unwrap();
+        let hyb: Vec<_> = (0..mol.num_atoms()).map(|a| cdk_carbon_hybridization(&mol, a)).collect();
+        use CdkCarbonHybridization::*;
+        assert_eq!(hyb, vec![Some(Sp2), Some(Sp1), Some(Sp2), Some(Sp1), Some(Sp1), Some(Sp3), Some(Sp3)]);
     }
 }
-
-// ===========================================================================
-// Typed API: Carbon Types
-// ===========================================================================
-
-/// Carbon type counts descriptor.
-///
-/// Returns IntU16Vec with 9 values:
-/// [C1SP1, C2SP1, C1SP2, C2SP2, C3SP2, C1SP3, C2SP3, C3SP3, C4SP3]
-///
-/// Uses u16 since most molecules have <65k carbons of any single type.
-pub struct CarbonTypes;
-
-impl Descriptor for CarbonTypes {
-    /// Implements the behavior encoded by this function.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/carbon_types.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-    fn name(&self) -> &str {
-        "CarbonTypes"
-    }
-
-    /// Calculates the behavior encoded by this function.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/carbon_types.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-    fn calculate(
-        &self,
-        mol: &mut Molecule,
-        _ctx: &mut crate::desc::context::CalculationContext,
-    ) -> DescriptorValue {
-        use crate::types::BondType;
-
-        let mut counts = vec![0u16; 9];
-
-        for (idx, atom) in mol.atoms.iter().enumerate() {
-            // Only count carbon atoms
-            if atom.atomic_number != 6 {
-                continue;
-            }
-
-            let neighbors = mol.get_degree(idx as u16);
-
-            // Infer hybridization from bond types if not specified
-            let hybridization = if atom.hybridization == Hybridization::Unspecified {
-                // Count double and triple bonds
-                let mut has_triple = false;
-                let mut has_double = false;
-
-                for &bond_idx in &mol.adjacency[idx] {
-                    let bond = &mol.bonds[bond_idx as usize];
-                    match bond.bond_type {
-                        BondType::Triple => has_triple = true,
-                        BondType::Double => has_double = true,
-                        _ => {}
-                    }
-                }
-
-                if has_triple {
-                    Hybridization::SP
-                } else if has_double || atom.is_aromatic() {
-                    Hybridization::SP2
-                } else {
-                    Hybridization::SP3
-                }
-            } else {
-                atom.hybridization
-            };
-
-            match hybridization {
-                Hybridization::SP => {
-                    match neighbors {
-                        1 => counts[0] += 1, // C1SP1
-                        2 => counts[1] += 1, // C2SP1
-                        _ => {}              // Unusual, ignore
-                    }
-                }
-                Hybridization::SP2 => {
-                    match neighbors {
-                        1 => counts[2] += 1, // C1SP2
-                        2 => counts[3] += 1, // C2SP2
-                        3 => counts[4] += 1, // C3SP2
-                        _ => {}              // Unusual, ignore
-                    }
-                }
-                Hybridization::SP3 => {
-                    match neighbors {
-                        1 => counts[5] += 1, // C1SP3
-                        2 => counts[6] += 1, // C2SP3
-                        3 => counts[7] += 1, // C3SP3
-                        4 => counts[8] += 1, // C4SP3
-                        _ => {}              // Unusual, ignore
-                    }
-                }
-                Hybridization::SP3D | Hybridization::SP3D2 => {
-                    // Higher coordination (phosphorus, sulfur), skip
-                }
-                Hybridization::Unspecified => {
-                    // Already handled above
-                }
-            }
-        }
-
-        DescriptorValue::IntU16Vec(counts)
-    }
-}
-
-const _: () = {
-    /// Asserts send sync to guard invariants.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/carbon_types.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-    const fn assert_send_sync<T: Send + Sync>() {}
-    let _ = assert_send_sync::<CarbonTypes>;
-};

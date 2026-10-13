@@ -36,13 +36,13 @@
 //! - Code-local source of truth: symbols and tests declared in `crates/ferrum_core/src/desc/functional_groups.rs`.
 
 use super::typed::{Descriptor, DescriptorValue};
-use crate::algo::iso::count_matches as smarts_count_matches;
 use crate::io::smarts::{QueryGraph, parse_smarts};
 use crate::mol::molecule::Molecule;
 use once_cell::sync::Lazy;
 
 /// A named SMARTS pattern for functional group detection.
 struct FuncGroupPattern {
+    #[allow(dead_code)] // documentation only
     name: &'static str,
     query: QueryGraph,
     screen: crate::algo::iso::QueryScreen,
@@ -82,26 +82,6 @@ fg_patterns!(
     ("Ether", "[OD2]([#6])[#6]"),
     ("Nitrile", "[NX1]#[CX2]"),
     ("Halide", "[F,Cl,Br,I]"),
-);
-
-// Acidic group patterns
-fg_patterns!(
-    ACIDIC_PATTERNS,
-    ("CarboxylicAcid", "[CX3](=O)[OX2H1]"),
-    ("Sulfonamide_NH", "[#16X4](=O)(=O)[NX3H]"),
-    ("SulfonicAcid", "[#16X4](=O)(=O)[OX2H]"),
-    ("Phenol", "[OX2H]c"),
-    ("Thiol", "[#16X2H]"),
-);
-
-// Basic group patterns
-fg_patterns!(
-    BASIC_PATTERNS,
-    ("PrimaryAmine", "[NX3;H2;!$(NC=O)]"),
-    ("SecondaryAmine", "[NX3;H1;!$(NC=O)]"),
-    ("TertiaryAmine", "[NX3;H0;!$(NC=O);!$([NX3](=O)=O)]"),
-    ("Guanidine", "[NX3][CX3](=[NX2])[NX3]"),
-    ("Amidine", "[NX3][CX3]=[NX2]"),
 );
 
 /// Functional Group Counts descriptor.
@@ -145,80 +125,190 @@ impl Descriptor for FunctionalGroupCounts {
     }
 }
 
-/// Acidic Group Count: total number of acidic functional groups.
+/// Acidic Group Count (CDK 2.13 `AcidicGroupCountDescriptor`, `nAcid`).
 ///
-/// Counts carboxylic acids, sulfonamide NHs, sulfonic acids, phenols, thiols.
+/// Counts atoms matching CDK's SMARTS `[$([O;H1]-[C,S,P]=O)]`,
+/// `[$([*;-;!$(*~[*;+])])]`, `[$([NH](S(=O)=O)C(F)(F)F)]` and `[$(n1nnnc1)]`
+/// with CDK SMARTS semantics: Kekulé bond orders and CDK's Daylight aromaticity
+/// (`SmartsPattern` re-perceives it), `-`/`=` only match non-aromatic bonds.
 pub struct AcidicGroupCount;
 
 impl Descriptor for AcidicGroupCount {
-    /// Implements the behavior encoded by this function.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/functional_groups.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn name(&self) -> &str {
         "AcidicGroupCount"
     }
 
-    /// Calculates the behavior encoded by this function.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/functional_groups.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn calculate(
         &self,
         mol: &mut Molecule,
         _ctx: &mut crate::desc::context::CalculationContext,
     ) -> DescriptorValue {
-        let iso_target = crate::algo::iso::IsoTarget::new(mol);
-        let total: usize = ACIDIC_PATTERNS
-            .iter()
-            .map(|p| {
-                if !p.screen.passes_target(&iso_target) {
-                    0
-                } else {
-                    crate::algo::iso::count_matches_target(&iso_target, &p.query)
-                }
-            })
-            .sum();
-        DescriptorValue::Int(total as u32)
+        DescriptorValue::Int(cdk_group_counts(mol).0)
     }
 }
 
-/// Basic Group Count: total number of basic functional groups.
+/// Basic Group Count (CDK 2.13 `BasicGroupCountDescriptor`, `nBase`).
 ///
-/// Counts primary/secondary/tertiary amines, guanidines, amidines.
+/// Counts atoms matching CDK's SMARTS `[$([NH2]-[CX4])]`,
+/// `[$([NH](-[CX4])-[CX4])]`, `[$(N(-[CX4])(-[CX4])-[CX4])]`,
+/// `[$([*;+;!$(*~[*;-])])]`, `[$(N=C-N)]` and `[$(N-C=N)]` (CDK SMARTS
+/// semantics, see [`AcidicGroupCount`]).
 pub struct BasicGroupCount;
 
 impl Descriptor for BasicGroupCount {
-    /// Implements the behavior encoded by this function.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/functional_groups.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn name(&self) -> &str {
         "BasicGroupCount"
     }
 
-    /// Calculates the behavior encoded by this function.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/functional_groups.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn calculate(
         &self,
         mol: &mut Molecule,
         _ctx: &mut crate::desc::context::CalculationContext,
     ) -> DescriptorValue {
-        let iso_target = crate::algo::iso::IsoTarget::new(mol);
-        let total: usize = BASIC_PATTERNS
-            .iter()
-            .map(|p| {
-                if !p.screen.passes_target(&iso_target) {
-                    0
-                } else {
-                    crate::algo::iso::count_matches_target(&iso_target, &p.query)
-                }
-            })
-            .sum();
-        DescriptorValue::Int(total as u32)
+        DescriptorValue::Int(cdk_group_counts(mol).1)
     }
+}
+
+/// CDK acidic and basic group counts `(nAcid, nBase)`.
+pub(crate) fn cdk_group_counts(mol: &Molecule) -> (u32, u32) {
+    use crate::desc::cdk_daylight::{CdkMol, smarts_daylight_aromaticity};
+    let n = mol.num_atoms();
+    if n == 0 {
+        return (0, 0);
+    }
+    let m = CdkMol::new(mol);
+    let (arom, arom_bond) = smarts_daylight_aromaticity(&m);
+    let h = |a: usize| m.hcount[a] as u32;
+    let aliph = |a: usize, z: u8| m.z[a] == z && !arom[a];
+    // `-`, `=`: aliphatic order; implicit bond: single or aromatic
+    let ord = |bi: u32, o: u8| !arom_bond[bi as usize] && m.order[bi as usize] == o;
+    let single_or_arom = |bi: u32| arom_bond[bi as usize] || m.order[bi as usize] == 1;
+    let cx4 = |a: usize| aliph(a, 6) && m.degree(a) + m.hcount[a] as usize == 4;
+    // '=O' neighbours via aliphatic double bonds
+    let count_dbl_o = |a: usize| m.adj[a].iter().filter(|&&(w, bi)| ord(bi, 2) && aliph(w as usize, 8)).count();
+
+    let mut acid = 0u32;
+    let mut base = 0u32;
+    for a in 0..n {
+        let q = m.charge[a];
+        // [$([*;-;!$(*~[*;+])])] / [$([*;+;!$(*~[*;-])])]
+        if q == -1 && !m.adj[a].iter().any(|&(w, _)| m.charge[w as usize] == 1) {
+            acid += 1;
+        }
+        if q == 1 && !m.adj[a].iter().any(|&(w, _)| m.charge[w as usize] == -1) {
+            base += 1;
+        }
+        match m.z[a] {
+            8 if !arom[a] => {
+                // [$([O;H1]-[C,S,P]=O)]
+                if h(a) == 1
+                    && m.adj[a].iter().any(|&(x, bi)| {
+                        let x = x as usize;
+                        ord(bi, 1) && (aliph(x, 6) || aliph(x, 16) || aliph(x, 15)) && count_dbl_o(x) >= 1
+                    })
+                {
+                    acid += 1;
+                }
+            }
+            7 if !arom[a] => {
+                // [$([NH](S(=O)=O)C(F)(F)F)]
+                if h(a) == 1 {
+                    let s_ok = m.adj[a].iter().any(|&(x, bi)| {
+                        single_or_arom(bi) && aliph(x as usize, 16) && count_dbl_o(x as usize) >= 2
+                    });
+                    let cf3 = m.adj[a].iter().any(|&(x, bi)| {
+                        let x = x as usize;
+                        single_or_arom(bi)
+                            && aliph(x, 6)
+                            && m.adj[x]
+                                .iter()
+                                .filter(|&&(f, fb)| single_or_arom(fb) && m.z[f as usize] == 9)
+                                .count()
+                                >= 3
+                    });
+                    if s_ok && cf3 {
+                        acid += 1;
+                    }
+                }
+                // amines: single (aliphatic) bonds to sp3 carbons
+                let n_cx4 = m.adj[a].iter().filter(|&&(x, bi)| ord(bi, 1) && cx4(x as usize)).count();
+                if h(a) == 2 && n_cx4 >= 1 {
+                    base += 1; // [$([NH2]-[CX4])]
+                }
+                if h(a) == 1 && n_cx4 >= 2 {
+                    base += 1; // [$([NH](-[CX4])-[CX4])]
+                }
+                if n_cx4 >= 3 {
+                    base += 1; // [$(N(-[CX4])(-[CX4])-[CX4])]
+                }
+                // [$(N=C-N)]
+                if m.adj[a].iter().any(|&(c, bi)| {
+                    let c = c as usize;
+                    ord(bi, 2)
+                        && aliph(c, 6)
+                        && m.adj[c].iter().any(|&(x, cb)| x as usize != a && ord(cb, 1) && aliph(x as usize, 7))
+                }) {
+                    base += 1;
+                }
+                // [$(N-C=N)]
+                if m.adj[a].iter().any(|&(c, bi)| {
+                    let c = c as usize;
+                    ord(bi, 1)
+                        && aliph(c, 6)
+                        && m.adj[c].iter().any(|&(x, cb)| x as usize != a && ord(cb, 2) && aliph(x as usize, 7))
+                }) {
+                    base += 1;
+                }
+            }
+            7 => {
+                // [$(n1nnnc1)]: aromatic n -> n -> n -> n -> c -> back
+                if tetrazole_start(&m, &arom, &single_or_arom, a) {
+                    acid += 1;
+                }
+            }
+            _ => {}
+        }
+    }
+    (acid, base)
+}
+
+/// Whether aromatic N `a` starts a path `n n n n c` closing back to `a`
+/// (CDK SMARTS `n1nnnc1`, implicit bonds = single or aromatic).
+fn tetrazole_start(
+    m: &crate::desc::cdk_daylight::CdkMol,
+    arom: &[bool],
+    bond_ok: &dyn Fn(u32) -> bool,
+    a: usize,
+) -> bool {
+    let is = |x: usize, z: u8| m.z[x] == z && arom[x];
+    for &(b, b1) in &m.adj[a] {
+        let b = b as usize;
+        if !bond_ok(b1) || !is(b, 7) {
+            continue;
+        }
+        for &(c, b2) in &m.adj[b] {
+            let c = c as usize;
+            if c == a || !bond_ok(b2) || !is(c, 7) {
+                continue;
+            }
+            for &(d, b3) in &m.adj[c] {
+                let d = d as usize;
+                if d == a || d == b || !bond_ok(b3) || !is(d, 7) {
+                    continue;
+                }
+                for &(e, b4) in &m.adj[d] {
+                    let e = e as usize;
+                    if e == a || e == b || e == c || !bond_ok(b4) || !is(e, 6) {
+                        continue;
+                    }
+                    if m.adj[e].iter().any(|&(x, b5)| x as usize == a && bond_ok(b5)) {
+                        return true;
+                    }
+                }
+            }
+        }
+    }
+    false
 }
 
 const _: () = {
@@ -366,7 +456,8 @@ mod tests {
     /// Function context: `crates/ferrum_core/src/desc/functional_groups.rs`.
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_acidic_phenol() {
-        assert!(calc_acidic("c1ccc(O)cc1") >= 1);
+        // CDK has no phenol pattern
+        assert_eq!(calc_acidic("c1ccc(O)cc1"), 0);
     }
 
     #[test]

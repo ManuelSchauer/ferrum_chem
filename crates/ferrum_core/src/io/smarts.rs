@@ -44,8 +44,6 @@ use crate::error::{FerrumError, Result};
 use crate::mol::molecule::Molecule;
 use crate::types::BondType;
 use smallvec::SmallVec;
-use std::cell::RefCell;
-use std::collections::HashMap;
 
 /// Query graph for SMARTS pattern matching.
 /// Represents a molecular pattern with flexible matching criteria.
@@ -56,6 +54,46 @@ pub struct QueryGraph {
     pub adjacency: Vec<SmallVec<[u16; 4]>>,
     /// Cached flag: does this pattern use RingSize or RingMembership primitives?
     pub(crate) needs_ring_context: bool,
+    /// Matcher bookkeeping (unique id + lazily compiled search data). Not
+    /// part of the pattern's identity: ignored by `PartialEq`, reset by `Clone`.
+    pub(crate) meta: QueryMeta,
+}
+
+static NEXT_QUERY_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
+/// Per-pattern matcher metadata. The id keys per-molecule caches (recursive
+/// SMARTS results); a fresh id is drawn for every new/cloned graph so a
+/// cache entry can never be confused with a different pattern.
+pub(crate) struct QueryMeta {
+    pub(crate) id: u64,
+    pub(crate) compiled: std::sync::OnceLock<crate::algo::iso::CompiledQuery>,
+}
+
+impl Default for QueryMeta {
+    fn default() -> Self {
+        Self {
+            id: NEXT_QUERY_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+            compiled: std::sync::OnceLock::new(),
+        }
+    }
+}
+
+impl Clone for QueryMeta {
+    fn clone(&self) -> Self {
+        Self::default()
+    }
+}
+
+impl PartialEq for QueryMeta {
+    fn eq(&self, _: &Self) -> bool {
+        true
+    }
+}
+
+impl std::fmt::Debug for QueryMeta {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "QueryMeta({})", self.id)
+    }
 }
 
 /// Bond in query graph (stores connectivity).
@@ -102,11 +140,38 @@ pub enum AtomPrimitive {
     /// Logical AND (all must match)
     And(Vec<AtomPrimitive>),
 
-    /// Hydrogen count [H0], [H1], [H2]
+    /// `H<n>`: total H count including hydrogen-atom neighbours (RDKit `getTotalNumHs(true)`)
     HCount(u8),
 
-    /// Total hydrogen count (explicit + implicit) [h0], [h1]
-    TotalHCount(u8),
+    /// `h<n>`: implicit + explicit H count, excluding H-atom neighbours
+    ImplicitHCount(u8),
+
+    /// bare `h`: at least one implicit/explicit H
+    HasImplicitH,
+
+    /// `<n>` at the start of an atom expression: isotope
+    Isotope(u16),
+
+    /// bare `x`: has at least one ring bond
+    HasRingBond,
+
+    /// `d<n>`: number of non-hydrogen neighbours (D and T count as non-hydrogen)
+    NonHydrogenDegree(u8),
+
+    /// `z<n>`: number of heteroatom (not C, not H) neighbours
+    HeteroNeighbors(u8),
+
+    /// bare `z`
+    HasHeteroNeighbors,
+
+    /// `Z<n>`: number of aliphatic heteroatom neighbours
+    AliphaticHeteroNeighbors(u8),
+
+    /// bare `Z`
+    HasAliphaticHeteroNeighbors,
+
+    /// `^<n>`: hybridization
+    Hybridization(crate::types::Hybridization),
 
     /// Degree (number of explicit connections, no implicit H) [D1], [D2], [D3]
     Degree(u8),
@@ -267,7 +332,7 @@ impl SmartsRingContext {
     ///
     /// Function context: `crates/ferrum_core/src/io/smarts.rs`.
     /// I/O-layer note: parsing/ingestion should surface explicit errors instead of silently repairing malformed input.
-    fn ring_membership(&self, atom_idx: u16) -> u8 {
+    pub(crate) fn ring_membership(&self, atom_idx: u16) -> u8 {
         self.atom_ring_membership[atom_idx as usize]
     }
 
@@ -275,47 +340,8 @@ impl SmartsRingContext {
     ///
     /// Function context: `crates/ferrum_core/src/io/smarts.rs`.
     /// I/O-layer note: parsing/ingestion should surface explicit errors instead of silently repairing malformed input.
-    fn min_ring_size(&self, atom_idx: u16) -> Option<u8> {
+    pub(crate) fn min_ring_size(&self, atom_idx: u16) -> Option<u8> {
         self.atom_ring_sizes[atom_idx as usize].iter().copied().min()
-    }
-}
-
-#[derive(Debug, Default)]
-pub(crate) struct SmartsRecursiveCache {
-    starts_by_pattern: RefCell<HashMap<usize, Vec<bool>>>,
-}
-
-impl SmartsRecursiveCache {
-    /// Implements start atom.
-    ///
-    /// Function context: `crates/ferrum_core/src/io/smarts.rs`.
-    /// I/O-layer note: parsing/ingestion should surface explicit errors instead of silently repairing malformed input.
-    fn matches_start_atom(&self, mol: &Molecule, sub_pattern: &QueryGraph, atom_idx: u16) -> bool {
-        let key = sub_pattern as *const QueryGraph as usize;
-
-        {
-            let starts_by_pattern = self.starts_by_pattern.borrow();
-            if let Some(starts) = starts_by_pattern.get(&key) {
-                return starts.get(atom_idx as usize).copied().unwrap_or(false);
-            }
-        }
-
-        let mut starts = vec![false; mol.num_atoms()];
-        crate::algo::iso::visit_matches(mol, sub_pattern, |mapping| {
-            if let Some(&first) = mapping.first() {
-                starts[first as usize] = true;
-            }
-            true
-        });
-
-        self.starts_by_pattern.borrow_mut().insert(key, starts);
-
-        self.starts_by_pattern
-            .borrow()
-            .get(&key)
-            .and_then(|v| v.get(atom_idx as usize))
-            .copied()
-            .unwrap_or(false)
     }
 }
 
@@ -362,45 +388,63 @@ fn query_atom_needs_ring_context(query_atom: &QueryAtom) -> bool {
         .any(primitive_needs_ring_context)
 }
 
-/// Implements atom matches with context.
-///
-/// Function context: `crates/ferrum_core/src/io/smarts.rs`.
-/// I/O-layer note: parsing/ingestion should surface explicit errors instead of silently repairing malformed input.
+/// Matches a query atom without a shared per-molecule matcher context
+/// (recursive SMARTS are evaluated with a temporary one).
 pub(crate) fn query_atom_matches_with_context(
     query_atom: &QueryAtom,
     mol: &Molecule,
     atom_idx: u16,
     ring_ctx: Option<&SmartsRingContext>,
 ) -> bool {
-    query_atom_matches_with_cache(query_atom, mol, atom_idx, ring_ctx, None)
-}
-
-/// Implements atom matches with cache.
-///
-/// Function context: `crates/ferrum_core/src/io/smarts.rs`.
-/// I/O-layer note: parsing/ingestion should surface explicit errors instead of silently repairing malformed input.
-pub(crate) fn query_atom_matches_with_cache(
-    query_atom: &QueryAtom,
-    mol: &Molecule,
-    atom_idx: u16,
-    ring_ctx: Option<&SmartsRingContext>,
-    recursive_cache: Option<&SmartsRecursiveCache>,
-) -> bool {
     let atom = &mol.atoms[atom_idx as usize];
     query_atom
         .primitives
         .iter()
-        .all(|primitive| match_primitive(primitive, mol, atom_idx, atom, ring_ctx, recursive_cache))
+        .all(|primitive| match_primitive(primitive, mol, atom_idx, atom, ring_ctx, None))
+}
+
+/// Matches a query atom using the shared matcher context of `iso_target`
+/// (lazily built ring context, memoized recursive SMARTS).
+#[inline]
+pub(crate) fn query_atom_matches_target(
+    query_atom: &QueryAtom,
+    iso_target: &crate::algo::iso::IsoTarget,
+    atom_idx: u16,
+) -> bool {
+    let mol = iso_target.target;
+    let atom = &mol.atoms[atom_idx as usize];
+    query_atom
+        .primitives
+        .iter()
+        .all(|primitive| match_primitive(primitive, mol, atom_idx, atom, None, Some(iso_target)))
 }
 
 /// Matches a single atom primitive against a molecule atom.
+#[inline]
+fn neighbors(mol: &Molecule, atom_idx: u16) -> impl Iterator<Item = usize> + '_ {
+    mol.adjacency[atom_idx as usize].iter().map(move |&b| {
+        let bond = &mol.bonds[b as usize];
+        if bond.source == atom_idx { bond.target as usize } else { bond.source as usize }
+    })
+}
+
+/// RDKit `queryAtomNumHeteroatomNbrs` / `queryAtomNumAliphaticHeteroatomNbrs`.
+fn hetero_neighbors(mol: &Molecule, atom_idx: u16, aliphatic_only: bool) -> usize {
+    neighbors(mol, atom_idx)
+        .filter(|&o| {
+            let a = &mol.atoms[o];
+            a.atomic_number != 6 && a.atomic_number != 1 && !(aliphatic_only && a.is_aromatic())
+        })
+        .count()
+}
+
 fn match_primitive(
     primitive: &AtomPrimitive,
     mol: &Molecule,
     atom_idx: u16,
     atom: &crate::mol::atom::Atom,
     ring_ctx: Option<&SmartsRingContext>,
-    recursive_cache: Option<&SmartsRecursiveCache>,
+    iso_target: Option<&crate::algo::iso::IsoTarget>,
 ) -> bool {
     match primitive {
         AtomPrimitive::Element(z) => atom.atomic_number == *z,
@@ -416,23 +460,70 @@ fn match_primitive(
         AtomPrimitive::Aliphatic(z) => atom.atomic_number == *z && !atom.is_aromatic(),
 
         AtomPrimitive::Not(inner) => {
-            !match_primitive(inner, mol, atom_idx, atom, ring_ctx, recursive_cache)
+            !match_primitive(inner, mol, atom_idx, atom, ring_ctx, iso_target)
         }
 
         AtomPrimitive::Or(options) => options
             .iter()
-            .any(|p| match_primitive(p, mol, atom_idx, atom, ring_ctx, recursive_cache)),
+            .any(|p| match_primitive(p, mol, atom_idx, atom, ring_ctx, iso_target)),
 
         AtomPrimitive::And(requirements) => requirements
             .iter()
-            .all(|p| match_primitive(p, mol, atom_idx, atom, ring_ctx, recursive_cache)),
+            .all(|p| match_primitive(p, mol, atom_idx, atom, ring_ctx, iso_target)),
 
         AtomPrimitive::HCount(n) => {
-            // In SMARTS, H without explicit/implicit distinction means total H count
-            atom.total_h() == *n
+            // RDKit getTotalNumHs(true): includes hydrogen-atom neighbours
+            let h_nbrs = match iso_target {
+                Some(it) => it.topo().inv(mol)[atom_idx as usize].h_neighbours as usize,
+                None => neighbors(mol, atom_idx).filter(|&o| mol.atoms[o].atomic_number == 1).count(),
+            };
+            atom.total_h() as usize + h_nbrs == *n as usize
         }
 
-        AtomPrimitive::TotalHCount(n) => atom.total_h() == *n,
+        AtomPrimitive::ImplicitHCount(n) => atom.total_h() == *n,
+
+        AtomPrimitive::HasImplicitH => atom.total_h() > 0,
+
+        AtomPrimitive::Isotope(iso) => atom.isotope == *iso,
+
+        AtomPrimitive::HasRingBond => match iso_target {
+            Some(it) => it.topo().inv(mol)[atom_idx as usize].ring_bonds > 0,
+            None => mol.adjacency[atom_idx as usize]
+                .iter()
+                .any(|&b| mol.bonds[b as usize].is_in_ring()),
+        },
+
+        AtomPrimitive::NonHydrogenDegree(n) => match iso_target {
+            Some(it) => it.topo().inv(mol)[atom_idx as usize].non_h_degree == *n,
+            None => {
+                neighbors(mol, atom_idx)
+                    .filter(|&o| mol.atoms[o].atomic_number != 1 || mol.atoms[o].isotope != 0)
+                    .count()
+                    == *n as usize
+            }
+        },
+
+        AtomPrimitive::HeteroNeighbors(n) => match iso_target {
+            Some(it) => it.topo().inv(mol)[atom_idx as usize].hetero == *n,
+            None => hetero_neighbors(mol, atom_idx, false) == *n as usize,
+        },
+
+        AtomPrimitive::HasHeteroNeighbors => match iso_target {
+            Some(it) => it.topo().inv(mol)[atom_idx as usize].hetero > 0,
+            None => hetero_neighbors(mol, atom_idx, false) > 0,
+        },
+
+        AtomPrimitive::AliphaticHeteroNeighbors(n) => match iso_target {
+            Some(it) => it.topo().inv(mol)[atom_idx as usize].aliphatic_hetero == *n,
+            None => hetero_neighbors(mol, atom_idx, true) == *n as usize,
+        },
+
+        AtomPrimitive::HasAliphaticHeteroNeighbors => match iso_target {
+            Some(it) => it.topo().inv(mol)[atom_idx as usize].aliphatic_hetero > 0,
+            None => hetero_neighbors(mol, atom_idx, true) > 0,
+        },
+
+        AtomPrimitive::Hybridization(h) => atom.hybridization == *h,
 
         AtomPrimitive::Degree(n) => {
             // D = explicit degree (connected atoms, no implicit H)
@@ -455,74 +546,61 @@ fn match_primitive(
             if !atom.is_in_ring() {
                 return false;
             }
-            ring_ctx.is_some_and(|ctx| ctx.min_ring_size(atom_idx) == Some(*size))
+            match (ring_ctx, iso_target) {
+                (Some(ctx), _) => ctx.min_ring_size(atom_idx) == Some(*size),
+                (None, Some(it)) => it.get_ring_ctx().min_ring_size(atom_idx) == Some(*size),
+                (None, None) => false,
+            }
         }
 
-        AtomPrimitive::RingMembership(count) => {
-            ring_ctx.is_some_and(|ctx| ctx.ring_membership(atom_idx) == *count)
-        }
+        AtomPrimitive::RingMembership(count) => match (ring_ctx, iso_target) {
+            (Some(ctx), _) => ctx.ring_membership(atom_idx) == *count,
+            (None, Some(it)) => it.get_ring_ctx().ring_membership(atom_idx) == *count,
+            (None, None) => false,
+        },
 
         AtomPrimitive::Valence(v) => {
-            // Calculate valence: sum of bond orders + implicit hydrogens
-            // Use half-integer math (multiply by 2) to handle aromatic bonds (1.5)
-            let mut valence_x2 = 0u16;
+            // RDKit getTotalValence (incl. its rounding rules for aromatic atoms)
+            let valence = match iso_target {
+                Some(it) => it.topo().total_valence(mol, atom_idx as usize),
+                None => crate::algo::sanitize::total_valence(mol, atom_idx as usize),
+            };
+            valence == *v as i32
+        }
 
-            for &bond_idx in &mol.adjacency[atom_idx as usize] {
-                let bond = &mol.bonds[bond_idx as usize];
-                valence_x2 += match bond.bond_type {
-                    crate::types::BondType::Single => 2,
-                    crate::types::BondType::Double => 4,
-                    crate::types::BondType::Triple => 6,
-                    crate::types::BondType::Aromatic => 3, // 1.5 * 2
-                    crate::types::BondType::Dative => {
-                        // Dative: contributes 0 to donor (source), 1 to acceptor (target)
-                        if bond.target == atom_idx { 2 } else { 0 }
-                    }
-                    crate::types::BondType::Unknown => 2,
-                };
+        AtomPrimitive::RingBonds(n) => match iso_target {
+            Some(it) => it.topo().inv(mol)[atom_idx as usize].ring_bonds == *n,
+            None => {
+                // Count bonds connected to this atom that are in rings
+                let ring_bond_count = mol.adjacency[atom_idx as usize]
+                    .iter()
+                    .filter(|&&bond_idx| mol.bonds[bond_idx as usize].is_in_ring())
+                    .count();
+                ring_bond_count == *n as usize
             }
-
-            // Add hydrogens (implicit + explicit)
-            valence_x2 += (atom.total_h() as u16) * 2;
-
-            // Round to nearest integer valence
-            let valence = ((valence_x2 + 1) / 2) as u8;
-            valence == *v
-        }
-
-        AtomPrimitive::RingBonds(n) => {
-            // Count bonds connected to this atom that are in rings
-            let ring_bond_count = mol.adjacency[atom_idx as usize]
-                .iter()
-                .filter(|&&bond_idx| mol.bonds[bond_idx as usize].is_in_ring())
-                .count();
-
-            ring_bond_count == *n as usize
-        }
+        },
 
         AtomPrimitive::Recursive(sub_pattern) => {
             // Recursive SMARTS: atom matches if it can be the first atom
             // of a match of the sub-pattern
-            use crate::algo::iso::visit_matches;
-
             if sub_pattern.atoms.is_empty() {
                 return true; // Empty pattern always matches
             }
-
-            if let Some(cache) = recursive_cache {
-                return cache.matches_start_atom(mol, sub_pattern, atom_idx);
+            if sub_pattern.atoms.len() == 1 && sub_pattern.bonds.is_empty() {
+                // a single-atom sub-pattern matches exactly the atoms its atom matches
+                return sub_pattern.atoms[0]
+                    .primitives
+                    .iter()
+                    .all(|p| match_primitive(p, mol, atom_idx, atom, ring_ctx, iso_target));
             }
-
-            let mut found = false;
-            visit_matches(mol, sub_pattern, |m| {
-                if !m.is_empty() && m[0] == atom_idx {
-                    found = true;
-                    false
-                } else {
-                    true
-                }
-            });
-            found
+            match iso_target {
+                Some(it) => crate::algo::iso::recursive_start_matches(it, sub_pattern, atom_idx),
+                None => crate::algo::iso::recursive_start_matches(
+                    &crate::algo::iso::IsoTarget::new(mol),
+                    sub_pattern,
+                    atom_idx,
+                ),
+            }
         }
     }
 }
@@ -531,64 +609,38 @@ impl QueryBond {
     /// Checks if this query bond matches a molecule bond.
     pub fn matches(&self, mol: &Molecule, bond_idx: u16) -> bool {
         let bond = &mol.bonds[bond_idx as usize];
+        self.matches_props(bond.bond_type, bond.is_in_ring())
+    }
 
+    /// Bond queries only look at the bond type and the ring flag.
+    pub(crate) fn matches_props(&self, bond_type: BondType, in_ring: bool) -> bool {
         match self {
             QueryBond::Any => true,
 
-            QueryBond::Single => bond.bond_type == BondType::Single,
+            QueryBond::Single => bond_type == BondType::Single,
 
-            QueryBond::Double => bond.bond_type == BondType::Double,
+            QueryBond::Double => bond_type == BondType::Double,
 
-            QueryBond::Triple => bond.bond_type == BondType::Triple,
+            QueryBond::Triple => bond_type == BondType::Triple,
 
-            QueryBond::Aromatic => bond.bond_type == BondType::Aromatic,
+            QueryBond::Aromatic => bond_type == BondType::Aromatic,
 
             QueryBond::SingleOrAromatic => {
-                bond.bond_type == BondType::Single || bond.bond_type == BondType::Aromatic
+                bond_type == BondType::Single || bond_type == BondType::Aromatic
             }
 
             QueryBond::DoubleOrAromatic => {
-                bond.bond_type == BondType::Double || bond.bond_type == BondType::Aromatic
+                bond_type == BondType::Double || bond_type == BondType::Aromatic
             }
 
-            QueryBond::Ring => bond.is_in_ring(),
+            QueryBond::Ring => in_ring,
 
-            QueryBond::Not(inner) => !inner.matches(mol, bond_idx),
+            QueryBond::Not(inner) => !inner.matches_props(bond_type, in_ring),
 
-            QueryBond::And(bonds) => bonds.iter().all(|b| b.matches(mol, bond_idx)),
+            QueryBond::And(bonds) => bonds.iter().all(|b| b.matches_props(bond_type, in_ring)),
 
-            QueryBond::Or(bonds) => bonds.iter().any(|b| b.matches(mol, bond_idx)),
+            QueryBond::Or(bonds) => bonds.iter().any(|b| b.matches_props(bond_type, in_ring)),
         }
-    }
-}
-
-/// Implements bond query and.
-///
-/// Function context: `crates/ferrum_core/src/io/smarts.rs`.
-/// I/O-layer note: parsing/ingestion should surface explicit errors instead of silently repairing malformed input.
-fn merge_bond_query_and(current: Option<QueryBond>, next: QueryBond) -> QueryBond {
-    match current {
-        Some(QueryBond::And(mut bonds)) => {
-            bonds.push(next);
-            QueryBond::And(bonds)
-        }
-        Some(prev) => QueryBond::And(vec![prev, next]),
-        None => next,
-    }
-}
-
-/// Implements bond query or.
-///
-/// Function context: `crates/ferrum_core/src/io/smarts.rs`.
-/// I/O-layer note: parsing/ingestion should surface explicit errors instead of silently repairing malformed input.
-fn merge_bond_query_or(current: Option<QueryBond>, next: QueryBond) -> QueryBond {
-    match current {
-        Some(QueryBond::Or(mut bonds)) => {
-            bonds.push(next);
-            QueryBond::Or(bonds)
-        }
-        Some(prev) => QueryBond::Or(vec![prev, next]),
-        None => next,
     }
 }
 
@@ -601,6 +653,8 @@ fn merge_bond_query_or(current: Option<QueryBond>, next: QueryBond) -> QueryBond
 /// let pattern = parse_smarts("[N,O]")?;  // Matches N or O
 /// ```
 pub fn parse_smarts(smarts: &str) -> Result<QueryGraph> {
+    // Like RDKit, everything after the first whitespace is a name, not SMARTS.
+    let smarts = smarts.trim_start().split_whitespace().next().unwrap_or("");
     let mut parser = SmartsParser::new(smarts);
     parser
         .parse()
@@ -617,14 +671,16 @@ struct SmartsParser {
     atoms: Vec<QueryAtom>,
     bonds: Vec<QueryGraphBond>,
     adjacency: Vec<SmallVec<[u16; 4]>>,
-    ring_closures: [Option<(u16, Option<QueryBond>)>; 10],
+    ring_closures: std::collections::BTreeMap<u32, (u16, Option<QueryBond>)>,
+}
+
+/// Bracket-atom symbols that are restricted to aliphatic atoms (RDKit
+/// `ORGANIC_ATOM_TOKEN`); every other uppercase symbol is an atomic-number query.
+fn is_organic_aliphatic(z: u8) -> bool {
+    matches!(z, 5 | 6 | 7 | 8 | 9 | 15 | 16 | 17 | 35 | 53)
 }
 
 impl SmartsParser {
-    /// Creates a new value with the defaults and invariants required by this module.
-    ///
-    /// Function context: `crates/ferrum_core/src/io/smarts.rs`.
-    /// I/O-layer note: parsing/ingestion should surface explicit errors instead of silently repairing malformed input.
     fn new(input: &str) -> Self {
         Self {
             input: input.chars().collect(),
@@ -632,864 +688,584 @@ impl SmartsParser {
             atoms: Vec::new(),
             bonds: Vec::new(),
             adjacency: Vec::new(),
-            ring_closures: [const { None }; 10],
+            ring_closures: std::collections::BTreeMap::new(),
         }
     }
 
-    /// Parses the behavior encoded by this function.
-    ///
-    /// Function context: `crates/ferrum_core/src/io/smarts.rs`.
-    /// I/O-layer note: parsing/ingestion should surface explicit errors instead of silently repairing malformed input.
     fn parse(&mut self) -> std::result::Result<QueryGraph, String> {
-        if self.input.is_empty() {
-            return Ok(QueryGraph {
-                atoms: vec![],
-                bonds: vec![],
-                adjacency: vec![],
-                needs_ring_context: false,
-            });
+        if !self.input.is_empty() {
+            self.parse_chain()?;
         }
-
-        self.parse_chain()?;
-
-        // Check for unclosed ring closures
-        if self.ring_closures.iter().any(|r| r.is_some()) {
-            return Err(format!("Unclosed ring closures"));
+        if !self.ring_closures.is_empty() {
+            return Err("Unclosed ring closures".to_string());
         }
-
         let needs_ring_ctx = compute_needs_ring_context(&self.atoms);
         Ok(QueryGraph {
-            atoms: self.atoms.clone(),
-            bonds: self.bonds.clone(),
-            adjacency: self.adjacency.clone(),
+            atoms: std::mem::take(&mut self.atoms),
+            bonds: std::mem::take(&mut self.bonds),
+            adjacency: std::mem::take(&mut self.adjacency),
             needs_ring_context: needs_ring_ctx,
+            meta: QueryMeta::default(),
         })
     }
 
-    /// Parses chain.
-    ///
-    /// Function context: `crates/ferrum_core/src/io/smarts.rs`.
-    /// I/O-layer note: parsing/ingestion should surface explicit errors instead of silently repairing malformed input.
+    fn peek(&self) -> Option<char> {
+        self.input.get(self.pos).copied()
+    }
+
+    fn peek_at(&self, offset: usize) -> Option<char> {
+        self.input.get(self.pos + offset).copied()
+    }
+
+    /// Multi-digit unsigned number.
+    fn parse_number(&mut self) -> Option<u32> {
+        let start = self.pos;
+        let mut value: u32 = 0;
+        while let Some(c) = self.peek() {
+            let Some(d) = c.to_digit(10) else { break };
+            value = value.saturating_mul(10).saturating_add(d);
+            self.pos += 1;
+        }
+        (self.pos > start).then_some(value)
+    }
+
+    fn parse_count(&mut self) -> u8 {
+        self.parse_number().map(|n| n.min(255) as u8).unwrap_or(1)
+    }
+
+    // ----------------------------------------------------------------- chain
+
     fn parse_chain(&mut self) -> std::result::Result<(), String> {
-        let mut prev_atom_idx: Option<u16> = None;
-        let mut bond_type: Option<QueryBond> = None;
-        let mut branch_stack: SmallVec<[u16; 16]> = SmallVec::new(); // Stack for handling branches
+        let mut prev: Option<u16> = None;
+        let mut pending: Option<QueryBond> = None;
+        let mut branch_stack: Vec<Option<u16>> = Vec::new();
 
-        while self.pos < self.input.len() {
-            let ch = self.input[self.pos];
-
-            // Check for ring closure digits BEFORE matching other characters
-            // Ring closures can appear after atoms OR after bonds
-            if ch.is_ascii_digit() && prev_atom_idx.is_some() {
-                self.parse_ring_closures(prev_atom_idx.ok_or("Ring closure before any atom")?, &mut bond_type)?;
-                continue; // Skip to next iteration
-            }
-
-            match ch {
-                '!' => {
-                    // Negation operator for bonds: !@, !:, !-, etc.
-                    self.pos += 1;
-                    if self.pos >= self.input.len() {
-                        return Err("Expected bond type after !".to_string());
+        while let Some(c) = self.peek() {
+            match c {
+                '(' => {
+                    if prev.is_none() {
+                        return Err("Branch without preceding atom".to_string());
                     }
-                    let next_ch = self.input[self.pos];
-                    let next_bond = match next_ch {
-                        '@' => {
-                            self.pos += 1;
-                            QueryBond::Not(Box::new(QueryBond::Ring))
-                        }
-                        ':' => {
-                            self.pos += 1;
-                            QueryBond::Not(Box::new(QueryBond::Aromatic))
-                        }
-                        '-' => {
-                            self.pos += 1;
-                            QueryBond::Not(Box::new(QueryBond::Single))
-                        }
-                        '=' => {
-                            self.pos += 1;
-                            QueryBond::Not(Box::new(QueryBond::Double))
-                        }
-                        '#' => {
-                            self.pos += 1;
-                            QueryBond::Not(Box::new(QueryBond::Triple))
-                        }
-                        _ => return Err(format!("Invalid bond negation: !{}", next_ch)),
-                    };
-                    bond_type = Some(merge_bond_query_and(bond_type.take(), next_bond));
-                }
-                ';' => {
-                    // AND operator for bonds: =;@ means Double AND Ring
+                    branch_stack.push(prev);
                     self.pos += 1;
-                    // Parse next bond and combine with previous
-                    if bond_type.is_some() {
-                        // Parse next bond type
-                        if self.pos < self.input.len() {
-                            let next_bond = match self.input[self.pos] {
-                                '@' => {
-                                    self.pos += 1;
-                                    QueryBond::Ring
-                                }
-                                ':' => {
-                                    self.pos += 1;
-                                    QueryBond::Aromatic
-                                }
-                                '-' => {
-                                    self.pos += 1;
-                                    QueryBond::Single
-                                }
-                                '=' => {
-                                    self.pos += 1;
-                                    QueryBond::Double
-                                }
-                                '#' => {
-                                    self.pos += 1;
-                                    QueryBond::Triple
-                                }
-                                '~' => {
-                                    self.pos += 1;
-                                    QueryBond::Any
-                                }
-                                c => return Err(format!("Invalid bond after ;: {}", c)),
-                            };
-                            bond_type = Some(merge_bond_query_and(bond_type.take(), next_bond));
-                        }
+                }
+                ')' => {
+                    if pending.is_some() {
+                        return Err("Bond without following atom before ')'".to_string());
                     }
-                }
-                ',' if bond_type.is_some() => {
-                    // OR operator for bonds: =,: means Double OR Aromatic
-                    self.pos += 1;
-                    if bond_type.is_some() {
-                        if self.pos < self.input.len() {
-                            let next_bond = match self.input[self.pos] {
-                                '@' => {
-                                    self.pos += 1;
-                                    QueryBond::Ring
-                                }
-                                ':' => {
-                                    self.pos += 1;
-                                    QueryBond::Aromatic
-                                }
-                                '-' => {
-                                    self.pos += 1;
-                                    QueryBond::Single
-                                }
-                                '=' => {
-                                    self.pos += 1;
-                                    QueryBond::Double
-                                }
-                                '#' => {
-                                    self.pos += 1;
-                                    QueryBond::Triple
-                                }
-                                '~' => {
-                                    self.pos += 1;
-                                    QueryBond::Any
-                                }
-                                c => return Err(format!("Invalid bond after ,: {}", c)),
-                            };
-                            bond_type = Some(merge_bond_query_or(bond_type.take(), next_bond));
-                        }
-                    }
-                }
-                '@' => {
-                    bond_type = Some(merge_bond_query_and(bond_type.take(), QueryBond::Ring));
-                    self.pos += 1;
-                }
-                '-' => {
-                    bond_type = Some(merge_bond_query_and(bond_type.take(), QueryBond::Single));
-                    self.pos += 1;
-                }
-                '=' => {
-                    bond_type = Some(merge_bond_query_and(bond_type.take(), QueryBond::Double));
-                    self.pos += 1;
-                }
-                '#' => {
-                    bond_type = Some(merge_bond_query_and(bond_type.take(), QueryBond::Triple));
-                    self.pos += 1;
-                }
-                ':' => {
-                    bond_type = Some(merge_bond_query_and(bond_type.take(), QueryBond::Aromatic));
-                    self.pos += 1;
-                }
-                '~' => {
-                    bond_type = Some(merge_bond_query_and(bond_type.take(), QueryBond::Any));
+                    prev = branch_stack.pop().ok_or("Unmatched ')'")?;
                     self.pos += 1;
                 }
                 '.' => {
+                    if pending.is_some() {
+                        return Err("Bond before '.'".to_string());
+                    }
+                    prev = None;
                     self.pos += 1;
-                    prev_atom_idx = None;
-                    bond_type = None;
                 }
-
-                '[' => {
-                    let atom = self.parse_bracket_atom()?;
-                    let atom_idx = self.add_atom(atom);
-
-                    if let Some(prev_idx) = prev_atom_idx {
-                        self.add_bond(
-                            prev_idx,
-                            atom_idx,
-                            bond_type.unwrap_or(QueryBond::SingleOrAromatic),
-                        );
+                '-' | '=' | '#' | ':' | '~' | '@' | '/' | '\\' | '!' => {
+                    if prev.is_none() {
+                        return Err(format!("Bond '{}' without preceding atom", c));
                     }
-
-                    prev_atom_idx = Some(atom_idx);
-                    bond_type = None;
-                    self.parse_ring_closures(atom_idx, &mut bond_type)?;
-                }
-
-                'C' | 'N' | 'O' | 'S' | 'P' | 'F' | 'B' | 'I' | 'c' | 'n' | 'o' | 's' | 'p' => {
-                    let (atom, consumed) = self.parse_organic_atom()?;
-                    let atom_idx = self.add_atom(atom);
-
-                    if let Some(prev_idx) = prev_atom_idx {
-                        self.add_bond(
-                            prev_idx,
-                            atom_idx,
-                            bond_type.unwrap_or(QueryBond::SingleOrAromatic),
-                        );
+                    if pending.is_some() {
+                        return Err("Two bonds in a row".to_string());
                     }
-
-                    prev_atom_idx = Some(atom_idx);
-                    bond_type = None;
-                    self.pos += consumed;
-                    self.parse_ring_closures(atom_idx, &mut bond_type)?;
+                    pending = Some(self.parse_bond_low()?);
                 }
-
-                '*' => {
-                    let atom = QueryAtom::any();
-                    let atom_idx = self.add_atom(atom);
-
-                    if let Some(prev_idx) = prev_atom_idx {
-                        self.add_bond(
-                            prev_idx,
-                            atom_idx,
-                            bond_type.unwrap_or(QueryBond::SingleOrAromatic),
-                        );
-                    }
-
-                    prev_atom_idx = Some(atom_idx);
-                    bond_type = None;
-                    self.pos += 1;
-                    // Ring closures are now handled at the top of the loop
+                '0'..='9' | '%' => {
+                    let atom = prev.ok_or("Ring closure before any atom")?;
+                    let num = self.parse_ring_number()?;
+                    self.handle_ring_closure(atom, num, pending.take());
                 }
-
-                'a' => {
-                    // Lowercase 'a' outside brackets = any aromatic atom
-                    let atom = QueryAtom {
-                        primitives: vec![AtomPrimitive::AnyAromatic],
-                    };
-                    let atom_idx = self.add_atom(atom);
-
-                    if let Some(prev_idx) = prev_atom_idx {
-                        self.add_bond(
-                            prev_idx,
-                            atom_idx,
-                            bond_type.unwrap_or(QueryBond::SingleOrAromatic),
-                        );
-                    }
-
-                    prev_atom_idx = Some(atom_idx);
-                    bond_type = None;
-                    self.pos += 1;
-                    self.parse_ring_closures(atom_idx, &mut bond_type)?;
-                }
-
-                'A' => {
-                    // Uppercase 'A' outside brackets = any aliphatic atom
-                    let atom = QueryAtom {
-                        primitives: vec![AtomPrimitive::AnyAliphatic],
-                    };
-                    let atom_idx = self.add_atom(atom);
-
-                    if let Some(prev_idx) = prev_atom_idx {
-                        self.add_bond(
-                            prev_idx,
-                            atom_idx,
-                            bond_type.unwrap_or(QueryBond::SingleOrAromatic),
-                        );
-                    }
-
-                    prev_atom_idx = Some(atom_idx);
-                    bond_type = None;
-                    self.pos += 1;
-                    self.parse_ring_closures(atom_idx, &mut bond_type)?;
-                }
-
-                '(' => {
-                    // Start of branch - save current position to stack
-                    self.pos += 1;
-                    if let Some(current_idx) = prev_atom_idx {
-                        branch_stack.push(current_idx);
-                    } else {
-                        return Err("Branch at start of pattern".to_string());
-                    }
-                    // The next atom will be bonded to the current atom
-                    // prev_atom_idx stays the same (branch point)
-                }
-
-                ')' => {
-                    // End of branch - restore previous atom from stack
-                    self.pos += 1;
-                    if let Some(branch_point) = branch_stack.pop() {
-                        prev_atom_idx = Some(branch_point);
-                        bond_type = None;
-                    } else {
-                        return Err("Unmatched closing parenthesis".to_string());
-                    }
-                }
-
                 _ => {
-                    return Err(format!("Unexpected character '{}'", ch));
+                    let atom = self.parse_atom()?;
+                    let idx = self.add_atom(atom);
+                    match prev {
+                        Some(p) => {
+                            let bond = pending.take().unwrap_or(QueryBond::SingleOrAromatic);
+                            self.add_bond(p, idx, bond);
+                        }
+                        None if pending.is_some() => {
+                            return Err("Bond without preceding atom".to_string());
+                        }
+                        None => {}
+                    }
+                    prev = Some(idx);
                 }
             }
         }
-
-        // Check for unclosed branches
         if !branch_stack.is_empty() {
-            return Err(format!("Unclosed branch parentheses"));
+            return Err("Unclosed branch".to_string());
         }
-
+        if pending.is_some() {
+            return Err("Dangling bond at end of SMARTS".to_string());
+        }
         Ok(())
     }
 
-    /// Parses bracket atom.
-    ///
-    /// Function context: `crates/ferrum_core/src/io/smarts.rs`.
-    /// I/O-layer note: parsing/ingestion should surface explicit errors instead of silently repairing malformed input.
+    fn parse_ring_number(&mut self) -> std::result::Result<u32, String> {
+        match self.peek() {
+            Some('%') => {
+                self.pos += 1;
+                if self.peek() == Some('(') {
+                    self.pos += 1;
+                    let n = self.parse_number().ok_or("Expected number in %(...)")?;
+                    if self.peek() != Some(')') {
+                        return Err("Unclosed %(...) ring closure".to_string());
+                    }
+                    self.pos += 1;
+                    Ok(n)
+                } else {
+                    let d1 = self.peek().and_then(|c| c.to_digit(10)).ok_or("Expected two digits after %")?;
+                    let d2 = self.peek_at(1).and_then(|c| c.to_digit(10)).ok_or("Expected two digits after %")?;
+                    self.pos += 2;
+                    Ok(d1 * 10 + d2)
+                }
+            }
+            Some(c) if c.is_ascii_digit() => {
+                self.pos += 1;
+                Ok(c.to_digit(10).unwrap())
+            }
+            _ => Err("Expected ring closure number".to_string()),
+        }
+    }
+
+    fn handle_ring_closure(&mut self, atom: u16, num: u32, bond: Option<QueryBond>) {
+        if let Some((open_atom, open_bond)) = self.ring_closures.remove(&num) {
+            let query = bond.or(open_bond).unwrap_or(QueryBond::SingleOrAromatic);
+            self.add_bond(open_atom, atom, query);
+        } else {
+            self.ring_closures.insert(num, (atom, bond));
+        }
+    }
+
+    // ----------------------------------------------------------------- bonds
+    // Precedence (lowest to highest): `;`, `,`, `&`/implicit, `!`.
+
+    fn is_bond_primitive_start(c: char) -> bool {
+        matches!(c, '-' | '=' | '#' | ':' | '~' | '@' | '/' | '\\' | '!')
+    }
+
+    fn parse_bond_low(&mut self) -> std::result::Result<QueryBond, String> {
+        let mut terms = vec![self.parse_bond_or()?];
+        while self.peek() == Some(';') {
+            self.pos += 1;
+            terms.push(self.parse_bond_or()?);
+        }
+        Ok(if terms.len() == 1 { terms.pop().unwrap() } else { QueryBond::And(terms) })
+    }
+
+    fn parse_bond_or(&mut self) -> std::result::Result<QueryBond, String> {
+        let mut terms = vec![self.parse_bond_and()?];
+        while self.peek() == Some(',') {
+            self.pos += 1;
+            terms.push(self.parse_bond_and()?);
+        }
+        Ok(if terms.len() == 1 { terms.pop().unwrap() } else { QueryBond::Or(terms) })
+    }
+
+    fn parse_bond_and(&mut self) -> std::result::Result<QueryBond, String> {
+        let mut terms = vec![self.parse_bond_unary()?];
+        loop {
+            match self.peek() {
+                Some('&') => {
+                    self.pos += 1;
+                    terms.push(self.parse_bond_unary()?);
+                }
+                Some(c) if Self::is_bond_primitive_start(c) => terms.push(self.parse_bond_unary()?),
+                _ => break,
+            }
+        }
+        Ok(if terms.len() == 1 { terms.pop().unwrap() } else { QueryBond::And(terms) })
+    }
+
+    fn parse_bond_unary(&mut self) -> std::result::Result<QueryBond, String> {
+        let c = self.peek().ok_or("Expected bond")?;
+        self.pos += 1;
+        Ok(match c {
+            '!' => QueryBond::Not(Box::new(self.parse_bond_unary()?)),
+            '-' => QueryBond::Single,
+            '=' => QueryBond::Double,
+            '#' => QueryBond::Triple,
+            ':' => QueryBond::Aromatic,
+            '~' => QueryBond::Any,
+            '@' => QueryBond::Ring,
+            // directional single bonds; double-bond stereo is not matched
+            '/' | '\\' => QueryBond::Single,
+            other => return Err(format!("Invalid bond primitive '{}'", other)),
+        })
+    }
+
+    // ----------------------------------------------------------------- atoms
+
+    fn parse_atom(&mut self) -> std::result::Result<QueryAtom, String> {
+        let c = self.peek().ok_or("Expected atom")?;
+        let prim = match c {
+            '[' => return self.parse_bracket_atom(),
+            '*' => {
+                self.pos += 1;
+                AtomPrimitive::AnyAtom
+            }
+            'a' => {
+                self.pos += 1;
+                AtomPrimitive::AnyAromatic
+            }
+            'A' => {
+                self.pos += 1;
+                AtomPrimitive::AnyAliphatic
+            }
+            'C' if self.peek_at(1) == Some('l') => {
+                self.pos += 2;
+                AtomPrimitive::Aliphatic(17)
+            }
+            'B' if self.peek_at(1) == Some('r') => {
+                self.pos += 2;
+                AtomPrimitive::Aliphatic(35)
+            }
+            'B' | 'C' | 'N' | 'O' | 'P' | 'S' | 'F' | 'I' => {
+                self.pos += 1;
+                let z = match c {
+                    'B' => 5,
+                    'C' => 6,
+                    'N' => 7,
+                    'O' => 8,
+                    'P' => 15,
+                    'S' => 16,
+                    'F' => 9,
+                    _ => 53,
+                };
+                AtomPrimitive::Aliphatic(z)
+            }
+            'b' | 'c' | 'n' | 'o' | 'p' | 's' => {
+                self.pos += 1;
+                let z = match c {
+                    'b' => 5,
+                    'c' => 6,
+                    'n' => 7,
+                    'o' => 8,
+                    'p' => 15,
+                    _ => 16,
+                };
+                AtomPrimitive::Aromatic(z)
+            }
+            other => return Err(format!("Unexpected character '{}' at position {}", other, self.pos)),
+        };
+        Ok(QueryAtom { primitives: vec![prim] })
+    }
+
     fn parse_bracket_atom(&mut self) -> std::result::Result<QueryAtom, String> {
-        self.pos += 1; // Skip '['
-
-        // Parse the full bracket expression with logical operators
-        let primitives = self.parse_bracket_expression()?;
-
+        self.pos += 1; // '['
+        if let Some(atom) = self.try_parse_hydrogen_atom() {
+            return Ok(atom);
+        }
+        let expr = self.parse_atom_low()?;
         if self.peek() != Some(']') {
             return Err("Missing ]".to_string());
         }
         self.pos += 1;
-
-        Ok(QueryAtom { primitives })
+        Ok(QueryAtom { primitives: vec![expr] })
     }
 
-    /// Parse bracket expression with support for logical operators (,=OR ;=AND !=NOT)
-    fn parse_bracket_expression(&mut self) -> std::result::Result<Vec<AtomPrimitive>, String> {
-        // SMARTS bracket atom precedence (highest to lowest):
-        // 1. Implicit/`&` AND: [OH], [O&H1] = O AND H1
-        // 2. Comma (OR): [O,S] = O OR S
-        // 3. Semicolon (low-precedence AND): [O,S;H1] = (O OR S) AND H1
-        //
-        // Strategy: collect `;`-separated AND terms.
-        // Each AND term is a `,`-separated OR of implicit/`&`-AND groups.
-        let mut semi_groups: Vec<AtomPrimitive> = Vec::new();
-
-        loop {
-            // Parse one `;`-segment: comma-separated OR of implicit-AND groups
-            let or_prim = self.parse_comma_or_group()?;
-            semi_groups.push(or_prim);
-
-            match self.peek() {
-                Some(';') => {
-                    self.pos += 1;
-                    continue;
-                }
-                _ => break,
+    /// RDKit `hydrogen_atom`: `[H]`, `[2H]`, `[H+]`, `[2H-]`, `[H:1]` denote a
+    /// hydrogen *atom*, not an H-count query.
+    fn try_parse_hydrogen_atom(&mut self) -> Option<QueryAtom> {
+        let save = self.pos;
+        let isotope = self.parse_number();
+        if self.peek() != Some('H') {
+            self.pos = save;
+            return None;
+        }
+        self.pos += 1;
+        let charge = match self.peek() {
+            Some('+') | Some('-') => Some(self.parse_charge()),
+            _ => None,
+        };
+        if self.peek() == Some(':') {
+            self.pos += 1;
+            if self.parse_number().is_none() {
+                self.pos = save;
+                return None;
             }
         }
-
-        if semi_groups.is_empty() {
-            Ok(vec![AtomPrimitive::AnyAtom])
-        } else if semi_groups.len() == 1 {
-            Ok(vec![semi_groups.into_iter().next().ok_or("Empty semi group")?])
-        } else {
-            Ok(vec![AtomPrimitive::And(semi_groups)])
+        if self.peek() != Some(']') {
+            self.pos = save;
+            return None;
         }
+        self.pos += 1;
+        let mut prims = vec![AtomPrimitive::Element(1)];
+        if let Some(iso) = isotope {
+            prims.push(AtomPrimitive::Isotope(iso.min(u16::MAX as u32) as u16));
+        }
+        if let Some(c) = charge {
+            prims.push(AtomPrimitive::Charge(c));
+        }
+        Some(QueryAtom { primitives: vec![AtomPrimitive::And(prims)] })
     }
 
-    /// Parse a comma-separated OR group (medium precedence).
-    /// Each branch is a sequence of implicitly-ANDed primitives.
-    fn parse_comma_or_group(&mut self) -> std::result::Result<AtomPrimitive, String> {
-        let mut branches: Vec<AtomPrimitive> = Vec::new();
-
-        loop {
-            // Parse one implicit-AND group (highest precedence)
-            let and_prim = self.parse_implicit_and_group()?;
-            branches.push(and_prim);
-
-            if self.peek() == Some(',') {
+    /// `+`, `++`, `+2`, `-`, `--`, `-3`
+    fn parse_charge(&mut self) -> i8 {
+        let sign_char = self.peek().unwrap();
+        let sign: i32 = if sign_char == '+' { 1 } else { -1 };
+        self.pos += 1;
+        let magnitude = if let Some(n) = self.parse_number() {
+            n as i32
+        } else {
+            let mut k = 1;
+            while self.peek() == Some(sign_char) {
+                k += 1;
                 self.pos += 1;
-                continue;
             }
-            break;
-        }
-
-        if branches.len() == 1 {
-            Ok(branches.into_iter().next().ok_or("Empty branches")?)
-        } else {
-            Ok(AtomPrimitive::Or(branches))
-        }
+            k
+        };
+        (sign * magnitude).clamp(-127, 127) as i8
     }
 
-    /// Parse a sequence of implicitly/`&` ANDed primitives (highest precedence).
-    /// Stops at `,`, `;`, `]`, or end of input.
-    fn parse_implicit_and_group(&mut self) -> std::result::Result<AtomPrimitive, String> {
-        let mut prims: Vec<AtomPrimitive> = Vec::new();
+    // Precedence (lowest to highest): `;`, `,`, `&`/implicit, `!`.
 
+    fn parse_atom_low(&mut self) -> std::result::Result<AtomPrimitive, String> {
+        let mut terms = vec![self.parse_atom_or()?];
+        while self.peek() == Some(';') {
+            self.pos += 1;
+            terms.push(self.parse_atom_or()?);
+        }
+        Ok(if terms.len() == 1 { terms.pop().unwrap() } else { AtomPrimitive::And(terms) })
+    }
+
+    fn parse_atom_or(&mut self) -> std::result::Result<AtomPrimitive, String> {
+        let mut terms = vec![self.parse_atom_and()?];
+        while self.peek() == Some(',') {
+            self.pos += 1;
+            terms.push(self.parse_atom_and()?);
+        }
+        Ok(if terms.len() == 1 { terms.pop().unwrap() } else { AtomPrimitive::Or(terms) })
+    }
+
+    fn parse_atom_and(&mut self) -> std::result::Result<AtomPrimitive, String> {
+        let mut terms = Vec::new();
         loop {
             match self.peek() {
-                Some(']') | Some(',') | Some(';') | None => break,
+                None => return Err("Missing ]".to_string()),
+                Some(']') | Some(',') | Some(';') => break,
                 Some('&') => {
-                    // Explicit high-precedence atom AND separator
                     self.pos += 1;
-                    continue;
                 }
-                _ => {
-                    let p = self.parse_single_primitive()?;
-                    prims.push(p);
+                Some(':') => {
+                    // atom map number: ignored
+                    self.pos += 1;
+                    self.parse_number().ok_or("Expected atom map number after ':'")?;
                 }
+                Some(_) => terms.push(self.parse_atom_unary()?),
             }
         }
-
-        if prims.is_empty() {
-            Ok(AtomPrimitive::AnyAtom)
-        } else if prims.len() == 1 {
-            Ok(prims.into_iter().next().ok_or("Empty prims")?)
-        } else {
-            Ok(AtomPrimitive::And(prims))
+        match terms.len() {
+            0 => Err("Empty atom expression".to_string()),
+            1 => Ok(terms.pop().unwrap()),
+            _ => Ok(AtomPrimitive::And(terms)),
         }
     }
 
-    /// Parse a single primitive (element, #N, property, or !primitive)
-    fn parse_single_primitive(&mut self) -> std::result::Result<AtomPrimitive, String> {
-        // Handle NOT operator
+    fn parse_atom_unary(&mut self) -> std::result::Result<AtomPrimitive, String> {
         if self.peek() == Some('!') {
             self.pos += 1;
-            let inner = self.parse_single_primitive()?;
-            return Ok(AtomPrimitive::Not(Box::new(inner)));
+            return Ok(AtomPrimitive::Not(Box::new(self.parse_atom_unary()?)));
+        }
+        self.parse_atom_primitive()
+    }
+
+    /// Element symbol of `len` chars starting at the cursor, if valid.
+    fn element_at(&self, len: usize) -> Option<u8> {
+        let sym: String = self.input.get(self.pos..self.pos + len)?.iter().collect();
+        crate::mol::elements::symbol_to_atomic_number(&sym)
+    }
+
+    fn parse_atom_primitive(&mut self) -> std::result::Result<AtomPrimitive, String> {
+        let c = self.peek().ok_or("Unexpected end of SMARTS")?;
+        let next_lower = self.peek_at(1).is_some_and(|n| n.is_ascii_lowercase());
+
+        // Two-letter element symbols take precedence over one-letter
+        // primitives (Hg vs H, Db vs D, Xe vs X, Ru vs R, Zn vs Z, Al vs A).
+        if c.is_ascii_uppercase() && next_lower {
+            if let Some(z) = self.element_at(2) {
+                self.pos += 2;
+                return Ok(if is_organic_aliphatic(z) { AtomPrimitive::Aliphatic(z) } else { AtomPrimitive::Element(z) });
+            }
         }
 
-        // Handle recursive SMARTS $(...)
-        if self.peek() == Some('$') {
-            self.pos += 1; // Skip '$'
-
-            // Expect opening parenthesis
-            if self.peek() != Some('(') {
-                return Err("Expected '(' after '$' in recursive SMARTS".to_string());
-            }
-            self.pos += 1; // Skip '('
-
-            // Parse the nested SMARTS pattern - need to find matching closing paren
-            let mut depth = 1;
-            let start_pos = self.pos;
-
-            while self.pos < self.input.len() && depth > 0 {
-                match self.input[self.pos] {
-                    '(' => depth += 1,
-                    ')' => depth -= 1,
-                    _ => {}
-                }
-                if depth > 0 {
-                    self.pos += 1;
-                }
-            }
-
-            if depth != 0 {
-                return Err("Unclosed recursive SMARTS pattern".to_string());
-            }
-
-            // Extract the nested pattern string
-            let nested_pattern: String = self.input[start_pos..self.pos].iter().collect();
-            self.pos += 1; // Skip closing ')'
-
-            // Parse the nested pattern recursively
-            let sub_query = parse_smarts(&nested_pattern).map_err(|e| e.to_string())?;
-
-            return Ok(AtomPrimitive::Recursive(Box::new(sub_query)));
-        }
-
-        // Check for atomic number notation (#6, #7, etc.)
-        if self.peek() == Some('#') {
-            self.pos += 1; // Skip '#'
-
-            // Parse the atomic number
-            let mut num_str = String::new();
-            while self.pos < self.input.len() {
-                let ch = self.input[self.pos];
-                if ch.is_ascii_digit() {
-                    num_str.push(ch);
-                    self.pos += 1;
-                } else {
-                    break;
-                }
-            }
-
-            if num_str.is_empty() {
-                return Err("Expected atomic number after #".to_string());
-            }
-
-            let atomic_number: u8 = num_str
-                .parse()
-                .map_err(|_| format!("Invalid atomic number: {}", num_str))?;
-
-            return Ok(AtomPrimitive::Element(atomic_number));
-        }
-
-        // Check for property (H, D, X, v, R, r, +, -)
-        // BUT: H can also be "Hg", "Hf", etc. - check for lowercase next char first
-        match self.peek() {
-            Some('H') => {
-                // Check if next char is lowercase (two-letter element like Hg, Hf, Ho, He, Hs)
-                if self.pos + 1 < self.input.len() {
-                    let next_ch = self.input[self.pos + 1];
-                    if next_ch.is_lowercase() && next_ch.is_alphabetic() {
-                        // Check if this is a valid two-letter element
-                        let two_letter = format!("H{}", next_ch);
-                        if crate::mol::elements::symbol_to_atomic_number(&two_letter).is_some() {
-                            // This is a two-letter element like Hg, Hf - skip to element parsing below
-                        } else {
-                            // Not a valid two-letter element, treat H as HCount
-                            self.pos += 1;
-                            let count = self.parse_digit().unwrap_or(1);
-                            return Ok(AtomPrimitive::HCount(count));
-                        }
-                    } else {
-                        // HCount (followed by digit, ], ;, etc.)
-                        self.pos += 1;
-                        let count = self.parse_digit().unwrap_or(1);
-                        return Ok(AtomPrimitive::HCount(count));
-                    }
-                } else {
-                    // HCount (at end of input)
-                    self.pos += 1;
-                    let count = self.parse_digit().unwrap_or(1);
-                    return Ok(AtomPrimitive::HCount(count));
-                }
-            }
-            Some('h') => {
+        match c {
+            '$' => {
                 self.pos += 1;
-                let count = self.parse_digit().unwrap_or(1);
-                return Ok(AtomPrimitive::TotalHCount(count));
-            }
-            Some('D') => {
-                // Check if this is a two-letter element (Dy, Db, Ds)
-                if self.pos + 1 < self.input.len() {
-                    let next_ch = self.input[self.pos + 1];
-                    if next_ch.is_lowercase() && next_ch.is_alphabetic() {
-                        let two_letter = format!("D{}", next_ch);
-                        if crate::mol::elements::symbol_to_atomic_number(&two_letter).is_some() {
-                            // This is an element, skip to element parsing
-                        } else {
-                            self.pos += 1;
-                            let count = self.parse_digit().unwrap_or(1);
-                            return Ok(AtomPrimitive::Degree(count));
-                        }
-                    } else {
-                        self.pos += 1;
-                        let count = self.parse_digit().unwrap_or(1);
-                        return Ok(AtomPrimitive::Degree(count));
-                    }
-                } else {
-                    self.pos += 1;
-                    let count = self.parse_digit().unwrap_or(1);
-                    return Ok(AtomPrimitive::Degree(count));
+                if self.peek() != Some('(') {
+                    return Err("Expected '(' after '$' in recursive SMARTS".to_string());
                 }
-            }
-            Some('X') => {
-                // Check if this is a two-letter element (Xe)
-                if self.pos + 1 < self.input.len() {
-                    let next_ch = self.input[self.pos + 1];
-                    if next_ch.is_lowercase() && next_ch.is_alphabetic() {
-                        let two_letter = format!("X{}", next_ch);
-                        if crate::mol::elements::symbol_to_atomic_number(&two_letter).is_some() {
-                            // This is an element, skip to element parsing
-                        } else {
-                            self.pos += 1;
-                            let count = self.parse_digit().unwrap_or(1);
-                            return Ok(AtomPrimitive::Connectivity(count));
-                        }
-                    } else {
-                        self.pos += 1;
-                        let count = self.parse_digit().unwrap_or(1);
-                        return Ok(AtomPrimitive::Connectivity(count));
-                    }
-                } else {
-                    self.pos += 1;
-                    let count = self.parse_digit().unwrap_or(1);
-                    return Ok(AtomPrimitive::Connectivity(count));
-                }
-            }
-            Some('v') => {
                 self.pos += 1;
-                let count = self.parse_digit().unwrap_or(1);
-                return Ok(AtomPrimitive::Valence(count));
-            }
-            Some('x') => {
-                self.pos += 1;
-                let count = self.parse_digit().unwrap_or(1);
-                return Ok(AtomPrimitive::RingBonds(count));
-            }
-            Some('R') => {
-                // Check if this is a two-letter element (Ru, Rh, Rn, Ra, Rb, Re, Rf, Rg)
-                if self.pos + 1 < self.input.len() {
-                    let next_ch = self.input[self.pos + 1];
-                    if next_ch.is_lowercase() && next_ch.is_alphabetic() {
-                        let two_letter = format!("R{}", next_ch);
-                        if crate::mol::elements::symbol_to_atomic_number(&two_letter).is_some() {
-                            // This is an element, skip to element parsing
-                        } else {
-                            self.pos += 1;
-                            if let Some(count) = self.parse_digit() {
-                                if count == 0 {
-                                    return Ok(AtomPrimitive::NotInRing);
-                                } else {
-                                    return Ok(AtomPrimitive::RingMembership(count));
-                                }
-                            } else {
-                                return Ok(AtomPrimitive::InRing);
+                let start = self.pos;
+                let mut depth = 1;
+                while self.pos < self.input.len() {
+                    match self.input[self.pos] {
+                        '(' => depth += 1,
+                        ')' => {
+                            depth -= 1;
+                            if depth == 0 {
+                                break;
                             }
                         }
-                    } else {
-                        self.pos += 1;
-                        if let Some(count) = self.parse_digit() {
-                            if count == 0 {
-                                return Ok(AtomPrimitive::NotInRing);
-                            } else {
-                                return Ok(AtomPrimitive::RingMembership(count));
-                            }
-                        } else {
-                            return Ok(AtomPrimitive::InRing);
-                        }
+                        _ => {}
                     }
-                } else {
                     self.pos += 1;
-                    if let Some(count) = self.parse_digit() {
-                        if count == 0 {
-                            return Ok(AtomPrimitive::NotInRing);
-                        } else {
-                            return Ok(AtomPrimitive::RingMembership(count));
-                        }
-                    } else {
-                        return Ok(AtomPrimitive::InRing);
-                    }
                 }
-            }
-            Some('r') => {
-                self.pos += 1;
-                if let Some(size) = self.parse_digit() {
-                    if size == 0 {
-                        return Ok(AtomPrimitive::NotInRing);
-                    } else {
-                        return Ok(AtomPrimitive::RingSize(size));
-                    }
-                } else {
-                    return Ok(AtomPrimitive::InRing);
+                if depth != 0 {
+                    return Err("Unclosed recursive SMARTS pattern".to_string());
                 }
-            }
-            Some('+') => {
+                let nested: String = self.input[start..self.pos].iter().collect();
                 self.pos += 1;
-                let count = self.parse_digit().unwrap_or(1) as i8;
-                return Ok(AtomPrimitive::Charge(count));
+                let sub = parse_smarts(&nested).map_err(|e| e.to_string())?;
+                Ok(AtomPrimitive::Recursive(Box::new(sub)))
             }
-            Some('-')
-                if self.pos + 1 < self.input.len() && self.input[self.pos + 1].is_ascii_digit() =>
-            {
-                // Negative charge
+            '#' => {
                 self.pos += 1;
-                let count = self.parse_digit().unwrap_or(1) as i8;
-                return Ok(AtomPrimitive::Charge(-count));
+                let z = self.parse_number().ok_or("Expected atomic number after #")?;
+                Ok(AtomPrimitive::Element(z.min(255) as u8))
             }
-            _ => {}
-        }
-
-        // Parse element symbol (handles both single and two-letter elements)
-        let mut element = String::new();
-        if self.pos < self.input.len() {
-            let first_ch = self.input[self.pos];
-            if first_ch.is_alphabetic()
-                && (first_ch.is_uppercase()
-                    || first_ch == 'b'
-                    || first_ch == 'a'
-                    || first_ch == 'c'
-                    || first_ch == 'n'
-                    || first_ch == 'o'
-                    || first_ch == 'p'
-                    || first_ch == 's'
-                    || first_ch == 't')
-            {
-                element.push(first_ch);
+            '0'..='9' => {
+                let iso = self.parse_number().unwrap();
+                Ok(AtomPrimitive::Isotope(iso.min(u16::MAX as u32) as u16))
+            }
+            '@' => {
+                // chirality (and chirality classes): matched as "any atom"
                 self.pos += 1;
-
-                // Check for second lowercase letter (two-letter elements like Cu, Zn, Br, Cl)
-                if self.pos < self.input.len() {
-                    let second_ch = self.input[self.pos];
-                    if second_ch.is_lowercase() && second_ch.is_alphabetic() {
-                        let two_letter = format!("{}{}", first_ch, second_ch);
-                        if crate::mol::elements::symbol_to_atomic_number(&two_letter).is_some() {
-                            element.push(second_ch);
-                            self.pos += 1;
-                        }
-                    }
+                if self.peek() == Some('@') {
+                    self.pos += 1;
                 }
+                let class: String = self.input.get(self.pos..self.pos + 2).map(|s| s.iter().collect()).unwrap_or_default();
+                if matches!(class.as_str(), "TH" | "AL" | "SP" | "TB" | "OH") {
+                    self.pos += 2;
+                    self.parse_number();
+                }
+                Ok(AtomPrimitive::AnyAtom)
             }
-        }
-
-        if element.is_empty() {
-            // No element found - check for * or return error
-            if self.peek() == Some('*') {
+            '+' | '-' => Ok(AtomPrimitive::Charge(self.parse_charge())),
+            '*' => {
                 self.pos += 1;
                 Ok(AtomPrimitive::AnyAtom)
-            } else if self.peek() == Some('-') {
+            }
+            'H' => {
                 self.pos += 1;
-                Ok(AtomPrimitive::Charge(-1))
-            } else {
-                Err(format!(
-                    "Invalid atom primitive at position {}: {:?}",
-                    self.pos,
-                    self.peek()
-                ))
+                Ok(AtomPrimitive::HCount(self.parse_count()))
             }
-        } else if element == "*" {
-            Ok(AtomPrimitive::AnyAtom)
-        } else if element == "a" {
-            Ok(AtomPrimitive::AnyAromatic)
-        } else if element == "A" {
-            Ok(AtomPrimitive::AnyAliphatic)
-        } else if element == "-" {
-            Ok(AtomPrimitive::Charge(-1))
-        } else {
-            let first_char = element.chars().next().ok_or("Empty element parsed")?;
-            let is_aromatic = first_char.is_lowercase();
-            // Preserve lowercase aromatic two-letter symbols like [se], [as], [te].
-            // Uppercasing them would produce "SE"/"AS"/"TE", which are not valid
-            // element symbols in `symbol_to_atomic_number()`.
-            let symbol = if is_aromatic && element.len() > 1 {
-                element
-            } else if is_aromatic {
-                element.to_uppercase()
-            } else {
-                element
-            };
-
-            let atomic_number = crate::mol::elements::symbol_to_atomic_number(&symbol)
-                .ok_or_else(|| format!("Unknown element: {}", symbol))?;
-
-            if is_aromatic {
-                Ok(AtomPrimitive::Aromatic(atomic_number))
-            } else {
-                Ok(AtomPrimitive::Aliphatic(atomic_number))
+            'h' => {
+                self.pos += 1;
+                Ok(match self.parse_number() {
+                    Some(n) => AtomPrimitive::ImplicitHCount(n.min(255) as u8),
+                    None => AtomPrimitive::HasImplicitH,
+                })
             }
+            'D' => {
+                self.pos += 1;
+                Ok(AtomPrimitive::Degree(self.parse_count()))
+            }
+            'd' => {
+                self.pos += 1;
+                Ok(AtomPrimitive::NonHydrogenDegree(self.parse_count()))
+            }
+            'X' => {
+                self.pos += 1;
+                Ok(AtomPrimitive::Connectivity(self.parse_count()))
+            }
+            'v' => {
+                self.pos += 1;
+                Ok(AtomPrimitive::Valence(self.parse_count()))
+            }
+            'x' => {
+                self.pos += 1;
+                Ok(match self.parse_number() {
+                    Some(n) => AtomPrimitive::RingBonds(n.min(255) as u8),
+                    None => AtomPrimitive::HasRingBond,
+                })
+            }
+            'R' => {
+                self.pos += 1;
+                Ok(match self.parse_number() {
+                    Some(0) => AtomPrimitive::NotInRing,
+                    Some(n) => AtomPrimitive::RingMembership(n.min(255) as u8),
+                    None => AtomPrimitive::InRing,
+                })
+            }
+            'r' => {
+                self.pos += 1;
+                Ok(match self.parse_number() {
+                    Some(0) => AtomPrimitive::NotInRing,
+                    Some(n) => AtomPrimitive::RingSize(n.min(255) as u8),
+                    None => AtomPrimitive::InRing,
+                })
+            }
+            'z' => {
+                self.pos += 1;
+                Ok(match self.parse_number() {
+                    Some(n) => AtomPrimitive::HeteroNeighbors(n.min(255) as u8),
+                    None => AtomPrimitive::HasHeteroNeighbors,
+                })
+            }
+            'Z' => {
+                self.pos += 1;
+                Ok(match self.parse_number() {
+                    Some(n) => AtomPrimitive::AliphaticHeteroNeighbors(n.min(255) as u8),
+                    None => AtomPrimitive::HasAliphaticHeteroNeighbors,
+                })
+            }
+            '^' => {
+                self.pos += 1;
+                let hyb = match self.parse_number() {
+                    Some(0) => crate::types::Hybridization::S,
+                    Some(1) => crate::types::Hybridization::SP,
+                    Some(2) => crate::types::Hybridization::SP2,
+                    Some(3) => crate::types::Hybridization::SP3,
+                    Some(4) => crate::types::Hybridization::SP3D,
+                    Some(5) => crate::types::Hybridization::SP3D2,
+                    _ => return Err("Invalid hybridization query".to_string()),
+                };
+                Ok(AtomPrimitive::Hybridization(hyb))
+            }
+            'a' if self.peek_at(1) == Some('s') => {
+                self.pos += 2;
+                Ok(AtomPrimitive::Aromatic(33))
+            }
+            's' if self.peek_at(1) == Some('e') => {
+                self.pos += 2;
+                Ok(AtomPrimitive::Aromatic(34))
+            }
+            't' if self.peek_at(1) == Some('e') => {
+                self.pos += 2;
+                Ok(AtomPrimitive::Aromatic(52))
+            }
+            'a' => {
+                self.pos += 1;
+                Ok(AtomPrimitive::AnyAromatic)
+            }
+            'A' => {
+                self.pos += 1;
+                Ok(AtomPrimitive::AnyAliphatic)
+            }
+            'b' | 'c' | 'n' | 'o' | 'p' | 's' => {
+                self.pos += 1;
+                let z = match c {
+                    'b' => 5,
+                    'c' => 6,
+                    'n' => 7,
+                    'o' => 8,
+                    'p' => 15,
+                    _ => 16,
+                };
+                Ok(AtomPrimitive::Aromatic(z))
+            }
+            c if c.is_ascii_uppercase() => {
+                let z = self.element_at(1).ok_or_else(|| format!("Unknown element '{}'", c))?;
+                self.pos += 1;
+                Ok(if is_organic_aliphatic(z) { AtomPrimitive::Aliphatic(z) } else { AtomPrimitive::Element(z) })
+            }
+            other => Err(format!("Invalid atom primitive '{}' at position {}", other, self.pos)),
         }
     }
 
-    /// Parses organic atom.
-    ///
-    /// Function context: `crates/ferrum_core/src/io/smarts.rs`.
-    /// I/O-layer note: parsing/ingestion should surface explicit errors instead of silently repairing malformed input.
-    fn parse_organic_atom(&mut self) -> std::result::Result<(QueryAtom, usize), String> {
-        let ch = self.input[self.pos];
-        let is_aromatic = ch.is_lowercase();
-
-        // Check for two-letter element symbols: Br, Cl
-        let (symbol, consumed) = if self.pos + 1 < self.input.len() {
-            let next_ch = self.input[self.pos + 1];
-            let two_letter = format!("{}{}", ch, next_ch);
-            let upper_two = two_letter.to_uppercase();
-
-            // Check if this is a valid two-letter element
-            if matches!(upper_two.as_str(), "BR" | "CL") {
-                (two_letter, 2)
-            } else {
-                (ch.to_string(), 1)
-            }
-        } else {
-            (ch.to_string(), 1)
-        };
-
-        let upper_symbol = if is_aromatic {
-            symbol.to_uppercase()
-        } else {
-            symbol.clone()
-        };
-
-        let atomic_number = crate::mol::elements::symbol_to_atomic_number(&upper_symbol)
-            .ok_or_else(|| format!("Unknown element: {}", upper_symbol))?;
-
-        let atom = if is_aromatic {
-            QueryAtom {
-                primitives: vec![AtomPrimitive::Aromatic(atomic_number)],
-            }
-        } else {
-            QueryAtom {
-                primitives: vec![AtomPrimitive::Aliphatic(atomic_number)],
-            }
-        };
-
-        Ok((atom, consumed))
-    }
-
-    /// Parses ring closures.
-    ///
-    /// Function context: `crates/ferrum_core/src/io/smarts.rs`.
-    /// I/O-layer note: parsing/ingestion should surface explicit errors instead of silently repairing malformed input.
-    fn parse_ring_closures(
-        &mut self,
-        atom_idx: u16,
-        pending_bond: &mut Option<QueryBond>,
-    ) -> std::result::Result<(), String> {
-        while self.pos < self.input.len() && self.input[self.pos].is_ascii_digit() {
-            let ring_num = (self.input[self.pos] as u32) - ('0' as u32);
-            self.pos += 1;
-
-            if let Some((prev_idx, stored_bond)) = self.ring_closures[ring_num as usize].take() {
-                // Closing a ring - determine bond type:
-                // 1. Use pending_bond if specified (from current position, e.g., ~1)
-                // 2. Otherwise use stored_bond (from opening position)
-                // 3. Default to Single only if nothing was specified
-                let final_bond = pending_bond
-                    .take()
-                    .or(stored_bond)
-                    .unwrap_or(QueryBond::SingleOrAromatic);
-                self.add_bond(prev_idx, atom_idx, final_bond);
-            } else {
-                // Opening a ring closure - store the pending bond type for later
-                let bond_to_store = pending_bond.take();
-                self.ring_closures[ring_num as usize] = Some((atom_idx, bond_to_store));
-            }
-        }
-
-        Ok(())
-    }
-
-    /// Implements the behavior encoded by this function.
-    ///
-    /// Function context: `crates/ferrum_core/src/io/smarts.rs`.
-    /// I/O-layer note: parsing/ingestion should surface explicit errors instead of silently repairing malformed input.
-    fn peek(&self) -> Option<char> {
-        if self.pos < self.input.len() {
-            Some(self.input[self.pos])
-        } else {
-            None
-        }
-    }
-
-    /// Parses digit.
-    ///
-    /// Function context: `crates/ferrum_core/src/io/smarts.rs`.
-    /// I/O-layer note: parsing/ingestion should surface explicit errors instead of silently repairing malformed input.
-    fn parse_digit(&mut self) -> Option<u8> {
-        if self.pos < self.input.len() && self.input[self.pos].is_ascii_digit() {
-            let digit = (self.input[self.pos] as u8) - b'0';
-            self.pos += 1;
-            Some(digit)
-        } else {
-            None
-        }
-    }
-
-    /// Implements atom.
-    ///
-    /// Function context: `crates/ferrum_core/src/io/smarts.rs`.
-    /// I/O-layer note: parsing/ingestion should surface explicit errors instead of silently repairing malformed input.
     fn add_atom(&mut self, atom: QueryAtom) -> u16 {
         let idx = self.atoms.len() as u16;
         self.atoms.push(atom);
@@ -1497,17 +1273,9 @@ impl SmartsParser {
         idx
     }
 
-    /// Implements bond.
-    ///
-    /// Function context: `crates/ferrum_core/src/io/smarts.rs`.
-    /// I/O-layer note: parsing/ingestion should surface explicit errors instead of silently repairing malformed input.
     fn add_bond(&mut self, source: u16, target: u16, bond: QueryBond) {
         let bond_idx = self.bonds.len() as u16;
-        self.bonds.push(QueryGraphBond {
-            source,
-            target,
-            query: bond,
-        });
+        self.bonds.push(QueryGraphBond { source, target, query: bond });
         self.adjacency[source as usize].push(bond_idx);
         self.adjacency[target as usize].push(bond_idx);
     }
@@ -1565,7 +1333,6 @@ mod smarts_parser_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::algo::aromaticity::perceive_aromaticity;
     use crate::algo::rings::find_sssr;
     use crate::io::smiles::parse_smiles;
 
@@ -1608,8 +1375,7 @@ mod tests {
     /// Function context: `crates/ferrum_core/src/io/smarts.rs`.
     /// I/O-layer note: parsing/ingestion should surface explicit errors instead of silently repairing malformed input.
     fn test_query_atom_aromatic() {
-        let mut mol = parse_smiles("c1ccccc1").unwrap();
-        perceive_aromaticity(&mut mol);
+        let mol = parse_smiles("c1ccccc1").unwrap();
 
         let aromatic_query = QueryAtom::aromatic_element(6);
         assert!(aromatic_query.matches(&mol, 0));
@@ -1713,8 +1479,6 @@ mod tests {
 #[cfg(test)]
 mod smarts_advanced_tests {
     use super::*;
-    use crate::algo::aromaticity::perceive_aromaticity;
-    use crate::algo::valency::assign_implicit_hydrogens;
     use crate::io::smiles::parse_smiles;
 
     #[test]
@@ -1728,18 +1492,15 @@ mod smarts_advanced_tests {
         assert_eq!(query.atoms.len(), 1);
 
         // Should match C, N, or O
-        let mut mol = parse_smiles("C").unwrap();
-        assign_implicit_hydrogens(&mut mol).unwrap();
+        let mol = parse_smiles("C").unwrap();
         let matches = crate::algo::iso::find_all_matches(&mol, &query);
         assert_eq!(matches.len(), 1); // matches C
 
-        let mut mol = parse_smiles("N").unwrap();
-        assign_implicit_hydrogens(&mut mol).unwrap();
+        let mol = parse_smiles("N").unwrap();
         let matches = crate::algo::iso::find_all_matches(&mol, &query);
         assert_eq!(matches.len(), 1); // matches N
 
-        let mut mol = parse_smiles("O").unwrap();
-        assign_implicit_hydrogens(&mut mol).unwrap();
+        let mol = parse_smiles("O").unwrap();
         let matches = crate::algo::iso::find_all_matches(&mol, &query);
         assert_eq!(matches.len(), 1); // matches O
     }
@@ -1754,13 +1515,11 @@ mod smarts_advanced_tests {
         let query = parse_smarts("[CH3]").unwrap();
 
         // Should match carbon with exactly 3 hydrogens
-        let mut mol = parse_smiles("C").unwrap(); // CH4
-        assign_implicit_hydrogens(&mut mol).unwrap();
+        let mol = parse_smiles("C").unwrap(); // CH4
         let matches = crate::algo::iso::find_all_matches(&mol, &query);
         assert_eq!(matches.len(), 0); // CH4 doesn't match CH3
 
-        let mut mol = parse_smiles("CC").unwrap(); // 2x CH3
-        assign_implicit_hydrogens(&mut mol).unwrap();
+        let mol = parse_smiles("CC").unwrap(); // 2x CH3
         let matches = crate::algo::iso::find_all_matches(&mol, &query);
         assert_eq!(matches.len(), 2); // both carbons are CH3
     }
@@ -1780,8 +1539,7 @@ mod smarts_advanced_tests {
         // - First C as center (connected to middle C and... wait, it only has one neighbor)
         // Actually, both terminal carbons match: each is connected to the middle C
         // and the middle C counts as both neighbors
-        let mut mol = parse_smiles("CCC").unwrap();
-        assign_implicit_hydrogens(&mut mol).unwrap();
+        let mol = parse_smiles("CCC").unwrap();
         let matches = crate::algo::iso::find_all_matches(&mol, &query);
         // Pattern C(C)C means: C connected to two other C atoms via branches
         // In linear propane, the middle C matches (has 2 C neighbors)
@@ -1799,8 +1557,7 @@ mod smarts_advanced_tests {
         assert_eq!(query.atoms.len(), 3);
 
         // In propane, the middle carbon is CH2 and connected to 2 carbons
-        let mut mol = parse_smiles("CCC").unwrap();
-        assign_implicit_hydrogens(&mut mol).unwrap();
+        let mol = parse_smiles("CCC").unwrap();
         let matches = crate::algo::iso::find_all_matches(&mol, &query);
         // Middle C is CH2 with 2 C neighbors
         assert!(matches.len() >= 1);
@@ -1816,8 +1573,7 @@ mod smarts_advanced_tests {
         let query = parse_smarts("[!#6]").unwrap();
 
         // Should match non-carbon atoms
-        let mut mol = parse_smiles("CCO").unwrap();
-        assign_implicit_hydrogens(&mut mol).unwrap();
+        let mol = parse_smiles("CCO").unwrap();
         let matches = crate::algo::iso::find_all_matches(&mol, &query);
         assert_eq!(matches.len(), 1); // matches O only
     }
@@ -1831,8 +1587,7 @@ mod smarts_advanced_tests {
         // Test [N,O,P,S]
         let query = parse_smarts("[N,O,P,S]").unwrap();
 
-        let mut mol = parse_smiles("NOPS").unwrap();
-        assign_implicit_hydrogens(&mut mol).unwrap();
+        let mol = parse_smiles("NOPS").unwrap();
         let matches = crate::algo::iso::find_all_matches(&mol, &query);
         assert_eq!(matches.len(), 4); // all 4 atoms match
     }
@@ -1847,9 +1602,7 @@ mod smarts_advanced_tests {
         let query = parse_smarts("[cH]").unwrap();
 
         // Benzene has 6 aromatic CH
-        let mut mol = parse_smiles("c1ccccc1").unwrap();
-        assign_implicit_hydrogens(&mut mol).unwrap();
-        perceive_aromaticity(&mut mol);
+        let mol = parse_smiles("c1ccccc1").unwrap();
         let matches = crate::algo::iso::find_all_matches(&mol, &query);
         assert_eq!(matches.len(), 6);
     }
@@ -1864,14 +1617,12 @@ mod smarts_advanced_tests {
         let query = parse_smarts("a").unwrap();
 
         // Should match aromatic atoms (benzene)
-        let mut mol = parse_smiles("c1ccccc1").unwrap();
-        assign_implicit_hydrogens(&mut mol).unwrap();
+        let mol = parse_smiles("c1ccccc1").unwrap();
         let matches = crate::algo::iso::find_all_matches(&mol, &query);
         assert_eq!(matches.len(), 6); // all 6 aromatic carbons
 
         // Should NOT match aliphatic atoms
-        let mut mol2 = parse_smiles("CCC").unwrap();
-        assign_implicit_hydrogens(&mut mol2).unwrap();
+        let mol2 = parse_smiles("CCC").unwrap();
         let matches2 = crate::algo::iso::find_all_matches(&mol2, &query);
         assert_eq!(matches2.len(), 0); // no aromatic atoms
     }
@@ -1887,8 +1638,7 @@ mod smarts_advanced_tests {
         assert_eq!(query.atoms.len(), 4);
 
         // Should match tert-butyl center in neopentane
-        let mut mol = parse_smiles("CC(C)(C)C").unwrap(); // neopentane
-        assign_implicit_hydrogens(&mut mol).unwrap();
+        let mol = parse_smiles("CC(C)(C)C").unwrap(); // neopentane
         let matches = crate::algo::iso::find_all_matches(&mol, &query);
         // The central carbon has 4 C neighbors, pattern needs 3
         assert!(matches.len() >= 1); // at least the center matches
@@ -1904,14 +1654,12 @@ mod smarts_advanced_tests {
         let query = parse_smarts("[Cv4]").unwrap();
 
         // Methane: C with 4 H = valence 4
-        let mut mol = parse_smiles("C").unwrap();
-        assign_implicit_hydrogens(&mut mol).unwrap();
+        let mol = parse_smiles("C").unwrap();
         let matches = crate::algo::iso::find_all_matches(&mol, &query);
         assert_eq!(matches.len(), 1); // CH4 has valence 4
 
         // Ethane: each C has valence 4 (3H + 1C)
-        let mut mol = parse_smiles("CC").unwrap();
-        assign_implicit_hydrogens(&mut mol).unwrap();
+        let mol = parse_smiles("CC").unwrap();
         let matches = crate::algo::iso::find_all_matches(&mol, &query);
         assert_eq!(matches.len(), 2); // both carbons have valence 4
     }
@@ -1926,8 +1674,7 @@ mod smarts_advanced_tests {
         let query = parse_smarts("[Cv4]").unwrap();
 
         // Ethene: C=C, each C has 2H + 1 double bond = 2 + 2 = 4
-        let mut mol = parse_smiles("C=C").unwrap();
-        assign_implicit_hydrogens(&mut mol).unwrap();
+        let mol = parse_smiles("C=C").unwrap();
         let matches = crate::algo::iso::find_all_matches(&mol, &query);
         assert_eq!(matches.len(), 2); // both carbons have valence 4
     }
@@ -1943,8 +1690,6 @@ mod smarts_advanced_tests {
 
         // Benzene: each carbon has 2 ring bonds
         let mut mol = parse_smiles("c1ccccc1").unwrap();
-        assign_implicit_hydrogens(&mut mol).unwrap();
-        perceive_aromaticity(&mut mol);
 
         // Mark ring atoms and bonds by finding SSSR
         let _ = crate::algo::rings::find_sssr(&mut mol);
@@ -1963,14 +1708,12 @@ mod smarts_advanced_tests {
         let query = parse_smarts("[Nv3]").unwrap();
 
         // Ammonia: N with 3 H = valence 3
-        let mut mol = parse_smiles("N").unwrap();
-        assign_implicit_hydrogens(&mut mol).unwrap();
+        let mol = parse_smiles("N").unwrap();
         let matches = crate::algo::iso::find_all_matches(&mol, &query);
         assert_eq!(matches.len(), 1);
 
         // Methylamine: N with 2H + 1C = valence 3
-        let mut mol = parse_smiles("CN").unwrap();
-        assign_implicit_hydrogens(&mut mol).unwrap();
+        let mol = parse_smiles("CN").unwrap();
         let matches = crate::algo::iso::find_all_matches(&mol, &query);
         assert_eq!(matches.len(), 1); // N has valence 3
     }
@@ -2050,8 +1793,7 @@ mod smarts_advanced_tests {
         eprintln!("Pattern 'a': {:?}", pattern);
 
         // Create benzene
-        let mut mol = crate::io::smiles::parse_smiles("c1ccccc1").expect("Failed to parse benzene");
-        crate::algo::valency::assign_implicit_hydrogens(&mut mol).unwrap();
+        let mol = crate::io::smiles::parse_smiles("c1ccccc1").expect("Failed to parse benzene");
 
         // Match
         let matches = crate::algo::iso::find_all_matches(&mol, &pattern);
@@ -2077,8 +1819,7 @@ mod smarts_advanced_tests {
         );
 
         // Create benzene (WITHOUT find_sssr - known issue with SSSR affecting matching)
-        let mut mol = crate::io::smiles::parse_smiles("c1ccccc1").expect("Failed to parse benzene");
-        crate::algo::valency::assign_implicit_hydrogens(&mut mol).unwrap();
+        let mol = crate::io::smiles::parse_smiles("c1ccccc1").expect("Failed to parse benzene");
 
         // Match WITHOUT sssr
         let matches = crate::algo::iso::find_all_matches(&mol, &pattern);
@@ -2165,10 +1906,8 @@ mod smarts_advanced_tests {
     /// Function context: `crates/ferrum_core/src/io/smarts.rs`.
     /// I/O-layer note: parsing/ingestion should surface explicit errors instead of silently repairing malformed input.
     fn test_ring_closure_bonds_preserved() {
-        use crate::algo::aromaticity::perceive_aromaticity;
         use crate::algo::iso::find_all_matches;
         use crate::algo::rings::find_sssr;
-        use crate::algo::valency::assign_implicit_hydrogens;
 
         // Test that ring closure bonds use the specified bond type (~ = Any)
         // This is critical for MACCS key 163 (6M Ring) to work after aromaticity perception
@@ -2187,9 +1926,7 @@ mod smarts_advanced_tests {
         }
 
         // Full molecule preparation
-        assign_implicit_hydrogens(&mut mol).unwrap();
         find_sssr(&mut mol);
-        perceive_aromaticity(&mut mol);
 
         // Pattern should still match after full preparation
         let matches = find_all_matches(&mol, &pattern);
@@ -2239,11 +1976,9 @@ mod smarts_advanced_tests {
     /// I/O-layer note: parsing/ingestion should surface explicit errors instead of silently repairing malformed input.
     fn test_recursive_smarts_matching() {
         use crate::algo::iso::find_all_matches;
-        use crate::algo::valency::assign_implicit_hydrogens;
 
         // Test matching CX4 (sp3 carbon with 4 connections)
-        let mut mol = parse_smiles("CC").unwrap(); // Ethane: 2 sp3 carbons
-        assign_implicit_hydrogens(&mut mol).unwrap();
+        let mol = parse_smiles("CC").unwrap(); // Ethane: 2 sp3 carbons
 
         // First test: simple [CX4] pattern (carbon with degree 4)
         let simple_pattern = parse_smarts("[CX4]").unwrap();

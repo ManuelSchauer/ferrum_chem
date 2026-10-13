@@ -288,7 +288,6 @@ const _: () = {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::algo::aromaticity::perceive_aromaticity;
     use crate::io::smiles::parse_smiles;
 
     #[test]
@@ -370,7 +369,6 @@ mod tests {
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_aromatic_atom_count() {
         let mut mol = parse_smiles("c1ccccc1").unwrap(); // Benzene
-        perceive_aromaticity(&mut mol);
         assert_eq!(
             AromaticAtomCount
                 .calculate(
@@ -389,7 +387,6 @@ mod tests {
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_aromatic_atom_count_non_aromatic() {
         let mut mol = parse_smiles("CCCC").unwrap(); // Butane
-        perceive_aromaticity(&mut mol);
         assert_eq!(
             AromaticAtomCount
                 .calculate(
@@ -427,8 +424,7 @@ mod tests {
     /// Function context: `crates/ferrum_core/src/desc/atom_count.rs`.
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_compute_aromatic_atom_count() {
-        let mut mol = parse_smiles("c1ccccc1").unwrap();
-        perceive_aromaticity(&mut mol);
+        let mol = parse_smiles("c1ccccc1").unwrap();
         assert_eq!(compute_aromatic_atom_count(&mol), 6);
     }
 

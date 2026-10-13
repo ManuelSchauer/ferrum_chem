@@ -18,7 +18,7 @@
 //! - Which public symbols are the best entry points for reading/debugging.
 //!
 //! Key symbols in this file:
-//! - `fn atom_pol`
+//! - `POLARIZABILITY` (CDK APol/BPol table)
 //! - `struct APol`
 //! - `fn name`
 //! - `fn calculate`
@@ -42,122 +42,82 @@
 //! - Code-local source of truth: symbols and tests declared in `crates/ferrum_core/src/desc/polarizability.rs`.
 
 use super::Descriptor;
+use super::cdk_perception::CdkView;
 use crate::desc::DescriptorValue;
 use crate::mol::molecule::Molecule;
 
-/// Atomic polarizabilities (ų) indexed by atomic number (0..54).
-/// Data from Miller & Savchik / CRC Handbook.
-const POLARIZABILITY: [f32; 54] = [
-    0.0,   // 0  placeholder
-    0.387, // 1  H
-    0.205, // 2  He
-    0.0,   // 3  Li
-    0.0,   // 4  Be
-    0.0,   // 5  B
-    1.76,  // 6  C
-    1.10,  // 7  N
-    0.802, // 8  O
-    0.557, // 9  F
-    0.396, // 10 Ne
-    0.0,   // 11 Na
-    0.0,   // 12 Mg
-    0.0,   // 13 Al
-    5.38,  // 14 Si
-    3.63,  // 15 P
-    2.90,  // 16 S
-    2.18,  // 17 Cl
-    1.64,  // 18 Ar
-    0.0,   // 19 K
-    0.0,   // 20 Ca
-    0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,  // 21-29
-    0.0,  // 30 Zn
-    0.0,  // 31 Ga
-    0.0,  // 32 Ge
-    0.0,  // 33 As
-    0.0,  // 34 Se
-    3.05, // 35 Br
-    2.48, // 36 Kr
-    0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,  // 37-45
-    0.0,  // 46 Pd
-    0.0,  // 47 Ag
-    0.0,  // 48 Cd
-    0.0,  // 49 In
-    0.0,  // 50 Sn
-    0.0,  // 51 Sb
-    0.0,  // 52 Te
-    5.35, // 53 I
+/// Atomic polarizabilities (Å^3) indexed by atomic number (0..=102), exactly
+/// as in CDK's `APolDescriptor` / `BPolDescriptor`.
+const POLARIZABILITY: [f64; 103] = [
+    0.0, 0.666793, 0.204956, 24.3, 5.6, 3.03, 1.76, 1.1, 0.802, 0.557, 0.3956, 23.6, 10.6, 6.8,
+    5.38, 3.63, 2.9, 2.18, 1.6411, 43.4, 22.8, 17.8, 14.6, 12.4, 11.6, 9.4, 8.4, 7.5, 6.8, 6.1,
+    7.1, 8.12, 6.07, 4.31, 3.77, 3.05, 2.4844, 47.3, 27.6, 22.7, 17.9, 15.7, 12.8, 11.4, 9.6, 8.6,
+    4.8, 7.2, 7.2, 10.2, 7.7, 6.6, 5.5, 5.35, 4.044, 59.6, 39.7, 31.1, 29.6, 28.2, 31.4, 30.1,
+    28.8, 27.7, 23.5, 25.5, 24.5, 23.6, 22.7, 21.8, 21.0, 21.9, 16.2, 13.1, 11.1, 9.7, 8.5, 7.6,
+    6.5, 5.8, 5.7, 7.6, 6.8, 7.4, 6.8, 6.0, 5.3, 48.7, 38.3, 32.1, 32.1, 25.4, 27.4, 24.8, 24.5,
+    23.3, 23.0, 22.7, 20.5, 19.7, 23.8, 18.2, 17.5,
 ];
 
-/// Implements pol.
-///
-/// Function context: `crates/ferrum_core/src/desc/polarizability.rs`.
-/// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-fn atom_pol(atomic_number: u8) -> f32 {
-    let idx = atomic_number as usize;
-    if idx < POLARIZABILITY.len() {
-        POLARIZABILITY[idx]
-    } else {
-        0.0
+/// Polarizability of an element; NaN where CDK has no value (CDK then reports an error).
+#[inline]
+fn atom_pol(atomic_number: u8) -> f64 {
+    match atomic_number {
+        1..=102 => POLARIZABILITY[atomic_number as usize],
+        _ => f64::NAN,
     }
 }
 
-/// APol — sum of atomic polarizabilities (heavy atoms + implicit H).
+/// APol (CDK `APolDescriptor`): sum of atomic polarizabilities including the
+/// implicit hydrogens CDK assigns (`CDKHydrogenAdder` after atom typing).
 pub struct APol;
 
 impl Descriptor for APol {
-    /// Implements the behavior encoded by this function.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/polarizability.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn name(&self) -> &str {
         "APol"
     }
 
-    /// Calculates the behavior encoded by this function.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/polarizability.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn calculate(
         &self,
         mol: &mut Molecule,
-        _ctx: &mut crate::desc::context::CalculationContext,
+        ctx: &mut crate::desc::context::CalculationContext,
     ) -> DescriptorValue {
         let h_pol = POLARIZABILITY[1];
-        let mut sum = 0.0f32;
-        for atom in &mol.atoms {
-            sum += atom_pol(atom.atomic_number);
-            sum = (atom.total_h() as f32).mul_add(h_pol, sum);
-        }
+        let sum = CdkView::with_legacy_cached(mol, ctx, |view, _| {
+            let mut sum = 0.0f64;
+            for (atom, &nh) in mol.atoms.iter().zip(&view.h) {
+                sum += atom_pol(atom.atomic_number);
+                sum += h_pol * nh as f64;
+            }
+            sum
+        });
         DescriptorValue::Float(sum)
     }
 }
 
-/// BPol — sum of absolute differences of polarizabilities over bonds.
+/// BPol (CDK `BPolDescriptor`): sum over bonds (including the bonds to
+/// implicit hydrogens) of the absolute polarizability difference of the atoms.
 pub struct BPol;
 
 impl Descriptor for BPol {
-    /// Implements the behavior encoded by this function.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/polarizability.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn name(&self) -> &str {
         "BPol"
     }
 
-    /// Calculates the behavior encoded by this function.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/polarizability.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn calculate(
         &self,
         mol: &mut Molecule,
-        _ctx: &mut crate::desc::context::CalculationContext,
+        ctx: &mut crate::desc::context::CalculationContext,
     ) -> DescriptorValue {
-        let mut sum = 0.0f32;
+        let h = CdkView::with_legacy_cached(mol, ctx, |view, _| view.h.clone());
+        let mut sum = 0.0f64;
         for bond in &mol.bonds {
             let p_src = atom_pol(mol.atoms[bond.source as usize].atomic_number);
             let p_tgt = atom_pol(mol.atoms[bond.target as usize].atomic_number);
             sum += (p_src - p_tgt).abs();
+        }
+        let h_pol = POLARIZABILITY[1];
+        for (atom, &nh) in mol.atoms.iter().zip(&h) {
+            sum += (atom_pol(atom.atomic_number) - h_pol).abs() * nh as f64;
         }
         DescriptorValue::Float(sum)
     }
@@ -168,20 +128,8 @@ mod tests {
     use super::*;
     use crate::io::smiles::parse_smiles;
 
-    /// Parses the behavior encoded by this function.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/polarizability.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-    fn parse(smiles: &str) -> Molecule {
-        parse_smiles(smiles).expect("valid SMILES")
-    }
-
-    /// Implements the behavior encoded by this function.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/polarizability.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-    fn calc(desc: &dyn Descriptor, smiles: &str) -> f32 {
-        let mut mol = parse(smiles);
+    fn calc(desc: &dyn Descriptor, smiles: &str) -> f64 {
+        let mut mol = parse_smiles(smiles).expect("valid SMILES");
         match desc.calculate(
             &mut mol,
             &mut crate::desc::context::CalculationContext::new(),
@@ -191,96 +139,48 @@ mod tests {
         }
     }
 
+    // Expected values: CDK 2.13 (tests/data/cdk_parity_reference.csv).
+
     #[test]
-    /// Runs regression test for apol methane.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/polarizability.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_apol_methane() {
-        // C: 1.76 + 4*0.387 = 3.308
-        let v = calc(&APol, "[CH4]");
-        assert!((v - 3.308).abs() < 0.01, "APol methane = {v}");
+        // C 1.76 + 4 H 0.666793
+        assert!((calc(&APol, "C") - 4.427172).abs() < 1e-9);
     }
 
     #[test]
-    /// Runs regression test for apol ethanol.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/polarizability.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-    fn test_apol_ethanol() {
-        // CCO: 2*1.76 + 0.802 + (3+2+1)*0.387 = 4.322 + 2.322 = 6.644
-        let v = calc(&APol, "CCO");
-        let expected = 2.0 * 1.76 + 0.802 + 6.0 * 0.387;
-        assert!(
-            (v - expected).abs() < 0.01,
-            "APol ethanol = {v}, expected {expected}"
-        );
-    }
-
-    #[test]
-    /// Runs regression test for bpol ethanol.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/polarizability.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-    fn test_bpol_ethanol() {
-        // Bonds: C-C (|1.76-1.76|=0) + C-O (|1.76-0.802|=0.958)
-        let v = calc(&BPol, "CCO");
-        assert!((v - 0.958).abs() < 0.01, "BPol ethanol = {v}");
-    }
-
-    #[test]
-    /// Runs regression test for apol benzene.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/polarizability.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_apol_benzene() {
-        // c1ccccc1: 6*1.76 + 6*0.387 = 10.56 + 2.322 = 12.882
-        let v = calc(&APol, "c1ccccc1");
-        let expected = 6.0 * 1.76 + 6.0 * 0.387;
-        assert!(
-            (v - expected).abs() < 0.01,
-            "APol benzene = {v}, expected {expected}"
-        );
+        let expected = 6.0 * 1.76 + 6.0 * 0.666793;
+        assert!((calc(&APol, "c1ccccc1") - expected).abs() < 1e-9);
     }
 
     #[test]
-    /// Runs regression test for bpol symmetric.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/polarizability.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-    fn test_bpol_symmetric() {
-        // Benzene: all C-C bonds → BPol = 0
-        let v = calc(&BPol, "c1ccccc1");
-        assert!(v.abs() < 1e-6, "BPol benzene = {v}");
+    fn test_bpol_ethanol() {
+        // C-C 0, C-O 0.958, 5 C-H, 1 O-H
+        let expected = 0.958 + 5.0 * (1.76 - 0.666793) + (0.802 - 0.666793f64).abs();
+        assert!((calc(&BPol, "CCO") - expected).abs() < 1e-9);
     }
 
     #[test]
-    /// Runs regression test for apol fluoromethane.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/polarizability.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-    fn test_apol_fluoromethane() {
-        // CF: 1.76 + 0.557 + 3*0.387 = 3.478
-        let v = calc(&APol, "CF");
-        let expected = 1.76 + 0.557 + 3.0 * 0.387;
-        assert!(
-            (v - expected).abs() < 0.01,
-            "APol CF = {v}, expected {expected}"
-        );
+    fn test_bpol_methane_matches_cdk() {
+        assert!((calc(&BPol, "[H]C([H])([H])[H]") - 4.372828).abs() < 1e-9);
     }
 
     #[test]
-    /// Runs regression test for empty molecule.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/polarizability.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
+    fn test_salt() {
+        // [Na+].[Cl-]: 23.6 + 2.18
+        assert!((calc(&APol, "[Na+].[Cl-]") - 25.78).abs() < 1e-9);
+        assert_eq!(calc(&BPol, "[Na+].[Cl-]"), 0.0);
+    }
+
+    #[test]
     fn test_empty_molecule() {
         let mut mol = Molecule::default();
+        let mut ctx = crate::desc::context::CalculationContext::new();
         assert!(
-            matches!(APol.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()), DescriptorValue::Float(v) if v == 0.0)
+            matches!(APol.calculate(&mut mol, &mut ctx), DescriptorValue::Float(v) if v == 0.0)
         );
         assert!(
-            matches!(BPol.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()), DescriptorValue::Float(v) if v == 0.0)
+            matches!(BPol.calculate(&mut mol, &mut ctx), DescriptorValue::Float(v) if v == 0.0)
         );
     }
 }

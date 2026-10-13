@@ -38,7 +38,7 @@ pub type AtomIdx = u16;
 pub type BondIdx = u16;
 
 /// Floating point type for descriptors (switchable f32/f64).
-pub type Real = f32;
+pub type Real = f64;
 
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -62,6 +62,8 @@ pub enum BondType {
 /// Function context: `crates/ferrum_core/src/types.rs`.
 /// System-layer note: component execution and pipeline orchestration.
 pub enum Hybridization {
+    /// s orbital only (e.g. H, isolated ions); RDKit `S`.
+    S,
     SP,
     SP2,
     SP3,

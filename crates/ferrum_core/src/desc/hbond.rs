@@ -71,7 +71,8 @@ pub fn compute_hbond_acceptors(mol: &Molecule) -> u32 {
 
     static HBA_SMARTS: Lazy<crate::io::smarts::QueryGraph> = Lazy::new(|| {
         parse_smarts(
-            "[$([O,S;H1;v2;!$([O,S;H1;v2]*=[O,N,P,S])]),$([O,S;H0;v2]),$([O,S;-]),$([N;v3;!$(N-*=!@[O,N,P,S])]),$([nH0,o,s;+0])]"
+            // RDKit 2026.03 CalcNumHBA: aromatic N only when unsubstituted (X2)
+            "[$([O,S;H1;v2]-[!$(*=[O,N,P,S])]),$([O,S;H0;v2]),$([O,S;-]),$([N;v3;!$(N-*=!@[O,N,P,S])]),$([n;H0;+0;X2]),$([o,s;+0])]"
         ).expect("valid HBA SMARTS")
     });
 

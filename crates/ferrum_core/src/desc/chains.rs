@@ -1,226 +1,96 @@
-//! Structural chain descriptors for molecular complexity analysis.
+//! Structural chain descriptors (CDK 2.13 `LongestAliphaticChainDescriptor`
+//! and `LargestChainDescriptor`, default parameters).
 //!
-//! These descriptors measure different aspects of molecular chain structure:
-//! - Longest aliphatic chain: Maximum sp3 carbon chain length
-//! - Largest chain: Maximum chain through any atoms
+//! - `nAtomLAC`: number of atoms in the longest chain of acyclic carbons
+//!   (any hybridisation). Isolated acyclic carbons (no acyclic carbon
+//!   neighbour) do not form a chain, so e.g. toluene gives 0.
+//! - `nAtomLC`: number of atoms in the longest shortest-path between two
+//!   acyclic non-hydrogen atoms (any element). A lone acyclic atom gives 0.
 //!
-//! Useful for predicting:
-//! - Flexibility
-//! - Lipophilicity
-//! - Molecular complexity
-
-//! ## File guide: Chains
+//! Both subsets are forests (acyclic atoms cannot form a cycle), so the value is
+//! the largest tree diameter (in atoms) over components with at least two atoms.
 //!
-//! This file belongs to FerrumChem's **descriptor/fingerprint feature layer**.
-//!
-//! What to learn here:
-//! - Which chemistry/ML concern this file owns in the pipeline.
-//! - How Rust types and control-flow encode that concern.
-//! - Which public symbols are the best entry points for reading/debugging.
-//!
-//! Key symbols in this file:
-//! - `struct LongestAliphaticChain`
-//! - `fn neighbor_atom_idx`
-//! - `fn farthest_aliphatic`
-//! - `fn component_vertices`
-//! - `fn tree_diameter_or_cycle_bound`
-//!
-//! Suggested reading workflow:
-//! 1. Read top-level type definitions and public APIs.
-//! 2. Trace helper functions used in hot/critical paths.
-//! 3. Cross-reference tests/examples that exercise this file.
-
-//!
-//! ### Algorithmic assumptions for this file
-//! - `Chains` assumes molecule preprocessing (implicit hydrogens, aromaticity flags, and ring annotations) is current before calculation.
-//! - `Chains` remains deterministic for identical atom/bond indexing so batch and single-molecule runs agree bit-for-bit.
-//! - Typed `DescriptorValue` output is part of the contract; downstream ML code should not rely on ad-hoc coercions.
-//! - Specific scope anchor: `crates/ferrum_core/src/desc/chains.rs` defines chains behavior and should be updated together with its direct tests.
-//! ### Chemistry/ML references
-//! - Todeschini & Consonni. Handbook of Molecular Descriptors (general descriptor taxonomy).
-//! - RDKit descriptor/fingerprint APIs used as practical parity baselines for `Chains` workflows.
-//! - Repository unit and parity tests covering `Chains` behavior and edge molecules.
-//! - Code-local source of truth: symbols and tests declared in `crates/ferrum_core/src/desc/chains.rs`.
+//! Key symbols: `struct LongestAliphaticChain`, `struct LargestChain`,
+//! `fn longest_chain_in_forest`.
 
 use super::typed::{Descriptor, DescriptorValue};
 use crate::mol::molecule::Molecule;
-use crate::types::AtomIdx;
-use std::collections::VecDeque;
 
-/// Longest aliphatic (sp3 carbon) chain descriptor.
+/// Number of atoms on the longest path in the forest induced by `include`,
+/// counting only components with at least two atoms (CDK: 0 otherwise).
+fn longest_chain_in_forest(mol: &Molecule, include: impl Fn(usize) -> bool) -> u32 {
+    let n = mol.num_atoms();
+    let inc: Vec<bool> = (0..n).map(&include).collect();
+    // depth from BFS; u32::MAX = unvisited
+    let mut dist = vec![u32::MAX; n];
+    let mut comp_seen = vec![false; n];
+    let mut queue: Vec<usize> = Vec::with_capacity(n);
+    let mut best = 0u32;
+
+    // BFS over the included subgraph from `src`; returns (farthest atom, its depth)
+    let bfs = |src: usize, dist: &mut Vec<u32>, queue: &mut Vec<usize>, mark: &mut Vec<bool>| -> (usize, u32) {
+        queue.clear();
+        queue.push(src);
+        dist[src] = 0;
+        let mut far = (src, 0u32);
+        let mut head = 0;
+        while head < queue.len() {
+            let a = queue[head];
+            head += 1;
+            mark[a] = true;
+            let d = dist[a];
+            if d > far.1 {
+                far = (a, d);
+            }
+            for &bi in &mol.adjacency[a] {
+                let b = &mol.bonds[bi as usize];
+                let w = if b.source as usize == a { b.target } else { b.source } as usize;
+                if inc[w] && dist[w] == u32::MAX {
+                    dist[w] = d + 1;
+                    queue.push(w);
+                }
+            }
+        }
+        for &a in queue.iter() {
+            dist[a] = u32::MAX;
+        }
+        far
+    };
+
+    let mut scratch = vec![false; n];
+    for s in 0..n {
+        if !inc[s] || comp_seen[s] {
+            continue;
+        }
+        let (far, _) = bfs(s, &mut dist, &mut queue, &mut comp_seen);
+        let (_, diam) = bfs(far, &mut dist, &mut queue, &mut scratch);
+        if diam > 0 {
+            best = best.max(diam + 1);
+        }
+    }
+    best
+}
+
+/// Longest aliphatic chain (CDK `LongestAliphaticChainDescriptor`, `nAtomLAC`).
 ///
-/// Finds the longest continuous chain of sp3-hybridized carbons (non-aromatic, single bonds).
-/// Returns Int(u32) with the length of the longest aliphatic carbon chain.
+/// Longest chain of acyclic carbon atoms; returns Int(u32).
 pub struct LongestAliphaticChain;
 
 impl LongestAliphaticChain {
-    /// Implements atom idx.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/chains.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-    fn neighbor_atom_idx(mol: &Molecule, atom_idx: AtomIdx, bond_idx: u16) -> AtomIdx {
-        let bond = &mol.bonds[bond_idx as usize];
-        if bond.source == atom_idx {
-            bond.target
-        } else {
-            bond.source
-        }
-    }
-
-    /// Implements aliphatic.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/chains.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-    fn farthest_aliphatic(
-        mol: &Molecule,
-        start: AtomIdx,
-        allowed: &[bool],
-        dist: &mut [i32],
-        queue: &mut VecDeque<AtomIdx>,
-    ) -> (AtomIdx, i32) {
-        dist.fill(-1);
-        queue.clear();
-        dist[start as usize] = 0;
-        queue.push_back(start);
-
-        let mut far = start;
-        let mut far_dist = 0i32;
-        while let Some(node) = queue.pop_front() {
-            let d = dist[node as usize];
-            if d > far_dist {
-                far_dist = d;
-                far = node;
-            }
-            for &bond_idx in &mol.adjacency[node as usize] {
-                let nei = Self::neighbor_atom_idx(mol, node, bond_idx);
-                let ni = nei as usize;
-                if !allowed[ni] || dist[ni] != -1 {
-                    continue;
-                }
-                dist[ni] = d + 1;
-                queue.push_back(nei);
-            }
-        }
-        (far, far_dist)
-    }
-
-    /// Implements vertices.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/chains.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-    fn component_vertices(
-        mol: &Molecule,
-        start: AtomIdx,
-        allowed: &[bool],
-        comp_mark: &mut [bool],
-        queue: &mut VecDeque<AtomIdx>,
-    ) -> Vec<AtomIdx> {
-        queue.clear();
-        queue.push_back(start);
-        comp_mark[start as usize] = true;
-
-        let mut out = Vec::new();
-        while let Some(node) = queue.pop_front() {
-            out.push(node);
-            for &bond_idx in &mol.adjacency[node as usize] {
-                let nei = Self::neighbor_atom_idx(mol, node, bond_idx);
-                let ni = nei as usize;
-                if !allowed[ni] || comp_mark[ni] {
-                    continue;
-                }
-                comp_mark[ni] = true;
-                queue.push_back(nei);
-            }
-        }
-        out
-    }
-
-    /// Implements diameter or cycle bound.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/chains.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-    fn tree_diameter_or_cycle_bound(
-        mol: &Molecule,
-        vertices: &[AtomIdx],
-        allowed: &[bool],
-        dist: &mut [i32],
-        queue: &mut VecDeque<AtomIdx>,
-    ) -> i32 {
-        if vertices.is_empty() {
-            return 0;
-        }
-
-        let mut edge_twice = 0usize;
-        for &v in vertices {
-            edge_twice += mol.adjacency[v as usize]
-                .iter()
-                .filter(|&&bond_idx| {
-                    let nei = Self::neighbor_atom_idx(mol, v, bond_idx);
-                    allowed[nei as usize]
-                })
-                .count();
-        }
-        let edges = edge_twice / 2;
-
-        // Exact tree diameter if component is acyclic; otherwise use a tight linear-time upper bound.
-        if edges + 1 == vertices.len() {
-            let start = vertices[0];
-            let (u, _) = Self::farthest_aliphatic(mol, start, allowed, dist, queue);
-            let (_, d) = Self::farthest_aliphatic(mol, u, allowed, dist, queue);
-            d + 1
-        } else {
-            vertices.len() as i32
-        }
-    }
-
-    /// Computes the behavior encoded by this function.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/chains.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-    fn compute(mol: &Molecule) -> u32 {
-        let n = mol.atoms.len();
-        if n == 0 {
-            return 0;
-        }
-
-        let mut allowed = vec![false; n];
-        for (i, atom) in mol.atoms.iter().enumerate() {
-            allowed[i] = atom.atomic_number == 6 && !atom.is_aromatic();
-        }
-
-        let mut comp_mark = vec![false; n];
-        let mut dist = vec![-1; n];
-        let mut queue = VecDeque::new();
-        let mut best = 0i32;
-
-        for i in 0..n {
-            if !allowed[i] || comp_mark[i] {
-                continue;
-            }
-            let vertices =
-                Self::component_vertices(mol, i as AtomIdx, &allowed, &mut comp_mark, &mut queue);
-            let len =
-                Self::tree_diameter_or_cycle_bound(mol, &vertices, &allowed, &mut dist, &mut queue);
-            best = best.max(len);
-        }
-
-        best.max(0) as u32
+    /// Computes `nAtomLAC`.
+    pub fn compute(mol: &Molecule) -> u32 {
+        longest_chain_in_forest(mol, |a| {
+            let at = &mol.atoms[a];
+            at.atomic_number == 6 && !at.is_in_ring()
+        })
     }
 }
 
 impl Descriptor for LongestAliphaticChain {
-    /// Implements the behavior encoded by this function.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/chains.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn name(&self) -> &str {
         "LongestAliphaticChain"
     }
 
-    /// Calculates the behavior encoded by this function.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/chains.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn calculate(
         &self,
         mol: &mut Molecule,
@@ -230,175 +100,26 @@ impl Descriptor for LongestAliphaticChain {
     }
 }
 
-/// Largest chain through any atoms descriptor.
+/// Largest chain (CDK `LargestChainDescriptor`, `nAtomLC`).
 ///
-/// Finds the longest continuous chain through any atoms (not just carbons).
-/// Returns Int(u32) with the length of the longest atom chain.
+/// Longest shortest-path (in atoms) between acyclic heavy atoms; returns Int(u32).
 pub struct LargestChain;
 
 impl LargestChain {
-    /// Implements any.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/chains.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-    fn farthest_any(
-        mol: &Molecule,
-        start: AtomIdx,
-        allowed: &[bool],
-        dist: &mut [i32],
-        queue: &mut VecDeque<AtomIdx>,
-    ) -> (AtomIdx, i32) {
-        dist.fill(-1);
-        queue.clear();
-        dist[start as usize] = 0;
-        queue.push_back(start);
-
-        let mut far = start;
-        let mut far_dist = 0i32;
-        while let Some(node) = queue.pop_front() {
-            let d = dist[node as usize];
-            if d > far_dist {
-                far_dist = d;
-                far = node;
-            }
-            for &bond_idx in &mol.adjacency[node as usize] {
-                let nei = Self::neighbor_atom_idx(mol, node, bond_idx);
-                let ni = nei as usize;
-                if !allowed[ni] || dist[ni] != -1 {
-                    continue;
-                }
-                dist[ni] = d + 1;
-                queue.push_back(nei);
-            }
-        }
-        (far, far_dist)
-    }
-
-    /// Implements vertices.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/chains.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-    fn component_vertices(
-        mol: &Molecule,
-        start: AtomIdx,
-        allowed: &[bool],
-        comp_mark: &mut [bool],
-        queue: &mut VecDeque<AtomIdx>,
-    ) -> Vec<AtomIdx> {
-        queue.clear();
-        queue.push_back(start);
-        comp_mark[start as usize] = true;
-
-        let mut out = Vec::new();
-        while let Some(node) = queue.pop_front() {
-            out.push(node);
-            for &bond_idx in &mol.adjacency[node as usize] {
-                let nei = Self::neighbor_atom_idx(mol, node, bond_idx);
-                let ni = nei as usize;
-                if !allowed[ni] || comp_mark[ni] {
-                    continue;
-                }
-                comp_mark[ni] = true;
-                queue.push_back(nei);
-            }
-        }
-        out
-    }
-
-    /// Implements diameter or cycle bound.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/chains.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-    fn tree_diameter_or_cycle_bound(
-        mol: &Molecule,
-        vertices: &[AtomIdx],
-        allowed: &[bool],
-        dist: &mut [i32],
-        queue: &mut VecDeque<AtomIdx>,
-    ) -> i32 {
-        if vertices.is_empty() {
-            return 0;
-        }
-
-        let mut edge_twice = 0usize;
-        for &v in vertices {
-            edge_twice += mol.adjacency[v as usize]
-                .iter()
-                .filter(|&&bond_idx| {
-                    let nei = Self::neighbor_atom_idx(mol, v, bond_idx);
-                    allowed[nei as usize]
-                })
-                .count();
-        }
-        let edges = edge_twice / 2;
-
-        if edges + 1 == vertices.len() {
-            let start = vertices[0];
-            let (u, _) = Self::farthest_any(mol, start, allowed, dist, queue);
-            let (_, d) = Self::farthest_any(mol, u, allowed, dist, queue);
-            d + 1
-        } else {
-            vertices.len() as i32
-        }
-    }
-
-    /// Implements atom idx.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/chains.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-    fn neighbor_atom_idx(mol: &Molecule, atom_idx: AtomIdx, bond_idx: u16) -> AtomIdx {
-        let bond = &mol.bonds[bond_idx as usize];
-        if bond.source == atom_idx {
-            bond.target
-        } else {
-            bond.source
-        }
-    }
-
-    /// Computes the behavior encoded by this function.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/chains.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-    fn compute(mol: &Molecule) -> u32 {
-        let n = mol.atoms.len();
-        if n == 0 {
-            return 0;
-        }
-
-        let allowed = vec![true; n];
-        let mut comp_mark = vec![false; n];
-        let mut dist = vec![-1; n];
-        let mut queue = VecDeque::new();
-        let mut best = 0i32;
-
-        for i in 0..n {
-            if comp_mark[i] {
-                continue;
-            }
-            let vertices =
-                Self::component_vertices(mol, i as AtomIdx, &allowed, &mut comp_mark, &mut queue);
-            let len =
-                Self::tree_diameter_or_cycle_bound(mol, &vertices, &allowed, &mut dist, &mut queue);
-            best = best.max(len);
-        }
-
-        best.max(0) as u32
+    /// Computes `nAtomLC`.
+    pub fn compute(mol: &Molecule) -> u32 {
+        longest_chain_in_forest(mol, |a| {
+            let at = &mol.atoms[a];
+            at.atomic_number != 1 && !at.is_in_ring()
+        })
     }
 }
 
 impl Descriptor for LargestChain {
-    /// Implements the behavior encoded by this function.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/chains.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn name(&self) -> &str {
         "LargestChain"
     }
 
-    /// Calculates the behavior encoded by this function.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/chains.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn calculate(
         &self,
         mol: &mut Molecule,
@@ -409,10 +130,6 @@ impl Descriptor for LargestChain {
 }
 
 const _: () = {
-    /// Asserts send sync to guard invariants.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/chains.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     const fn assert_send_sync<T: Send + Sync>() {}
     let _ = assert_send_sync::<LongestAliphaticChain>;
     let _ = assert_send_sync::<LargestChain>;
@@ -421,170 +138,45 @@ const _: () = {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::algo::aromaticity::perceive_aromaticity;
-    use crate::algo::valency::assign_implicit_hydrogens;
     use crate::io::smiles::parse_smiles;
 
-    /// Parses and prepare.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/chains.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-    fn parse_and_prepare(smiles: &str) -> Molecule {
-        let mut mol = parse_smiles(smiles).unwrap();
-        assign_implicit_hydrogens(&mut mol).unwrap();
-        perceive_aromaticity(&mut mol);
-        mol
+    fn lac(smiles: &str) -> u32 {
+        LongestAliphaticChain::compute(&parse_smiles(smiles).unwrap())
+    }
+
+    fn lc(smiles: &str) -> u32 {
+        LargestChain::compute(&parse_smiles(smiles).unwrap())
+    }
+
+    // Expected values verified against CDK 2.13.
+
+    #[test]
+    fn test_longest_aliphatic_chain() {
+        assert_eq!(lac("CCCCCC"), 6);
+        assert_eq!(lac("CC(C)CCC"), 5);
+        assert_eq!(lac("CCCc1ccccc1"), 3);
+        assert_eq!(lac("c1ccccc1"), 0);
+        assert_eq!(lac("CCCCC(CC)CCCC"), 9);
+        // isolated acyclic carbons are not chains
+        assert_eq!(lac("Cc1ccccc1-c1ccccc1"), 0);
+        assert_eq!(lac("CS(C)(=O)=O"), 0);
+        // unsaturated acyclic carbons count
+        assert_eq!(lac("C=C=O"), 2);
+        assert_eq!(lac("COCCC#N"), 3);
     }
 
     #[test]
-    /// Runs regression test for longest aliphatic chain linear.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/chains.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-    fn test_longest_aliphatic_chain_linear() {
-        let mut mol = parse_and_prepare("CCCCCC");
-        assert_eq!(
-            LongestAliphaticChain.calculate(
-                &mut mol,
-                &mut crate::desc::context::CalculationContext::new()
-            ),
-            DescriptorValue::Int(6)
-        );
+    fn test_largest_chain() {
+        assert_eq!(lc("CCCCCC"), 6);
+        assert_eq!(lc("c1ccccc1"), 0);
+        assert_eq!(lc("CCOCCOC"), 7);
+        assert_eq!(lc("CC(C)(C)C"), 3);
+        assert_eq!(lc("CS(C)=O"), 3);
+        assert_eq!(lc("C[NH3+]"), 2);
+        assert_eq!(lc("[NH4+]"), 0);
     }
 
     #[test]
-    /// Runs regression test for longest aliphatic chain branched.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/chains.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-    fn test_longest_aliphatic_chain_branched() {
-        let mut mol = parse_and_prepare("CC(C)CCC");
-        assert_eq!(
-            LongestAliphaticChain.calculate(
-                &mut mol,
-                &mut crate::desc::context::CalculationContext::new()
-            ),
-            DescriptorValue::Int(5)
-        );
-    }
-
-    #[test]
-    /// Runs regression test for longest aliphatic chain aromatic.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/chains.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-    fn test_longest_aliphatic_chain_aromatic() {
-        let mut mol = parse_and_prepare("CCCc1ccccc1");
-        assert_eq!(
-            LongestAliphaticChain.calculate(
-                &mut mol,
-                &mut crate::desc::context::CalculationContext::new()
-            ),
-            DescriptorValue::Int(3)
-        );
-    }
-
-    #[test]
-    /// Runs regression test for longest aliphatic chain aromatic only.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/chains.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-    fn test_longest_aliphatic_chain_aromatic_only() {
-        let mut mol = parse_and_prepare("c1ccccc1");
-        assert_eq!(
-            LongestAliphaticChain.calculate(
-                &mut mol,
-                &mut crate::desc::context::CalculationContext::new()
-            ),
-            DescriptorValue::Int(0)
-        );
-    }
-
-    #[test]
-    /// Runs regression test for longest aliphatic chain complex.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/chains.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-    fn test_longest_aliphatic_chain_complex() {
-        let mut mol = parse_and_prepare("CCCCC(CC)CCCC");
-        assert_eq!(
-            LongestAliphaticChain.calculate(
-                &mut mol,
-                &mut crate::desc::context::CalculationContext::new()
-            ),
-            DescriptorValue::Int(9)
-        );
-    }
-
-    #[test]
-    /// Runs regression test for largest chain linear.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/chains.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-    fn test_largest_chain_linear() {
-        let mut mol = parse_and_prepare("CCCCCC");
-        assert_eq!(
-            LargestChain.calculate(
-                &mut mol,
-                &mut crate::desc::context::CalculationContext::new()
-            ),
-            DescriptorValue::Int(6)
-        );
-    }
-
-    #[test]
-    /// Runs regression test for largest chain aromatic.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/chains.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-    fn test_largest_chain_aromatic() {
-        let mut mol = parse_and_prepare("c1ccccc1");
-        assert_eq!(
-            LargestChain.calculate(
-                &mut mol,
-                &mut crate::desc::context::CalculationContext::new()
-            ),
-            DescriptorValue::Int(6)
-        );
-    }
-
-    #[test]
-    /// Runs regression test for largest chain with heteroatom.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/chains.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-    fn test_largest_chain_with_heteroatom() {
-        let mut mol = parse_and_prepare("CCOCCOC");
-        assert_eq!(
-            LargestChain.calculate(
-                &mut mol,
-                &mut crate::desc::context::CalculationContext::new()
-            ),
-            DescriptorValue::Int(7)
-        );
-    }
-
-    #[test]
-    /// Runs regression test for largest chain branched.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/chains.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-    fn test_largest_chain_branched() {
-        let mut mol = parse_and_prepare("CC(C)(C)C");
-        assert_eq!(
-            LargestChain.calculate(
-                &mut mol,
-                &mut crate::desc::context::CalculationContext::new()
-            ),
-            DescriptorValue::Int(3)
-        );
-    }
-
-    #[test]
-    /// Runs regression test for descriptor names.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/chains.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_descriptor_names() {
         assert_eq!(LongestAliphaticChain.name(), "LongestAliphaticChain");
         assert_eq!(LargestChain.name(), "LargestChain");

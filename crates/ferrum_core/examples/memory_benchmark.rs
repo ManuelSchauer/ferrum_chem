@@ -32,7 +32,6 @@
 //! - Terminal UX libraries (where applicable) used by `Memory Benchmark` for interactive workflows.
 //! - Code-local source of truth: symbols and tests declared in `crates/ferrum_core/examples/memory_benchmark.rs`.
 
-use ferrum_core::algo::aromaticity::perceive_aromaticity;
 use ferrum_core::desc::maccs::MaccsKeys;
 use ferrum_core::desc::typed::Descriptor;
 use ferrum_core::io::smiles::parse_smiles;
@@ -48,7 +47,6 @@ fn main() {
 
     // Parse test molecule
     let mut mol = parse_smiles("c1ccccc1").expect("valid SMILES");
-    perceive_aromaticity(&mut mol);
 
     // -----------------------------------------------------------------------
     // MACCS (BitVec) - 1 bit per feature

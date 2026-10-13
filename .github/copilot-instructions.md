@@ -16,13 +16,13 @@ ferrum_chem/
 │   ├── ferrum_core/      # Core library: all chemistry + ML logic (~25k LOC)
 │   └── ferrum_cli/       # Thin CLI wrapper (early stage)
 ├── scripts/              # Python RDKit reference-generation scripts
-└── crates/ferrum_core/tests/  # Integration tests + rdkit_reference*.csv
+└── crates/ferrum_core/tests/  # Integration tests; data/ holds the RDKit parity reference
 ```
 
 `ferrum_core` has six main submodules:
 - **mol/** – `Atom`, `Bond`, `Molecule` data structures
 - **io/** – SMILES parser, SMARTS parser, CSV reader, SDF stub
-- **algo/** – SSSR rings, aromaticity (Hückel), Morgan canonicalization, VF2 isomorphism, Gasteiger charges
+- **algo/** – RDKit-compatible sanitization (`sanitize.rs`: valence, kekulization, RDKit aromaticity, hybridization), RDKit SSSR (`sssr.rs`), VF2 isomorphism, Gasteiger charges
 - **desc/** – 72 descriptor modules + `typed.rs` (API) + `batch.rs` (parallel)
 - **ml/** – Dataset, scaling, PCA, KNN, RF, PLS, ElasticNet, ART-2A, CV, metrics, AD, QsarPipeline
 - **error/** – `FerrumError` via `thiserror`
@@ -42,21 +42,16 @@ cargo test --package ferrum_core --lib
 # Run a single test by name
 cargo test --package ferrum_core --lib -- <test_name>
 
-# Integration tests
-cargo test --package ferrum_core --test rdkit_comparison -- --nocapture
+# Integration tests (RDKit parity, regressions, SMARTS edge cases)
+cargo test --package ferrum_core --release --test rdkit_parity -- --nocapture
 cargo test --package ferrum_core --test smarts_edge
-
-# Benchmarks / examples
-cargo run --release --bin benchmark
-cargo run --bin descriptor_demo
-cargo run --bin csv_demo
-cargo run --bin smarts_demo
-cargo run --bin thread_safety_demo
 ```
 
-RDKit reference data is regenerated via Python when needed:
+The RDKit parity reference (`tests/data/rdkit_parity_reference.csv`) is regenerated
+with the reference RDKit version; element data comes from the same RDKit:
 ```bash
-python3 scripts/generate_rdkit_reference.py
+python scripts/generate_parity_reference.py
+python scripts/gen_element_data.py
 ```
 
 ---
@@ -110,22 +105,17 @@ All descriptors must be `Send + Sync`. Use `batch.rs` / Rayon for batch processi
 Return `Result<T, FerrumError>` everywhere. Use the appropriate variant:
 - `FerrumError::ParseError(String)` – SMILES/SMARTS parse failures
 - `FerrumError::ChemError(String)` – chemical impossibilities
-- `FerrumError::NotImplemented(String)` – stubs (`todo!()` is also used in SDF/standardize stubs)
+- `FerrumError::NotImplemented(String)` – unsupported features
 
-### Test Tolerances (rdkit_comparison)
-```rust
-const TIGHT_TOL:  f64 = 0.01;   // MW, basic counts
-const MEDIUM_TOL: f64 = 0.1;    // LogP, TPSA
-const LOOSE_TOL:  f64 = 1.0;    // complex descriptors
-const VSA_TOL:    f64 = 0.5;    // VSA values
-const CHI_TOL:    f64 = 0.05;   // Chi indices
-```
+### RDKit parity (tests/rdkit_parity.rs)
+Every feature with an RDKit equivalent is compared per molecule with
+`|a - b| <= 1e-9 + 1e-9 * |b|` (all values are f64 end to end); fingerprints and per-atom perception must match exactly.
+Known deviations are listed per column in `tests/data/rdkit_parity_baseline.tsv`.
+A column may never get worse; after a fix, tighten the baseline with
+`FERRUM_UPDATE_PARITY_BASELINE=1 cargo test -p ferrum_core --release --test rdkit_parity`.
 
 ---
 
 ## Known Stubs / Not Yet Implemented
 
-- `io/sdf.rs` – SDF parser (contains `todo!()`)
-- `algo/standardize.rs` – salt stripping stub
-- Stereochemistry (`@`/`@@`) in SMILES parser
-- No GitHub Actions CI yet
+- Stereochemistry (`@`/`@@`, `/`/`\\`) is parsed but not used (descriptors are 2D)

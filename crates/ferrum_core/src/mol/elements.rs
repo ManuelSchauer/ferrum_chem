@@ -36,127 +36,18 @@
 
 /// Standard atomic masses (in Daltons) indexed by atomic number.
 /// Index 0 is unused, elements 1-118 are defined.
-pub const ATOMIC_MASSES: [f32; 119] = [
-    0.0,    // 0: placeholder
-    1.008,  // 1: H
-    4.003,  // 2: He
-    6.941,  // 3: Li
-    9.012,  // 4: Be
-    10.81,  // 5: B
-    12.011, // 6: C
-    14.007, // 7: N
-    15.999, // 8: O
-    18.998, // 9: F
-    20.180, // 10: Ne
-    22.990, // 11: Na
-    24.305, // 12: Mg
-    26.982, // 13: Al
-    28.085, // 14: Si
-    30.974, // 15: P
-    32.067, // 16: S
-    35.453, // 17: Cl
-    39.948, // 18: Ar
-    39.098, // 19: K
-    40.078, // 20: Ca
-    44.956, // 21: Sc
-    47.867, // 22: Ti
-    50.942, // 23: V
-    51.996, // 24: Cr
-    54.938, // 25: Mn
-    55.845, // 26: Fe
-    58.933, // 27: Co
-    58.693, // 28: Ni
-    63.546, // 29: Cu
-    65.38,  // 30: Zn
-    69.723, // 31: Ga
-    72.630, // 32: Ge
-    74.922, // 33: As
-    78.971, // 34: Se
-    79.904, // 35: Br
-    83.798, // 36: Kr
-    85.468, // 37: Rb
-    87.62,  // 38: Sr
-    88.906, // 39: Y
-    91.224, // 40: Zr
-    92.906, // 41: Nb
-    95.95,  // 42: Mo
-    98.0,   // 43: Tc
-    101.07, // 44: Ru
-    102.91, // 45: Rh
-    106.42, // 46: Pd
-    107.87, // 47: Ag
-    112.41, // 48: Cd
-    114.82, // 49: In
-    118.71, // 50: Sn
-    121.76, // 51: Sb
-    127.60, // 52: Te
-    126.90, // 53: I
-    131.29, // 54: Xe
-    132.91, // 55: Cs
-    137.33, // 56: Ba
-    138.91, // 57: La
-    140.12, // 58: Ce
-    140.91, // 59: Pr
-    144.24, // 60: Nd
-    145.0,  // 61: Pm
-    150.36, // 62: Sm
-    151.96, // 63: Eu
-    157.25, // 64: Gd
-    158.93, // 65: Tb
-    162.50, // 66: Dy
-    164.93, // 67: Ho
-    167.26, // 68: Er
-    168.93, // 69: Tm
-    173.05, // 70: Yb
-    174.97, // 71: Lu
-    178.49, // 72: Hf
-    180.95, // 73: Ta
-    183.84, // 74: W
-    186.21, // 75: Re
-    190.23, // 76: Os
-    192.22, // 77: Ir
-    195.08, // 78: Pt
-    196.97, // 79: Au
-    200.59, // 80: Hg
-    204.38, // 81: Tl
-    207.2,  // 82: Pb
-    208.98, // 83: Bi
-    209.0,  // 84: Po
-    210.0,  // 85: At
-    222.0,  // 86: Rn
-    223.0,  // 87: Fr
-    226.0,  // 88: Ra
-    227.0,  // 89: Ac
-    232.04, // 90: Th
-    231.04, // 91: Pa
-    238.03, // 92: U
-    237.0,  // 93: Np
-    244.0,  // 94: Pu
-    243.0,  // 95: Am
-    247.0,  // 96: Cm
-    247.0,  // 97: Bk
-    251.0,  // 98: Cf
-    252.0,  // 99: Es
-    257.0,  // 100: Fm
-    258.0,  // 101: Md
-    259.0,  // 102: No
-    262.0,  // 103: Lr
-    267.0,  // 104: Rf
-    268.0,  // 105: Db
-    271.0,  // 106: Sg
-    272.0,  // 107: Bh
-    270.0,  // 108: Hs
-    276.0,  // 109: Mt
-    281.0,  // 110: Ds
-    280.0,  // 111: Rg
-    285.0,  // 112: Cn
-    284.0,  // 113: Nh
-    289.0,  // 114: Fl
-    288.0,  // 115: Mc
-    293.0,  // 116: Lv
-    294.0,  // 117: Ts
-    294.0,  // 118: Og
-];
+pub const ATOMIC_MASSES: [f64; 119] = build_atomic_masses();
+
+/// Average atomic weights from RDKit's periodic table (see `rdkit_data`).
+const fn build_atomic_masses() -> [f64; 119] {
+    let mut out = [0.0f64; 119];
+    let mut i = 0;
+    while i < 119 {
+        out[i] = crate::mol::rdkit_data::ELEMENTS[i].mass;
+        i += 1;
+    }
+    out
+}
 
 /// Element symbols indexed by atomic number.
 pub const ELEMENT_SYMBOLS: [&str; 119] = [
@@ -280,113 +171,11 @@ pub const fn is_transition_metal(atomic_number: u8) -> bool {
     }
 }
 
-/// Used for calculating total valence electron count in molecules.
-///
-/// # Examples
-/// - H (1): 1 valence electron
-/// - C (6): 4 valence electrons
-/// - N (7): 5 valence electrons
-/// - O (8): 6 valence electrons
-const fn compute_outer_electrons_value(atomic_number: u8) -> u8 {
-    match atomic_number {
-        1 => 1,  // H
-        2 => 2,  // He
-        3 => 1,  // Li
-        4 => 2,  // Be
-        5 => 3,  // B
-        6 => 4,  // C
-        7 => 5,  // N
-        8 => 6,  // O
-        9 => 7,  // F
-        10 => 8, // Ne
-        11 => 1, // Na
-        12 => 2, // Mg
-        13 => 3, // Al
-        14 => 4, // Si
-        15 => 5, // P
-        16 => 6, // S
-        17 => 7, // Cl
-        18 => 8, // Ar
-        19 => 1, // K
-        20 => 2, // Ca
-        // Transition metals (Sc-Zn)
-        21 => 3,
-        22 => 4,
-        23 => 5,
-        24 => 6,
-        25 => 7,
-        26 => 8,
-        27 => 9,
-        28 => 10,
-        29 => 2,
-        30 => 2,
-        31 => 3, // Ga
-        32 => 4, // Ge
-        33 => 5, // As
-        34 => 6, // Se
-        35 => 7, // Br
-        36 => 8, // Kr
-        37 => 1, // Rb
-        38 => 2, // Sr
-        // Transition metals (Y-Cd)
-        39 => 3,
-        40 => 4,
-        41 => 5,
-        42 => 6,
-        43 => 7,
-        44 => 8,
-        45 => 9,
-        46 => 10,
-        47 => 2,
-        48 => 2,
-        49 => 3, // In
-        50 => 4, // Sn
-        51 => 5, // Sb
-        52 => 6, // Te
-        53 => 7, // I
-        54 => 8, // Xe
-        // 3rd-row transition metals (Hf-Hg): 5d + 6s electrons
-        55 => 1,  // Cs
-        56 => 2,  // Ba
-        72 => 4,  // Hf
-        73 => 5,  // Ta
-        74 => 6,  // W
-        75 => 7,  // Re
-        76 => 8,  // Os
-        77 => 9,  // Ir
-        78 => 10, // Pt (5d9 6s1 → 10 outer)
-        79 => 11, // Au (5d10 6s1 → 11 outer)
-        80 => 2,  // Hg
-        81 => 3,  // Tl
-        82 => 4,  // Pb
-        83 => 5,  // Bi
-        // For other elements, use simplified model
-        _ => {
-            if atomic_number % 10 < 8 {
-                atomic_number % 10
-            } else {
-                8
-            }
-        }
-    }
-}
-
-const fn build_outer_electrons_table() -> [u8; 119] {
-    let mut table = [0u8; 119];
-    let mut z = 1usize;
-    while z < 119 {
-        table[z] = compute_outer_electrons_value(z as u8);
-        z += 1;
-    }
-    table
-}
-
-const OUTER_ELECTRONS_TABLE: [u8; 119] = build_outer_electrons_table();
-
 #[inline]
 pub const fn outer_electrons(atomic_number: u8) -> u8 {
-    if (atomic_number as usize) < OUTER_ELECTRONS_TABLE.len() {
-        OUTER_ELECTRONS_TABLE[atomic_number as usize]
+    // RDKit periodic table (e.g. Cu = 11, Fe = 8), see `rdkit_data`.
+    if (atomic_number as usize) < crate::mol::rdkit_data::ELEMENTS.len() {
+        crate::mol::rdkit_data::ELEMENTS[atomic_number as usize].n_outer
     } else {
         0
     }

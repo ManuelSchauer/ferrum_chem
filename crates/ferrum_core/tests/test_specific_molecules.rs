@@ -418,7 +418,6 @@ fn cnp0208621_matches_rdkit_aromatic_targets() {
 }
 
 #[test]
-#[ignore = "Known RDKit parity gaps while aromaticity work is in progress"]
 /// Runs regression test for representative blockers match rdkit targets.
 ///
 /// Function context: `crates/ferrum_core/tests/test_specific_molecules.rs`.

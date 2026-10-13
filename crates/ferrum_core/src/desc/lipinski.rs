@@ -117,7 +117,6 @@ const _: () = {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::algo::valency::assign_implicit_hydrogens;
     use crate::io::smiles::parse_smiles;
 
     /// Parses and prepare.
@@ -125,8 +124,7 @@ mod tests {
     /// Function context: `crates/ferrum_core/src/desc/lipinski.rs`.
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn parse_and_prepare(smiles: &str) -> Molecule {
-        let mut mol = parse_smiles(smiles).unwrap();
-        assign_implicit_hydrogens(&mut mol).unwrap();
+        let mol = parse_smiles(smiles).unwrap();
         mol
     }
 

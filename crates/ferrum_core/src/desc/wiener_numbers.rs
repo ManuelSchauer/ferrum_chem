@@ -19,8 +19,7 @@
 //!
 //! Key symbols in this file:
 //! - `struct WienerIndex`
-//! - `fn _compute_distance_matrix_unused`
-//! - `fn wiener_from_distances`
+//! - `fn wiener_numbers`
 //! - `fn name`
 //! - `fn calculate`
 //!
@@ -41,131 +40,59 @@
 //! - Repository unit and parity tests covering `Wiener Numbers` behavior and edge molecules.
 //! - Code-local source of truth: symbols and tests declared in `crates/ferrum_core/src/desc/wiener_numbers.rs`.
 
+use super::cdk_graph::cdk_distance;
 use super::typed::{Descriptor, DescriptorValue};
 use crate::mol::molecule::Molecule;
-use crate::types::AtomIdx;
-use std::collections::VecDeque;
 
-/// Wiener Index: Sum of all shortest path distances between atom pairs.
+/// CDK `WienerNumbersDescriptor`: `[WienerPath, WienerPolarity]`.
 ///
-/// The Wiener Index (W) is a fundamental topological descriptor that measures
-/// the compactness of a molecule. It's defined as the sum of all shortest
-/// topological distances (in bonds) between all pairs of non-hydrogen atoms.
-///
-/// # Formula
-/// W = (1/2) × Σᵢ Σⱼ d(i,j)
-///
-/// where d(i,j) is the shortest path distance between atoms i and j.
-///
-/// # Properties
-/// - Linear molecules have higher W than branched molecules of same size
-/// - Correlates with boiling point, molar volume, and surface area
-/// - Larger molecules have higher W
-///
-/// # Algorithm
-/// Uses BFS (Breadth-First Search) from each atom to compute shortest paths.
-/// Time complexity: O(n² + nm) where n = atoms, m = bonds
-///
-/// # Examples
-/// - Methane (CH₄): 0 (only C-H bonds, no heavy-heavy paths)
-/// - Ethane (C₂H₆): 1 (one C-C bond)
-/// - Propane (C₃H₈): 4 (C0-C1=1, C1-C2=1, C0-C2=2)
-/// - Benzene (C₆H₆): 27
-///
-/// # Thread Safety
-/// This descriptor is stateless and thread-safe (Send + Sync).
+/// - WienerPath: half the sum of all topological distances between
+///   (non-hydrogen) atoms. As in CDK, atom pairs in different components count
+///   with CDK's unreachable distance 999 999 999.
+/// - WienerPolarity: number of atom pairs at distance 3.
 pub struct WienerIndex;
 
 impl WienerIndex {
-    /// Compute all-pairs shortest path distances using BFS.
-    #[allow(dead_code)]
-    fn _compute_distance_matrix_unused(mol: &Molecule) -> Vec<u32> {
-        let n = mol.num_atoms();
-        let mut distances = vec![u32::MAX; n * n];
-
-        for start in 0..n {
-            let start_idx = start as AtomIdx;
-            let mut queue = VecDeque::new();
-            queue.push_back(start_idx);
-            distances[start * n + start] = 0;
-
-            while let Some(current) = queue.pop_front() {
-                let current_dist = distances[start * n + current as usize];
-
-                for &bond_idx in &mol.adjacency[current as usize] {
-                    let bond = &mol.bonds[bond_idx as usize];
-                    let neighbor = if bond.source == current {
-                        bond.target
-                    } else {
-                        bond.source
-                    };
-
-                    let neighbor_dist = &mut distances[start * n + neighbor as usize];
-                    if *neighbor_dist == u32::MAX {
-                        *neighbor_dist = current_dist + 1;
-                        queue.push_back(neighbor);
-                    }
-                }
-            }
-        }
-
-        distances
-    }
-
-    /// Calculate Wiener Index from distance matrix.
-    fn wiener_from_distances(distances: &[u8], n: usize) -> f32 {
-        let mut sum: u64 = 0;
-
+    /// `(WienerPath, WienerPolarity)` from an `n x n` distance matrix.
+    fn wiener_numbers(distances: &[u16], n: usize) -> (f64, f64) {
+        let mut path: u64 = 0;
+        let mut polarity: u64 = 0;
         for i in 0..n {
-            for j in (i + 1)..n {
-                let dist = distances[i * n + j];
-                if dist != 255 {
-                    sum += dist as u64;
-                }
+            for &d in &distances[i * n + i + 1..(i + 1) * n] {
+                path += cdk_distance(d) as u64;
+                polarity += (d == 3) as u64;
             }
         }
-
-        sum as f32
+        (path as f64, polarity as f64)
     }
 }
 
 impl Descriptor for WienerIndex {
-    /// Implements the behavior encoded by this function.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/wiener_numbers.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn name(&self) -> &str {
         "WienerIndex"
     }
 
-    /// Calculates the behavior encoded by this function.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/wiener_numbers.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn calculate(
         &self,
         mol: &mut Molecule,
         ctx: &mut crate::desc::context::CalculationContext,
     ) -> DescriptorValue {
-        let n = mol.num_atoms();
-
-        if n <= 1 {
-            return DescriptorValue::Float(0.0);
+        // CDK computes on `removeHydrogens(container)`
+        if let Some(mut suppressed) = crate::algo::sanitize::cdk_remove_hydrogens(mol) {
+            return self.calculate(&mut suppressed, ctx);
         }
-
+        let n = mol.num_atoms();
+        if n <= 1 {
+            return DescriptorValue::FloatVec(vec![0.0, 0.0]);
+        }
         let distances = crate::algo::paths::compute_unweighted_distance_matrix_cached(mol, ctx);
-        let wiener = Self::wiener_from_distances(&distances, n);
-
-        DescriptorValue::Float(wiener)
+        let (path, polarity) = Self::wiener_numbers(distances, n);
+        DescriptorValue::FloatVec(vec![path, polarity])
     }
 }
 
 // Static assertion: WienerIndex must be Send + Sync for thread safety
 const _: () = {
-    /// Asserts send sync to guard invariants.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/wiener_numbers.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     const fn assert_send_sync<T: Send + Sync>() {}
     let _ = assert_send_sync::<WienerIndex>;
 };
@@ -175,112 +102,85 @@ mod tests {
     use super::*;
     use crate::io::smiles::parse_smiles;
 
-    /// Calculates wiener.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/wiener_numbers.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-    fn calculate_wiener(smiles: &str) -> f32 {
+    fn wiener_numbers(smiles: &str) -> (f64, f64) {
         let mut mol = parse_smiles(smiles).expect("Invalid SMILES");
-        WienerIndex
-            .calculate(
-                &mut mol,
-                &mut crate::desc::context::CalculationContext::new(),
-            )
-            .as_float()
+        let v = WienerIndex
+            .calculate(&mut mol, &mut crate::desc::context::CalculationContext::new())
+            .as_float_vec()
+            .to_vec();
+        assert_eq!(v.len(), 2);
+        (v[0], v[1])
+    }
+
+    fn calculate_wiener(smiles: &str) -> f64 {
+        wiener_numbers(smiles).0
     }
 
     #[test]
-    /// Runs regression test for wiener methane.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/wiener_numbers.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_wiener_methane() {
         assert_eq!(calculate_wiener("C"), 0.0);
     }
 
     #[test]
-    /// Runs regression test for wiener ethane.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/wiener_numbers.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_wiener_ethane() {
         assert_eq!(calculate_wiener("CC"), 1.0);
     }
 
     #[test]
-    /// Runs regression test for wiener propane.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/wiener_numbers.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_wiener_propane() {
         assert_eq!(calculate_wiener("CCC"), 4.0);
     }
 
     #[test]
-    /// Runs regression test for wiener butane.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/wiener_numbers.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_wiener_butane() {
         assert_eq!(calculate_wiener("CCCC"), 10.0);
     }
 
     #[test]
-    /// Runs regression test for wiener isobutane.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/wiener_numbers.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_wiener_isobutane() {
         assert_eq!(calculate_wiener("CC(C)C"), 9.0);
     }
 
     #[test]
-    /// Runs regression test for wiener benzene.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/wiener_numbers.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_wiener_benzene() {
         assert_eq!(calculate_wiener("c1ccccc1"), 27.0);
     }
 
     #[test]
-    /// Runs regression test for wiener cyclohexane.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/wiener_numbers.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_wiener_cyclohexane() {
         assert_eq!(calculate_wiener("C1CCCCC1"), 27.0);
     }
 
     #[test]
-    /// Runs regression test for wiener naphthalene.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/wiener_numbers.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_wiener_naphthalene() {
         let wiener = calculate_wiener("c1ccc2ccccc2c1");
-        assert!(
-            wiener > 27.0,
-            "Naphthalene should have higher W than benzene"
-        );
+        assert!(wiener > 27.0, "Naphthalene should have higher W than benzene");
     }
 
     #[test]
-    /// Runs regression test for wiener linear vs branched.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/wiener_numbers.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_wiener_linear_vs_branched() {
         let linear = calculate_wiener("CCCC");
         let branched = calculate_wiener("CC(C)C");
         assert!(linear > branched);
     }
 
+    // CDK 2.13 WienerNumbersDescriptor values.
     #[test]
-    /// Runs regression test for wiener comprehensive.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/wiener_numbers.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
+    fn test_wiener_polarity() {
+        assert_eq!(wiener_numbers("CCCC"), (10.0, 1.0));
+        assert_eq!(wiener_numbers("CC(C)C"), (9.0, 0.0));
+        assert_eq!(wiener_numbers("c1ccccc1"), (27.0, 3.0));
+    }
+
+    #[test]
+    fn test_wiener_disconnected_uses_cdk_sentinel() {
+        // CDK counts unreachable pairs with distance 999999999
+        let (path, polarity) = wiener_numbers("CC.O");
+        assert_eq!(path as f64, (1.0 + 2.0 * 999_999_999.0f64) as f64 as f64);
+        assert_eq!(polarity, 0.0);
+    }
+
+    #[test]
     fn test_wiener_comprehensive() {
         let test_cases = vec![
             ("C", 0.0, "methane"),
@@ -295,11 +195,7 @@ mod tests {
 
         for (smiles, expected, name) in test_cases {
             let actual = calculate_wiener(smiles);
-            assert_eq!(
-                actual, expected,
-                "{} ({}): expected W={}, got W={}",
-                name, smiles, expected, actual
-            );
+            assert_eq!(actual, expected, "{} ({}): expected W={}, got W={}", name, smiles, expected, actual);
         }
     }
 }

@@ -160,7 +160,7 @@ impl CsvReader {
     }
 
     /// Auto-detects the SMILES column from common names.
-    fn detect_smiles_column(headers: &csv::StringRecord) -> Result<usize> {
+    pub(crate) fn detect_smiles_column(headers: &csv::StringRecord) -> Result<usize> {
         let common_names = [
             "SMILES",
             "smiles",
@@ -192,11 +192,25 @@ impl CsvReader {
         headers: &[Arc<str>],
         smiles_idx: usize,
         include_properties: bool,
-        records: Vec<(usize, csv::StringRecord)>,
+        records: Vec<(usize, std::result::Result<csv::StringRecord, String>)>,
     ) -> Vec<MoleculeRecord> {
         records
             .into_par_iter()
             .map(|(row_idx, record)| {
+                // Malformed CSV rows are reported as failed records instead of being
+                // dropped, so output rows stay aligned with input rows.
+                let record = match record {
+                    Ok(record) => record,
+                    Err(error) => {
+                        return MoleculeRecord {
+                            row_index: row_idx,
+                            molecule: None,
+                            smiles: String::new(),
+                            error: Some(error),
+                            properties: Vec::new(),
+                        };
+                    }
+                };
                 let smiles = record.get(smiles_idx).unwrap_or("").trim().to_string();
 
                 let properties = if include_properties {
@@ -257,14 +271,13 @@ impl CsvReader {
         let interned_headers: Vec<Arc<str>> = headers.iter().map(Arc::<str>::from).collect();
 
         let chunk_size = self.parse_chunk_size.max(1);
-        let mut chunk_records: Vec<(usize, csv::StringRecord)> = Vec::with_capacity(chunk_size);
+        let mut chunk_records: Vec<(usize, std::result::Result<csv::StringRecord, String>)> =
+            Vec::with_capacity(chunk_size);
         let mut summary = ParseSummary::default();
 
         let row_limit = self.row_limit.unwrap_or(usize::MAX);
         for (row_idx, result) in reader.records().take(row_limit).enumerate() {
-            if let Ok(record) = result {
-                chunk_records.push((row_idx, record));
-            }
+            chunk_records.push((row_idx, result.map_err(|e| format!("Malformed CSV row: {}", e))));
 
             if chunk_records.len() == chunk_size {
                 let current_chunk =

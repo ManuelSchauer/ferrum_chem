@@ -127,6 +127,32 @@ impl Bond {
     ///
     /// Function context: `crates/ferrum_core/src/mol/bond.rs`.
     /// Molecule-model note: preserve atom/bond index invariants and cached-property invalidation rules.
+    /// Bond carries a SMILES direction marker `/` or `\\` (bit 3).
+    pub fn has_direction(&self) -> bool {
+        self.flags & 0b1000 != 0
+    }
+
+    pub fn set_has_direction(&mut self, val: bool) {
+        if val {
+            self.flags |= 0b1000;
+        } else {
+            self.flags &= !0b1000;
+        }
+    }
+
+    /// Conjugation flag as assigned by RDKit's `setConjugation` (bit 2).
+    pub fn is_conjugated(&self) -> bool {
+        self.flags & 0b100 != 0
+    }
+
+    pub fn set_conjugated(&mut self, val: bool) {
+        if val {
+            self.flags |= 0b100;
+        } else {
+            self.flags &= !0b100;
+        }
+    }
+
     pub fn is_in_ring(&self) -> bool {
         self.flags & 0b10 != 0
     }

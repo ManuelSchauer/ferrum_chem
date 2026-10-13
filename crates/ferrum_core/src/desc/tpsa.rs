@@ -735,10 +735,8 @@ mod tests {
 /// use ferrum_core::desc::tpsa::Tpsa;
 /// use ferrum_core::desc::typed::Descriptor;
 /// use ferrum_core::io::smiles::parse_smiles;
-/// use ferrum_core::algo::aromaticity::perceive_aromaticity;
 ///
 /// let mut mol = parse_smiles("c1ccccc1").unwrap();
-/// perceive_aromaticity(&mut mol);
 ///
 /// let descriptor = Tpsa;
 /// let tpsa = descriptor.calculate(&mut mol, &mut ferrum_core::desc::context::CalculationContext::new());
@@ -771,7 +769,7 @@ impl Descriptor for Tpsa {
         mol: &mut Molecule,
         _ctx: &mut crate::desc::context::CalculationContext,
     ) -> DescriptorValue {
-        let tpsa = compute_tpsa_cached(mol, false) as f32;
+        let tpsa = compute_tpsa_cached(mol, false);
         DescriptorValue::Float(tpsa)
     }
 }

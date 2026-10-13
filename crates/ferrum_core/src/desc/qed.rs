@@ -41,18 +41,14 @@
 
 use super::typed::{Descriptor, DescriptorValue};
 use crate::algo::iso::{count_matches_target, has_substruct_match_target, IsoTarget};
-use crate::algo::rings::{
-    ensure_minimum_cycle_basis_bonds_cached, find_minimum_cycle_basis_bonds,
-};
 use crate::desc::bond_count::{compute_rotatable_bond_count, compute_rotatable_bond_count_cached};
 use crate::desc::hbond::{compute_hbond_donors, compute_hbond_donors_cached};
 use crate::desc::logp::{compute_logp, compute_logp_cached};
 use crate::desc::molecular_weight::compute_molecular_weight;
 use crate::desc::tpsa::{compute_tpsa, compute_tpsa_cached};
-use crate::io::smarts::{AtomPrimitive, QueryAtom, QueryGraph, parse_smarts};
+use crate::io::smarts::{QueryGraph, parse_smarts};
 use crate::mol::molecule::Molecule;
 use once_cell::sync::Lazy;
-use smallvec::SmallVec;
 
 /// QED parameters: (mean, sigma, weight) for each property.
 /// From Bickerton et al. Table 1 (weighted version).
@@ -233,77 +229,69 @@ fn compute_qed_hbond_acceptors_target(target: &IsoTarget) -> u32 {
             if !entry.screen.passes_target(target) {
                 return 0;
             }
-            if has_substruct_match_target(target, &entry.query) {
-                count_matches_target(target, &entry.query) as u32
-            } else {
-                0
-            }
+            count_matches_target(target, &entry.query) as u32
         })
         .sum()
 }
 
-/// Computes the number of aromatic rings for the QED descriptor.
+/// QED `AROM` exactly as RDKit computes it:
+/// `len(Chem.GetSSSR(Chem.DeleteSubstructs(mol, '[$([A;R][!a])]')))`.
 ///
-/// Function context: `crates/ferrum_core/src/desc/qed.rs`.
-///
-/// # RDKit Parity and Scientific Correctness
-/// 
-/// FerrumChem intentionally deviates from RDKit's QED `AROM` (aromatic ring) calculation 
-/// in order to remain chemically correct. 
-///
-/// In RDKit's implementation of QED, there is a known quirk (or bug) where the molecule
-/// graph is mutated before counting aromatic rings. Specifically, RDKit deletes any aliphatic
-/// ring atom that is connected to a non-aromatic atom via a single or aromatic bond. 
-/// This physically severs the molecular graph in chemically nonsensical ways, causing RDKit to 
-/// occasionally miscount the number of rings in the remaining pieces. For example, an aromatic 
-/// ring attached to an aliphatic ring can suddenly be perceived as multiple rings or no rings
-/// at all due to the graph deletion.
-///
-/// Our implementation calculates the number of aromatic rings using standard, mathematically
-/// rigorous graph cycle detection (`find_minimum_cycle_basis_bonds`). A ring is considered 
-/// aromatic if and only if all of its constituent bonds are marked as aromatic. This ensures
-/// that the aromatic ring count perfectly reflects the molecule's topological aromaticity 
-/// without destructive, arbitrary graph mutations.
-///
-/// By preserving this correct implementation, FerrumChem's QED score is scientifically superior
-/// to RDKit's for complex fused ring systems, even if it results in minor QED value differences 
-/// for ~1.5% of molecules.
-fn compute_qed_aromatic_ring_count_with_cycles(
-    mol: &Molecule,
-    cycles: &[smallvec::SmallVec<[u16; 8]>],
-) -> u32 {
-    cycles
-        .iter()
-        .filter(|cycle| {
-            cycle.iter().all(|&bond_idx| {
-                mol.bonds
-                    .get(bond_idx as usize)
-                    .map_or(false, |b| b.is_aromatic())
-            })
-        })
-        .count() as u32
+/// Atoms matching the aliphatic-ring pattern are deleted and the SSSR size of
+/// what remains is counted (its cycle rank: bonds - atoms + fragments, dative
+/// bonds excluded as in RDKit's ring finding). This is RDKit's definition, kept
+/// verbatim for parity even though it can count non-aromatic rings.
+fn compute_qed_aromatic_ring_count(mol: &Molecule) -> u32 {
+    compute_qed_aromatic_ring_count_target(&IsoTarget::new(mol))
 }
 
-fn compute_qed_aromatic_ring_count(mol: &Molecule) -> u32 {
-    let cycles = find_minimum_cycle_basis_bonds(mol);
-    compute_qed_aromatic_ring_count_with_cycles(mol, &cycles)
+fn compute_qed_aromatic_ring_count_target(target: &IsoTarget) -> u32 {
+    static ALIPHATIC_RINGS: Lazy<QueryGraph> =
+        Lazy::new(|| parse_smarts("[$([A;R][!a])]").expect("valid QED AliphaticRings SMARTS"));
+    let mol = target.target;
+    let n = mol.num_atoms();
+    let mut deleted = vec![false; n];
+    crate::algo::iso::visit_start_atoms_target(target, &ALIPHATIC_RINGS, |_| true, |a| {
+        deleted[a as usize] = true;
+        true
+    });
+    // union-find over the remaining graph
+    let mut parent: Vec<usize> = (0..n).collect();
+    fn find(parent: &mut [usize], mut x: usize) -> usize {
+        while parent[x] != x {
+            parent[x] = parent[parent[x]];
+            x = parent[x];
+        }
+        x
+    }
+    let mut n_bonds = 0i64;
+    for bond in &mol.bonds {
+        let (u, v) = (bond.source as usize, bond.target as usize);
+        if deleted[u] || deleted[v] || bond.bond_type == crate::types::BondType::Dative {
+            continue;
+        }
+        n_bonds += 1;
+        let (ru, rv) = (find(&mut parent, u), find(&mut parent, v));
+        if ru != rv {
+            parent[ru] = rv;
+        }
+    }
+    let n_atoms = deleted.iter().filter(|&&d| !d).count() as i64;
+    let n_components = (0..n).filter(|&i| !deleted[i] && find(&mut parent, i) == i).count() as i64;
+    (n_bonds - n_atoms + n_components).max(0) as u32
 }
 
 fn compute_qed_aromatic_ring_count_cached(mol: &mut Molecule) -> u32 {
-    ensure_minimum_cycle_basis_bonds_cached(mol);
-    let cycles = mol
-        .cached_min_cycle_basis_bonds()
-        .expect("minimum cycle basis cache initialized");
-    compute_qed_aromatic_ring_count_with_cycles(mol, cycles)
+    compute_qed_aromatic_ring_count(mol)
 }
 
 fn compute_qed(mol: &Molecule) -> f64 {
     let iso_target = IsoTarget::new(mol);
-    let mw = compute_molecular_weight(mol) as f64;
+    let mw = compute_molecular_weight(mol);
     let logp = compute_logp(mol).0 as f64;
     let hba = compute_qed_hbond_acceptors_target(&iso_target) as f64;
     let hbd = compute_hbond_donors(mol) as f64;
-    let psa = compute_tpsa(mol, false) as f64;
+    let psa = compute_tpsa(mol, false);
     let rotb = compute_rotatable_bond_count(mol) as f64;
     let arom = compute_qed_aromatic_ring_count(mol) as f64;
     let alerts = compute_structural_alerts_target(&iso_target) as f64;
@@ -331,14 +319,14 @@ fn compute_qed(mol: &Molecule) -> f64 {
 /// Function context: `crates/ferrum_core/src/desc/qed.rs`.
 /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
 fn compute_qed_cached(mol: &mut Molecule) -> f64 {
-    let mw = compute_molecular_weight(mol) as f64;
+    let mw = compute_molecular_weight(mol);
     let logp = compute_logp_cached(mol).0 as f64;
     let hbd = compute_hbond_donors_cached(mol) as f64;
-    let psa = compute_tpsa_cached(mol, false) as f64;
+    let psa = compute_tpsa_cached(mol, false);
     let rotb = compute_rotatable_bond_count_cached(mol) as f64;
-    let arom = compute_qed_aromatic_ring_count_cached(mol) as f64;
-    
+
     let iso_target = IsoTarget::new(mol);
+    let arom = compute_qed_aromatic_ring_count_target(&iso_target) as f64;
     let hba = compute_qed_hbond_acceptors_target(&iso_target) as f64;
     let alerts = compute_structural_alerts_target(&iso_target) as f64;
 
@@ -598,7 +586,7 @@ impl Descriptor for Qed {
         mol: &mut Molecule,
         _ctx: &mut crate::desc::context::CalculationContext,
     ) -> DescriptorValue {
-        DescriptorValue::Float(compute_qed_cached(mol) as f32)
+        DescriptorValue::Float(compute_qed_cached(mol))
     }
 }
 
@@ -620,7 +608,7 @@ mod tests {
     ///
     /// Function context: `crates/ferrum_core/src/desc/qed.rs`.
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-    fn calc_qed(smiles: &str) -> f32 {
+    fn calc_qed(smiles: &str) -> f64 {
         let mut mol = parse_smiles(smiles).expect("valid SMILES");
         Qed.calculate(
             &mut mol,
@@ -772,5 +760,15 @@ mod tests {
         let mut mol = parse_smiles("O=C1C2=CC=CC=C2C(=O)C3=CC=CC=C13").unwrap();
         let sssr = find_sssr(&mut mol);
         println!("Anthraquinone SSSR length: {}", sssr.len());
+    }
+
+    #[test]
+    fn all_qed_patterns_parse() {
+        let failed: Vec<_> = QED_ACCEPTOR_SMARTS
+            .iter()
+            .chain(STRUCTURAL_ALERT_SMARTS.iter().flat_map(|g| g.iter()))
+            .filter(|s| crate::io::smarts::parse_smarts(s).is_err())
+            .collect();
+        assert!(failed.is_empty(), "unparseable QED SMARTS: {:?}", failed);
     }
 }

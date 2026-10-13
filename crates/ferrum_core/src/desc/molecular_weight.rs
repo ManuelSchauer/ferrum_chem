@@ -42,49 +42,35 @@
 //! - Code-local source of truth: symbols and tests declared in `crates/ferrum_core/src/desc/molecular_weight.rs`.
 
 use super::typed::{Descriptor, DescriptorValue};
-use crate::mol::elements::ATOMIC_MASSES;
 use crate::mol::molecule::Molecule;
 
 /// Compute the molecular weight for a molecule.
 ///
-/// Standalone function for callers that need the raw `f32` value
+/// Standalone function for callers that need the raw `f64` value
 /// without going through the [`Descriptor`] trait.
-pub fn compute_molecular_weight(mol: &Molecule) -> f32 {
-    compute_molecular_weight_f64(mol) as f32
+pub fn compute_molecular_weight(mol: &Molecule) -> f64 {
+    compute_molecular_weight_f64(mol)
 }
 
 /// High-precision molecular weight calculation.
 ///
-/// Uses `f64` accumulation to avoid drift on large molecules where `f32`
+/// Uses `f64` accumulation to avoid drift on large molecules where `f64`
 /// summation can exceed tight comparison tolerances.
 pub fn compute_molecular_weight_f64(mol: &Molecule) -> f64 {
-    let mut total_mass: f64 = 0.0;
-    let hydrogen_mass = ATOMIC_MASSES[1] as f64;
-
-    for atom in &mol.atoms {
-        let mass = if atom.isotope > 0 {
-            atom.isotope as f64
-        } else {
-            ATOMIC_MASSES[atom.atomic_number as usize] as f64
-        };
-
-        total_mass += mass;
-
-        if atom.num_explicit_h > 0 {
-            total_mass = hydrogen_mass.mul_add(atom.num_explicit_h as f64, total_mass);
-        }
-
-        if atom.num_implicit_h > 0 {
-            total_mass = hydrogen_mass.mul_add(atom.num_implicit_h as f64, total_mass);
-        }
-    }
-
-    total_mass
+    // RDKit calcAMW: sum of Atom::getMass() plus getTotalNumHs() * H weight.
+    let hydrogen_mass = crate::mol::rdkit_data::ELEMENTS[1].mass;
+    mol.atoms
+        .iter()
+        .map(|atom| {
+            crate::mol::rdkit_data::atom_mass(atom.atomic_number, atom.isotope)
+                + atom.total_h() as f64 * hydrogen_mass
+        })
+        .sum()
 }
 
 /// Molecular weight descriptor.
 ///
-/// Returns `DescriptorValue::Float(f32)`.
+/// Returns `DescriptorValue::Float(f64)`.
 ///
 /// # Example
 ///
@@ -98,10 +84,10 @@ pub fn compute_molecular_weight_f64(mol: &Molecule) -> f64 {
 /// let value = desc.calculate(&mut mol, &mut ferrum_core::desc::context::CalculationContext::new());
 ///
 /// match value {
-///     ferrum_core::desc::typed::DescriptorValue::Float64(mw) => {
+///     ferrum_core::desc::typed::DescriptorValue::Float(mw) => {
 ///         assert!((mw - 46.07).abs() < 0.1); // Ethanol ≈ 46 Da
 ///     }
-///     _ => panic!("Expected Float64"),
+///     _ => panic!("Expected Float"),
 /// }
 /// ```
 pub struct MolecularWeight;
@@ -124,7 +110,7 @@ impl Descriptor for MolecularWeight {
         mol: &mut Molecule,
         _ctx: &mut crate::desc::context::CalculationContext,
     ) -> DescriptorValue {
-        DescriptorValue::Float64(compute_molecular_weight_f64(mol))
+        DescriptorValue::Float(compute_molecular_weight_f64(mol))
     }
 }
 
@@ -157,7 +143,6 @@ mod tests {
             &mut crate::desc::context::CalculationContext::new(),
         ) {
             DescriptorValue::Float(v) => assert!(((v as f64) - 18.015).abs() < 0.01),
-            DescriptorValue::Float64(v) => assert!((v - 18.015).abs() < 0.01),
             _ => panic!("Expected Float"),
         }
     }
@@ -176,7 +161,6 @@ mod tests {
             &mut crate::desc::context::CalculationContext::new(),
         ) {
             DescriptorValue::Float(v) => assert!(((v as f64) - 16.043).abs() < 0.01),
-            DescriptorValue::Float64(v) => assert!((v - 16.043).abs() < 0.01),
             _ => panic!("Expected Float"),
         }
     }
@@ -195,7 +179,6 @@ mod tests {
             &mut crate::desc::context::CalculationContext::new(),
         ) {
             DescriptorValue::Float(v) => assert!(((v as f64) - 16.043).abs() < 0.01),
-            DescriptorValue::Float64(v) => assert!((v - 16.043).abs() < 0.01),
             _ => panic!("Expected Float"),
         }
     }
@@ -214,7 +197,6 @@ mod tests {
             &mut crate::desc::context::CalculationContext::new(),
         ) {
             DescriptorValue::Float(v) => assert!(((v as f64) - 78.114).abs() < 0.01),
-            DescriptorValue::Float64(v) => assert!((v - 78.114).abs() < 0.01),
             _ => panic!("Expected Float"),
         }
     }
@@ -233,7 +215,6 @@ mod tests {
             &mut crate::desc::context::CalculationContext::new(),
         ) {
             DescriptorValue::Float(v) => assert!(((v as f64) - 46.069).abs() < 0.01),
-            DescriptorValue::Float64(v) => assert!((v - 46.069).abs() < 0.01),
             _ => panic!("Expected Float"),
         }
     }
@@ -251,8 +232,8 @@ mod tests {
             &mut mol,
             &mut crate::desc::context::CalculationContext::new(),
         ) {
-            DescriptorValue::Float(v) => assert!(((v as f64) - 19.999).abs() < 0.01),
-            DescriptorValue::Float64(v) => assert!((v - 19.999).abs() < 0.01),
+            // RDKit: 15.999 + 2 * 2.014101778 (exact deuterium mass)
+            DescriptorValue::Float(v) => assert!((v - 20.027203556).abs() < 1e-9),
             _ => panic!("Expected Float"),
         }
     }

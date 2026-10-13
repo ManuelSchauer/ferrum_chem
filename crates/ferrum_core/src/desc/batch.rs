@@ -18,11 +18,8 @@
 //! - Which public symbols are the best entry points for reading/debugging.
 //!
 //! Key symbols in this file:
-//! - `struct FlatDescriptorMatrix`
-//! - `fn shape`
-//! - `fn row`
-//! - `fn into_nested`
-//! - `fn into_shape_vec`
+//! - `enum BatchDescriptor` (registry: names, lengths, dispatch)
+//! - `fn feature_names`
 //!
 //! Suggested reading workflow:
 //! 1. Read top-level type definitions and public APIs.
@@ -90,63 +87,7 @@ use super::vsa::{
 use super::weighted_path::WeightedPath;
 use super::wiener_numbers::WienerIndex;
 use super::zagreb::ZagrebIndices;
-use crate::error::Result;
 use crate::mol::molecule::Molecule;
-use rayon::prelude::*;
-use std::io::Write;
-
-/// Flat descriptor matrix optimized for ML consumers.
-#[derive(Debug, Clone, PartialEq)]
-pub struct FlatDescriptorMatrix {
-    pub rows: usize,
-    pub cols: usize,
-    pub data: Vec<f32>,
-}
-
-impl FlatDescriptorMatrix {
-    /// Implements the behavior encoded by this function.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/batch.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-    pub fn shape(&self) -> (usize, usize) {
-        (self.rows, self.cols)
-    }
-
-    /// Implements the behavior encoded by this function.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/batch.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-    pub fn row(&self, idx: usize) -> &[f32] {
-        assert!(idx < self.rows, "row index out of bounds");
-        if self.cols == 0 {
-            return &[];
-        }
-        let start = idx * self.cols;
-        &self.data[start..start + self.cols]
-    }
-
-    /// Implements nested.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/batch.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-    pub fn into_nested(self) -> Vec<Vec<f32>> {
-        if self.cols == 0 {
-            return vec![Vec::new(); self.rows];
-        }
-        self.data
-            .chunks(self.cols)
-            .map(|row| row.to_vec())
-            .collect()
-    }
-
-    /// Implements shape vec.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/batch.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-    pub fn into_shape_vec(self) -> ((usize, usize), Vec<f32>) {
-        ((self.rows, self.cols), self.data)
-    }
-}
 
 /// Static-dispatch batch descriptor set for high-throughput ML/batch paths.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -222,6 +163,23 @@ pub enum BatchDescriptor {
     Pmi3,
     Asphericity,
     Biosynfoni,
+    MolWeights,
+    ChiNIndices,
+    EStateAbs,
+    EStateVsa,
+    VsaEState,
+    RdkitRingCounts,
+    LipinskiNO,
+    AvgIpcPhi,
+    FpDensityMorgan,
+    Fragments,
+    Bcut2D,
+    CdkChiIndices,
+    CdkFragmentComplexity,
+    EccentricConnectivity,
+    StereoCenters,
+    Sps,
+    CdkKappa,
 }
 
 impl BatchDescriptor {
@@ -230,7 +188,7 @@ impl BatchDescriptor {
     /// Function context: `crates/ferrum_core/src/desc/batch.rs`.
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     pub fn all() -> &'static [Self] {
-        const ALL: [BatchDescriptor; 71] = [
+        const ALL: [BatchDescriptor; 88] = [
             BatchDescriptor::MolecularWeight,
             BatchDescriptor::LogP,
             BatchDescriptor::MolarRefractivity,
@@ -302,6 +260,23 @@ impl BatchDescriptor {
             BatchDescriptor::Pmi3,
             BatchDescriptor::Asphericity,
             BatchDescriptor::Biosynfoni,
+            BatchDescriptor::MolWeights,
+            BatchDescriptor::ChiNIndices,
+            BatchDescriptor::EStateAbs,
+            BatchDescriptor::EStateVsa,
+            BatchDescriptor::VsaEState,
+            BatchDescriptor::RdkitRingCounts,
+            BatchDescriptor::LipinskiNO,
+            BatchDescriptor::AvgIpcPhi,
+            BatchDescriptor::FpDensityMorgan,
+            BatchDescriptor::Fragments,
+            BatchDescriptor::Bcut2D,
+            BatchDescriptor::CdkChiIndices,
+            BatchDescriptor::CdkFragmentComplexity,
+            BatchDescriptor::EccentricConnectivity,
+            BatchDescriptor::StereoCenters,
+            BatchDescriptor::Sps,
+            BatchDescriptor::CdkKappa,
         ];
         &ALL
     }
@@ -439,6 +414,23 @@ impl BatchDescriptor {
             Self::Pmi3 => "PMI3",
             Self::Asphericity => "Asphericity",
             Self::Biosynfoni => "Biosynfoni",
+            Self::MolWeights => "MolWeights",
+            Self::ChiNIndices => "ChiNIndices",
+            Self::EStateAbs => "EStateAbs",
+            Self::EStateVsa => "EState_VSA",
+            Self::VsaEState => "VSA_EState",
+            Self::RdkitRingCounts => "RingCounts",
+            Self::LipinskiNO => "LipinskiNO",
+            Self::AvgIpcPhi => "AvgIpcPhi",
+            Self::FpDensityMorgan => "FpDensityMorgan",
+            Self::Fragments => "Fragments",
+            Self::Bcut2D => "BCUT2D",
+            Self::CdkChiIndices => "CdkChiIndices",
+            Self::CdkFragmentComplexity => "FragmentComplexityCDK",
+            Self::EccentricConnectivity => "EccentricConnectivityIndex",
+            Self::StereoCenters => "StereoCenters",
+            Self::Sps => "SPS",
+            Self::CdkKappa => "CdkKappaShapeIndices",
         }
     }
 
@@ -525,6 +517,23 @@ impl BatchDescriptor {
             Self::Pmi3 => Pmi3.calculate(mol, ctx),
             Self::Asphericity => Asphericity.calculate(mol, ctx),
             Self::Biosynfoni => Biosynfoni.calculate(mol, ctx),
+            Self::MolWeights => super::rdkit_extra::MolWeights.calculate(mol, ctx),
+            Self::ChiNIndices => super::rdkit_extra::ChiNIndices.calculate(mol, ctx),
+            Self::EStateAbs => super::rdkit_extra::EStateAbs.calculate(mol, ctx),
+            Self::EStateVsa => super::rdkit_extra::EStateVsa.calculate(mol, ctx),
+            Self::VsaEState => super::rdkit_extra::VsaEState.calculate(mol, ctx),
+            Self::RdkitRingCounts => super::rdkit_extra::RingCounts.calculate(mol, ctx),
+            Self::LipinskiNO => super::rdkit_extra::LipinskiNO.calculate(mol, ctx),
+            Self::AvgIpcPhi => super::rdkit_extra::AvgIpcPhi.calculate(mol, ctx),
+            Self::FpDensityMorgan => super::rdkit_extra::FpDensityMorgan.calculate(mol, ctx),
+            Self::Fragments => super::rdkit_extra::Fragments.calculate(mol, ctx),
+            Self::Bcut2D => super::rdkit_extra::Bcut2D.calculate(mol, ctx),
+            Self::CdkChiIndices => super::chi::CdkChiIndices.calculate(mol, ctx),
+            Self::CdkFragmentComplexity => super::extra_counts::CdkFragmentComplexity.calculate(mol, ctx),
+            Self::EccentricConnectivity => super::eccentric::EccentricConnectivityIndex.calculate(mol, ctx),
+            Self::StereoCenters => super::rdkit_extra::StereoCenters.calculate(mol, ctx),
+            Self::Sps => super::rdkit_extra::Sps.calculate(mol, ctx),
+            Self::CdkKappa => super::kappa::CdkKappaShapeIndices.calculate(mol, ctx),
         }
     }
 
@@ -540,13 +549,15 @@ impl BatchDescriptor {
             Self::RingTypeCounts => 3,
             Self::PiSystemCounts => 2,
             Self::CarbonTypes => 9,
-            Self::ChiIndices => 26,
+            Self::ChiIndices => 7,
+            Self::CdkChiIndices => 40,
             Self::KappaIndices => 3,
-            Self::EStateIndices => 47,
-            Self::Autocorrelation => 32,
-            Self::Bcut => 8,
-            Self::WeightedPath => 10,
-            Self::Mde => 15,
+            Self::EStateIndices => 3 + super::estate::NUM_ESTATE_TYPES,
+            Self::Autocorrelation => 33,
+            Self::Bcut => 10,
+            Self::WeightedPath => 5,
+            Self::Mde => 19,
+            Self::WienerIndex => 2,
             Self::ZagrebIndices => 2,
             Self::PetitjeanIndex => 3,
             Self::FunctionalGroupCounts => 16,
@@ -560,8 +571,195 @@ impl BatchDescriptor {
             | Self::AtomPairFingerprint
             | Self::TopologicalTorsionFingerprint => 2048,
             Self::Biosynfoni => super::biosynfoni::BIOSYNFONI_FEATURES.len(),
+            Self::MolWeights => 2,
+            Self::ChiNIndices => 5,
+            Self::EStateAbs => 2,
+            Self::EStateVsa => 11,
+            Self::VsaEState => 10,
+            Self::RdkitRingCounts => 10,
+            Self::LipinskiNO => 2,
+            Self::AvgIpcPhi => 2,
+            Self::FpDensityMorgan => 3,
+            Self::Fragments => super::rdkit_fragments_data::FRAGMENTS.len(),
+            Self::Bcut2D => 8,
+            Self::CdkFragmentComplexity => 1,
+            Self::EccentricConnectivity => 1,
+            Self::StereoCenters => 2,
+            Self::Sps => 1,
+            Self::CdkKappa => 3,
             _ => 1,
         }
+    }
+
+    /// Output column names for this descriptor, in output order.
+    ///
+    /// RDKit names are used wherever the value is meant to reproduce an RDKit
+    /// descriptor (e.g. `MolWt`, `Chi1v`, `PEOE_VSA3`, `MACCS42`), CDK names
+    /// for CDK-derived descriptors (e.g. `C2SP3`, `nAtomP`), otherwise a
+    /// descriptive name. Names are unique across [`BatchDescriptor::all`].
+    pub fn feature_names(self) -> Vec<String> {
+        fn seq(prefix: &str, range: std::ops::RangeInclusive<usize>) -> Vec<String> {
+            range.map(|i| format!("{prefix}{i}")).collect()
+        }
+        fn list(names: &[&str]) -> Vec<String> {
+            names.iter().map(|s| s.to_string()).collect()
+        }
+        let one = |name: &str| vec![name.to_string()];
+        match self {
+            Self::MolecularWeight => one("MolWt"),
+            Self::LogP => one("MolLogP"),
+            Self::MolarRefractivity => one("MolMR"),
+            Self::Tpsa => one("TPSA"),
+            Self::HBondDonor => one("NumHDonors"),
+            Self::HBondAcceptor => one("NumHAcceptors"),
+            Self::RotatableBondCount => one("NumRotatableBonds"),
+            Self::HeavyAtomCount => one("HeavyAtomCount"),
+            Self::AtomCount => one("nAtom"),
+            Self::ElementCounts => list(&["nC", "nN", "nO", "nS", "nP", "nF", "nCl", "nBr", "nI", "nOtherElements", "nH", "nHeavyAtom"]),
+            Self::AromaticAtomCount => one("nAromAtom"),
+            Self::HeteroatomCount => one("NumHeteroatoms"),
+            Self::AromaticRingCount => one("NumAromaticRings"),
+            Self::BondCount => one("nBondsHeavy"),
+            Self::BondCountDetailed => list(&["nBonds", "nBondsS", "nBondsD", "nBondsT", "nBondsA"]),
+            Self::ValenceElectrons => one("NumValenceElectrons"),
+            Self::RadicalElectrons => one("NumRadicalElectrons"),
+            Self::HybridizationRatio => one("HybRatio"),
+            Self::VAdjMa => one("VAdjMat"),
+            Self::FormalCharge => one("FormalCharge"),
+            Self::FractionCSP3 => one("FractionCSP3"),
+            Self::BertzCT => one("BertzCT"),
+            Self::Ipc => one("Ipc"),
+            Self::FragmentComplexity => one("ElementEntropy"),
+            Self::LabuteAsa => one("LabuteASA"),
+            Self::Qed => one("qed"),
+            Self::NumAmideBonds => one("NumAmideBonds"),
+            Self::HallKierAlpha => one("HallKierAlpha"),
+            Self::AromaticAtomFraction => one("AromaticProportion"),
+            Self::LipinskiViolations => one("LipinskiViolations"),
+            Self::BalabanIndex => one("BalabanJ"),
+            Self::WienerIndex => list(&["WienerPath", "WienerPolarity"]),
+            Self::ZagrebIndices => list(&["Zagreb1", "Zagreb2"]),
+            Self::PetitjeanIndex => list(&["Radius", "Diameter", "PetitjeanNumber"]),
+            Self::SmallRingDescriptor => {
+                let mut v = list(&["nSmallRings", "nAromRings", "nRingBlocks", "nAromBlocks"]);
+                v.extend(seq("nRings", 3..=9));
+                v
+            }
+            Self::RingTypeCounts => list(&["NumSaturatedRings", "NumAliphaticRings", "NumAromaticRingsSSSR"]),
+            Self::PiSystemCounts => list(&["LargestPiSystemSize", "nPiSystems"]),
+            Self::LargestPiSystem => one("nAtomP"),
+            Self::CarbonTypes => list(&["C1SP1", "C2SP1", "C1SP2", "C2SP2", "C3SP2", "C1SP3", "C2SP3", "C3SP3", "C4SP3"]),
+            // RDKit connectivity indices
+            Self::ChiIndices => list(&["Chi0", "Chi1", "Chi0v", "Chi1v", "Chi2v", "Chi3v", "Chi4v"]),
+            // CDK ChiPath / ChiCluster / ChiChain / ChiPathCluster
+            Self::CdkChiIndices => {
+                let mut v = Vec::with_capacity(40);
+                v.extend((0..=7).map(|i| format!("SP-{i}")));
+                v.extend((0..=7).map(|i| format!("VP-{i}")));
+                v.extend((3..=6).map(|i| format!("SC-{i}")));
+                v.extend((3..=6).map(|i| format!("VC-{i}")));
+                v.extend((3..=7).map(|i| format!("SCH-{i}")));
+                v.extend((3..=7).map(|i| format!("VCH-{i}")));
+                v.extend((4..=6).map(|i| format!("SPC-{i}")));
+                v.extend((4..=6).map(|i| format!("VPC-{i}")));
+                v
+            }
+            Self::KappaIndices => seq("Kappa", 1..=3),
+            Self::EStateIndices => {
+                let mut v = list(&["SumEState", "MinEStateIndex", "MaxEStateIndex"]);
+                v.extend(super::estate::ESTATE_TYPE_NAMES.iter().map(|t| format!("SEstate_{t}")));
+                v
+            }
+            // CDK ATSm/ATSp/ATSc (lags 0..4) + Mordred ATS{0..8}pe / ATS{0..8}v
+            Self::Autocorrelation => {
+                let mut v = Vec::with_capacity(33);
+                for w in ["m", "p", "c"] {
+                    v.extend(seq(&format!("ATS{w}"), 1..=5));
+                }
+                for w in ["pe", "v"] {
+                    v.extend((0..=8).map(|k| format!("ATS{k}{w}")));
+                }
+                v
+            }
+            // CDK BCUT (w = mass, c = charge, p = polarizability) + Mordred BCUTpe / BCUTv
+            Self::Bcut => list(&["BCUTw-1l", "BCUTw-1h", "BCUTc-1l", "BCUTc-1h", "BCUTp-1l", "BCUTp-1h", "BCUTpe-1l", "BCUTpe-1h", "BCUTv-1l", "BCUTv-1h"]),
+            Self::WeightedPath => (1..=5).map(|i| format!("WTPT-{i}")).collect(),
+            Self::Mde => list(&[
+                "MDEC-11", "MDEC-12", "MDEC-13", "MDEC-14", "MDEC-22", "MDEC-23", "MDEC-24", "MDEC-33", "MDEC-34",
+                "MDEC-44", "MDEO-11", "MDEO-12", "MDEO-22", "MDEN-11", "MDEN-12", "MDEN-13", "MDEN-22", "MDEN-23",
+                "MDEN-33",
+            ]),
+            Self::FunctionalGroupCounts => [
+                "Hydroxyl", "Aldehyde", "Ketone", "CarboxylicAcid", "Ester", "Amide", "PrimaryAmine",
+                "SecondaryAmine", "TertiaryAmine", "Nitro", "Sulfonamide", "Sulfone", "Thiol", "Ether",
+                "Nitrile", "Halide",
+            ]
+            .iter()
+            .map(|g| format!("fg_{g}"))
+            .collect(),
+            Self::AcidicGroupCount => one("nAcidicGroups"),
+            Self::BasicGroupCount => one("nBasicGroups"),
+            Self::LongestAliphaticChain => one("nAtomLAC"),
+            Self::LargestChain => one("nAtomLC"),
+            Self::MaxPartialCharge => one("MaxPartialCharge"),
+            Self::MinPartialCharge => one("MinPartialCharge"),
+            Self::MaxAbsPartialCharge => one("MaxAbsPartialCharge"),
+            Self::MinAbsPartialCharge => one("MinAbsPartialCharge"),
+            Self::APol => one("apol"),
+            Self::BPol => one("bpol"),
+            Self::SlogpVsa => seq("SlogP_VSA", 1..=12),
+            Self::SmrVsa => seq("SMR_VSA", 1..=10),
+            Self::PeoeVsa => seq("PEOE_VSA", 1..=14),
+            Self::MaccsKeys => seq("MACCS", 1..=166),
+            Self::PubChem881 => seq("PubchemFP", 0..=880),
+            Self::Ecfp4 => seq("ECFP4_", 0..=2047),
+            Self::Fcfp4 => seq("FCFP4_", 0..=2047),
+            Self::AtomPairFingerprint => seq("AtomPair_", 0..=2047),
+            Self::TopologicalTorsionFingerprint => seq("TopoTorsion_", 0..=2047),
+            Self::Pmi1 => one("PMI1"),
+            Self::Pmi2 => one("PMI2"),
+            Self::Pmi3 => one("PMI3"),
+            Self::Asphericity => one("Asphericity"),
+            Self::Biosynfoni => super::biosynfoni::BIOSYNFONI_FEATURES
+                .iter()
+                .map(|(key, _, _)| format!("Biosynfoni_{key}"))
+                .collect(),
+            Self::MolWeights => list(&["HeavyAtomMolWt", "ExactMolWt"]),
+            Self::ChiNIndices => seq("Chi", 0..=4).into_iter().map(|c| format!("{c}n")).collect(),
+            Self::EStateAbs => list(&["MaxAbsEStateIndex", "MinAbsEStateIndex"]),
+            Self::EStateVsa => seq("EState_VSA", 1..=11),
+            Self::VsaEState => seq("VSA_EState", 1..=10),
+            Self::RdkitRingCounts => list(&["RingCount", "NumAromaticCarbocycles", "NumAromaticHeterocycles", "NumAliphaticCarbocycles", "NumAliphaticHeterocycles", "NumSaturatedCarbocycles", "NumSaturatedHeterocycles", "NumHeterocycles", "NumSpiroAtoms", "NumBridgeheadAtoms"]),
+            Self::LipinskiNO => list(&["NHOHCount", "NOCount"]),
+            Self::AvgIpcPhi => list(&["AvgIpc", "Phi"]),
+            Self::FpDensityMorgan => seq("FpDensityMorgan", 1..=3),
+            Self::Fragments => super::rdkit_fragments_data::FRAGMENTS.iter().map(|(n, _)| n.to_string()).collect(),
+            Self::Bcut2D => list(&["BCUT2D_MWHI", "BCUT2D_MWLOW", "BCUT2D_CHGHI", "BCUT2D_CHGLO", "BCUT2D_LOGPHI", "BCUT2D_LOGPLOW", "BCUT2D_MRHI", "BCUT2D_MRLOW"]),
+            Self::CdkFragmentComplexity => one("fragC"),
+            Self::EccentricConnectivity => one("ECCEN"),
+            Self::StereoCenters => list(&["NumAtomStereoCenters", "NumUnspecifiedAtomStereoCenters"]),
+            Self::Sps => one("SPS"),
+            Self::CdkKappa => seq("Kier", 1..=3),
+        }
+    }
+
+    /// Short name of a fingerprint descriptor (bit-packed output block), or
+    /// `None` for scalar descriptors.
+    pub fn fingerprint_name(self) -> Option<&'static str> {
+        match self {
+            Self::MaccsKeys => Some("MACCS"),
+            Self::PubChem881 => Some("PubChem"),
+            Self::Ecfp4 => Some("ECFP4"),
+            Self::Fcfp4 => Some("FCFP4"),
+            Self::AtomPairFingerprint => Some("AtomPair"),
+            Self::TopologicalTorsionFingerprint => Some("TopoTorsion"),
+            _ => None,
+        }
+    }
+
+    /// Whether this descriptor is a bit fingerprint (see [`Self::fingerprint_name`]).
+    pub fn is_fingerprint(self) -> bool {
+        self.fingerprint_name().is_some()
     }
 
     /// Writes into.
@@ -571,7 +769,7 @@ impl BatchDescriptor {
     pub fn write_into(
         self,
         mol: &mut Molecule,
-        row: &mut [f32],
+        row: &mut [f64],
         offset: &mut usize,
         ctx: &mut crate::desc::context::CalculationContext,
     ) {
@@ -591,433 +789,41 @@ impl BatchDescriptor {
                 fill_peoe_vsa_into(mol, &mut row[*offset..end], ctx);
                 *offset = end;
             }
-            _ => write_descriptor_value(self.calculate(mol, ctx), row, offset),
-        }
-    }
-}
-
-/// Writes descriptor value.
-///
-/// Function context: `crates/ferrum_core/src/desc/batch.rs`.
-/// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-fn write_descriptor_value(value: DescriptorValue, row: &mut [f32], offset: &mut usize) {
-    match value {
-        DescriptorValue::Int(v) => {
-            row[*offset] = v as f32;
-            *offset += 1;
-        }
-        DescriptorValue::Float(v) => {
-            row[*offset] = v;
-            *offset += 1;
-        }
-        DescriptorValue::Float64(v) => {
-            row[*offset] = v as f32;
-            *offset += 1;
-        }
-        DescriptorValue::IntVec(v) => {
-            for value in v {
-                row[*offset] = value as f32;
-                *offset += 1;
-            }
-        }
-        DescriptorValue::IntU16Vec(v) => {
-            for value in v {
-                row[*offset] = value as f32;
-                *offset += 1;
-            }
-        }
-        DescriptorValue::FloatVec(v) => {
-            let end = *offset + v.len();
-            row[*offset..end].copy_from_slice(&v);
-            *offset = end;
-        }
-        DescriptorValue::Binary(bits) => {
-            for bit in bits.iter().by_vals() {
-                row[*offset] = if bit { 1.0 } else { 0.0 };
-                *offset += 1;
-            }
-        }
-    }
-}
-
-/// Implements cols dyn.
-///
-/// Function context: `crates/ferrum_core/src/desc/batch.rs`.
-/// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-fn infer_cols_dyn(probe: &mut Molecule, descriptors: &[Box<dyn Descriptor>]) -> usize {
-    let mut ctx = crate::desc::context::CalculationContext::new();
-    descriptors
-        .iter()
-        .map(|desc| desc.calculate(probe, &mut ctx).len())
-        .sum()
-}
-
-/// Implements cols static.
-///
-/// Function context: `crates/ferrum_core/src/desc/batch.rs`.
-/// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-fn infer_cols_static(descriptors: &[BatchDescriptor]) -> usize {
-    descriptors.iter().map(|desc| desc.feature_len()).sum()
-}
-
-/// Implements row dyn.
-///
-/// Function context: `crates/ferrum_core/src/desc/batch.rs`.
-/// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-fn fill_row_dyn(
-    row: &mut [f32],
-    mol: &mut Molecule,
-    descriptors: &[Box<dyn Descriptor>],
-    ctx: &mut crate::desc::context::CalculationContext,
-) {
-    let mut offset = 0usize;
-    for desc in descriptors {
-        write_descriptor_value(desc.calculate(mol, ctx), row, &mut offset);
-    }
-    debug_assert_eq!(offset, row.len());
-}
-
-/// Implements row static.
-///
-/// Function context: `crates/ferrum_core/src/desc/batch.rs`.
-/// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-fn fill_row_static(
-    row: &mut [f32],
-    mol: &mut Molecule,
-    descriptors: &[BatchDescriptor],
-    ctx: &mut crate::desc::context::CalculationContext,
-) {
-    let mut offset = 0usize;
-    for &desc in descriptors {
-        desc.write_into(mol, row, &mut offset, ctx);
-    }
-    debug_assert_eq!(offset, row.len());
-}
-
-/// Calculates descriptors for many molecules in parallel into one contiguous buffer.
-pub fn calculate_batch_flat(
-    molecules: &mut [Molecule],
-    descriptors: &[Box<dyn Descriptor>],
-) -> FlatDescriptorMatrix {
-    let rows = molecules.len();
-    if rows == 0 || descriptors.is_empty() {
-        return FlatDescriptorMatrix {
-            rows,
-            cols: 0,
-            data: Vec::new(),
-        };
-    }
-
-    let mut probe = molecules[0].clone();
-    let cols = infer_cols_dyn(&mut probe, descriptors);
-    if cols == 0 {
-        return FlatDescriptorMatrix {
-            rows,
-            cols,
-            data: Vec::new(),
-        };
-    }
-
-    let mut data = vec![0.0f32; rows * cols];
-    data.par_chunks_mut(cols)
-        .zip(molecules.par_iter_mut())
-        .for_each_init(
-            crate::desc::context::CalculationContext::new,
-            |ctx, (row, mol)| {
-                ctx.reset_for_new_molecule();
-                fill_row_dyn(row, mol, descriptors, ctx);
-            },
-        );
-
-    FlatDescriptorMatrix { rows, cols, data }
-}
-
-/// Calculates static-dispatch descriptors for many molecules in parallel into one contiguous buffer.
-pub fn calculate_batch_flat_static(
-    molecules: &mut [Molecule],
-    descriptors: &[BatchDescriptor],
-) -> FlatDescriptorMatrix {
-    let rows = molecules.len();
-    if rows == 0 || descriptors.is_empty() {
-        return FlatDescriptorMatrix {
-            rows,
-            cols: 0,
-            data: Vec::new(),
-        };
-    }
-
-    let cols = infer_cols_static(descriptors);
-    if cols == 0 {
-        return FlatDescriptorMatrix {
-            rows,
-            cols,
-            data: Vec::new(),
-        };
-    }
-
-    let mut data = vec![0.0f32; rows * cols];
-    data.par_chunks_mut(cols)
-        .zip(molecules.par_iter_mut())
-        .for_each_init(
-            crate::desc::context::CalculationContext::new,
-            |ctx, (row, mol)| {
-                ctx.reset_for_new_molecule();
-                fill_row_static(row, mol, descriptors, ctx);
-            },
-        );
-
-    FlatDescriptorMatrix { rows, cols, data }
-}
-
-/// Calculates static-dispatch descriptors and allows cooperative cancellation between rows.
-pub fn calculate_batch_flat_static_cancellable<F>(
-    molecules: &mut [Molecule],
-    descriptors: &[BatchDescriptor],
-    should_cancel: &F,
-) -> std::result::Result<FlatDescriptorMatrix, ()>
-where
-    F: Fn() -> bool + Sync,
-{
-    if should_cancel() {
-        return Err(());
-    }
-
-    let rows = molecules.len();
-    if rows == 0 || descriptors.is_empty() {
-        return Ok(FlatDescriptorMatrix {
-            rows,
-            cols: 0,
-            data: Vec::new(),
-        });
-    }
-
-    let cols = infer_cols_static(descriptors);
-    if cols == 0 {
-        return Ok(FlatDescriptorMatrix {
-            rows,
-            cols,
-            data: Vec::new(),
-        });
-    }
-
-    let mut data = vec![0.0f32; rows * cols];
-    data.par_chunks_mut(cols)
-        .zip(molecules.par_iter_mut())
-        .try_for_each_init(
-            crate::desc::context::CalculationContext::new,
-            |ctx, (row, mol)| {
-                if should_cancel() {
-                    return Err(());
+            _ => {
+                let value = self.calculate(mol, ctx);
+                let expected = self.feature_len();
+                if value.len() == expected {
+                    write_descriptor_value(value, row, offset);
+                } else {
+                    // Never shift columns: a descriptor with a wrong output
+                    // length yields NaN in its own slot.
+                    debug_assert!(false, "{} returned {} values, expected {}", self.name(), value.len(), expected);
+                    row[*offset..*offset + expected].fill(f64::NAN);
+                    *offset += expected;
                 }
-                ctx.reset_for_new_molecule();
-                fill_row_static(row, mol, descriptors, ctx);
-                if should_cancel() {
-                    return Err(());
-                }
-                Ok(())
-            },
-        )?;
-
-    if should_cancel() {
-        return Err(());
-    }
-
-    Ok(FlatDescriptorMatrix { rows, cols, data })
-}
-
-/// Compatibility API: calculates descriptors in parallel and returns row-major vectors.
-pub fn calculate_batch(
-    molecules: &mut [Molecule],
-    descriptors: &[Box<dyn Descriptor>],
-) -> Vec<Vec<f32>> {
-    calculate_batch_flat(molecules, descriptors).into_nested()
-}
-
-/// Writes descriptor matrix to CSV format.
-pub fn write_csv<W: Write>(
-    writer: &mut W,
-    smiles: &[String],
-    descriptors: &[Box<dyn Descriptor>],
-    matrix: &[Vec<f32>],
-) -> Result<()> {
-    write!(writer, "SMILES")?;
-    for desc in descriptors {
-        write!(writer, ",{}", desc.name())?;
-    }
-    writeln!(writer)?;
-
-    for (smiles_str, features) in smiles.iter().zip(matrix.iter()) {
-        write!(writer, "{}", smiles_str)?;
-        for &value in features {
-            write!(writer, ",{:.6}", value)?;
+            }
         }
-        writeln!(writer)?;
     }
-
-    Ok(())
 }
 
-/// Writes flattened descriptor matrix to CSV format.
-pub fn write_csv_flat<W: Write>(
-    writer: &mut W,
-    smiles: &[String],
-    feature_names: &[String],
-    matrix: &FlatDescriptorMatrix,
-) -> Result<()> {
-    write!(writer, "SMILES")?;
-    for name in feature_names {
-        write!(writer, ",{}", name)?;
-    }
-    writeln!(writer)?;
-
-    for (row_idx, smiles_str) in smiles.iter().enumerate().take(matrix.rows) {
-        write!(writer, "{}", smiles_str)?;
-        for &value in matrix.row(row_idx) {
-            write!(writer, ",{:.6}", value)?;
-        }
-        writeln!(writer)?;
-    }
-
-    Ok(())
+/// Appends a descriptor value at `offset` (bits as 0.0 / 1.0).
+fn write_descriptor_value(value: DescriptorValue, row: &mut [f64], offset: &mut usize) {
+    let n = value.to_f64_slice(&mut row[*offset..]);
+    *offset += n;
 }
 
-/// Writes descriptor matrix to JSON format.
-pub fn write_json<W: Write>(
-    writer: &mut W,
-    smiles: &[String],
-    descriptors: &[Box<dyn Descriptor>],
-    matrix: &[Vec<f32>],
-) -> Result<()> {
-    use serde_json::json;
-
-    let descriptor_names: Vec<String> = descriptors.iter().map(|d| d.name().to_string()).collect();
-
-    let mut records = Vec::new();
-    for (smiles_str, features) in smiles.iter().zip(matrix.iter()) {
-        let mut record = serde_json::Map::new();
-        record.insert("smiles".to_string(), json!(smiles_str));
-
-        for (name, &value) in descriptor_names.iter().zip(features.iter()) {
-            record.insert(name.clone(), json!(value));
-        }
-
-        records.push(json!(record));
-    }
-
-    let output = json!({
-        "molecules": records,
-        "descriptor_count": descriptor_names.len(),
-        "molecule_count": smiles.len(),
-    });
-
-    serde_json::to_writer_pretty(&mut *writer, &output)?;
-    writeln!(writer)?;
-
-    Ok(())
-}
-
-/// Writes flattened descriptor matrix to JSON format.
-pub fn write_json_flat<W: Write>(
-    writer: &mut W,
-    smiles: &[String],
-    feature_names: &[String],
-    matrix: &FlatDescriptorMatrix,
-) -> Result<()> {
-    use serde_json::json;
-
-    let mut records = Vec::new();
-    for (row_idx, smiles_str) in smiles.iter().enumerate().take(matrix.rows) {
-        let mut record = serde_json::Map::new();
-        record.insert("smiles".to_string(), json!(smiles_str));
-        for (name, &value) in feature_names.iter().zip(matrix.row(row_idx)) {
-            record.insert(name.clone(), json!(value));
-        }
-        records.push(json!(record));
-    }
-
-    let output = json!({
-        "molecules": records,
-        "feature_count": feature_names.len(),
-        "molecule_count": smiles.len(),
-    });
-
-    serde_json::to_writer_pretty(&mut *writer, &output)?;
-    writeln!(writer)?;
-    Ok(())
+/// Column names for a descriptor set, in output order.
+pub fn feature_names(descriptors: &[BatchDescriptor]) -> Vec<String> {
+    descriptors.iter().flat_map(|d| d.feature_names()).collect()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::desc::molecular_weight::MolecularWeight;
-    use crate::io::smiles::parse_smiles;
 
-    #[test]
-    /// Runs regression test for calculate batch.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/batch.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-    fn test_calculate_batch() {
-        let mut molecules = vec![
-            parse_smiles("C").unwrap(),
-            parse_smiles("CC").unwrap(),
-            parse_smiles("CCC").unwrap(),
-        ];
 
-        let descriptors: Vec<Box<dyn Descriptor>> = vec![Box::new(MolecularWeight)];
-        let results = calculate_batch(&mut molecules, &descriptors);
 
-        assert_eq!(results.len(), 3);
-        assert!(!results[0].is_empty());
-    }
 
-    #[test]
-    /// Runs regression test for calculate batch flat shape.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/batch.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-    fn test_calculate_batch_flat_shape() {
-        let mut molecules = vec![parse_smiles("C").unwrap(), parse_smiles("CC").unwrap()];
-        let descriptors: Vec<Box<dyn Descriptor>> = vec![Box::new(MolecularWeight)];
-        let matrix = calculate_batch_flat(&mut molecules, &descriptors);
-
-        assert_eq!(matrix.shape(), (2, 1));
-        assert_eq!(matrix.data.len(), 2);
-    }
-
-    #[test]
-    /// Runs regression test for calculate batch flat static shape.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/batch.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-    fn test_calculate_batch_flat_static_shape() {
-        let mut molecules = vec![parse_smiles("C").unwrap(), parse_smiles("CC").unwrap()];
-        let descriptors = [BatchDescriptor::MolecularWeight, BatchDescriptor::AtomCount];
-        let matrix = calculate_batch_flat_static(&mut molecules, &descriptors);
-
-        assert_eq!(matrix.shape(), (2, 2));
-        assert_eq!(matrix.data.len(), 4);
-    }
-
-    #[test]
-    /// Runs regression test for calculate batch flat static cancellable honors cancel flag.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/batch.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-    fn test_calculate_batch_flat_static_cancellable_honors_cancel_flag() {
-        let mut molecules = vec![parse_smiles("C").unwrap(); 128];
-        let descriptors = [BatchDescriptor::MolecularWeight];
-        let canceled = std::sync::atomic::AtomicBool::new(true);
-
-        let result = calculate_batch_flat_static_cancellable(&mut molecules, &descriptors, &|| {
-            canceled.load(std::sync::atomic::Ordering::Relaxed)
-        });
-
-        assert!(
-            result.is_err(),
-            "Expected cancellation to stop batch calculation"
-        );
-    }
 
     #[test]
     /// Runs regression test for fast ml preset descriptor list consistency.
@@ -1058,106 +864,18 @@ mod tests {
         );
     }
 
-    #[test]
-    /// Runs regression test for static feature len matches runtime value len on torture set.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/batch.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-    fn test_static_feature_len_matches_runtime_value_len_on_torture_set() {
-        let torture_smiles = [
-            "c1ccc2ccccc2c1",
-            "c1ccc2cccc2c1",
-            "c1ccc2[nH]ccc2c1",
-            "c1ccc2ncccc2c1",
-            "c1ccc2cnccc2c1",
-            "c1nc2c(n1)nc[nH]2",
-            "C1=CC=CC=CC=C1",
-            "[cH-]1cccc1",
-            "c1cc[nH]c1",
-            "c1ccoc1",
-            "c1ccsc1",
-            "CC[NH3+]",
-            "C[N+](C)(C)C",
-            "[O-]C(=O)C",
-            "O=[N+](O)c1ccccc1",
-            "CC(C)(C)C",
-            "C12C3C4C1C5C4C3C25",
-            "[13CH3]C([2H])([2H])[2H]",
-            "C[C@H](O)C(=O)O",
-            "C[C@@H](N)C(=O)O",
-            "F/C=C/F",
-            "F/C=C\\F",
-            "C1CCCCC1",
-            "CCCCC",
-            "c1ccc2c(c1)ccc3ccccc23",
-            "[NH4+].[Cl-]",
-            "c1cccc2c1cccc2",
-            "[O-][N+](=O)c1ccccc1",
-            "c1[nH+]cccn1",
-            "C[NH+](C)C",
-        ];
-        let mut molecules = torture_smiles
-            .iter()
-            .map(|s| parse_smiles(s).expect("valid torture SMILES"))
-            .collect::<Vec<_>>();
-        assert!(
-            !molecules.is_empty(),
-            "torture_set.csv produced no molecules"
-        );
 
-        let descriptors = BatchDescriptor::all().to_vec();
-        let static_cols = descriptors.iter().map(|d| d.feature_len()).sum::<usize>();
-        let mut probe = molecules[0].clone();
-        let mut ctx = crate::desc::context::CalculationContext::new();
-        let runtime_cols = descriptors
-            .iter()
-            .map(|d| d.calculate(&mut probe, &mut ctx).len())
-            .sum::<usize>();
-        assert_eq!(
-            static_cols, runtime_cols,
-            "BatchDescriptor::feature_len sum must match runtime descriptor value lengths"
-        );
 
-        let matrix = calculate_batch_flat_static(&mut molecules, &descriptors);
-        assert_eq!(matrix.cols, static_cols);
-        assert_eq!(matrix.data.len(), matrix.rows * matrix.cols);
-    }
 
     #[test]
-    /// Runs regression test for write csv.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/batch.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-    fn test_write_csv() {
-        let smiles = vec!["C".to_string(), "CC".to_string()];
-        let descriptors: Vec<Box<dyn Descriptor>> = vec![Box::new(MolecularWeight)];
-        let matrix = vec![vec![16.0], vec![30.0]];
-
-        let mut output = Vec::new();
-        write_csv(&mut output, &smiles, &descriptors, &matrix).unwrap();
-
-        let csv_string = String::from_utf8(output).unwrap();
-        assert!(csv_string.contains("SMILES,MolecularWeight"));
-    }
-
-    #[test]
-    /// Runs regression test for write csv flat.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/batch.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-    fn test_write_csv_flat() {
-        let smiles = vec!["C".to_string(), "CC".to_string()];
-        let feature_names = vec!["MolecularWeight".to_string()];
-        let matrix = FlatDescriptorMatrix {
-            rows: 2,
-            cols: 1,
-            data: vec![16.0, 30.0],
-        };
-
-        let mut output = Vec::new();
-        write_csv_flat(&mut output, &smiles, &feature_names, &matrix).unwrap();
-        let csv_string = String::from_utf8(output).unwrap();
-        assert!(csv_string.contains("SMILES,MolecularWeight"));
-        assert!(csv_string.contains("CC,30.000000"));
+    fn feature_names_match_lengths_and_are_unique() {
+        let mut seen = std::collections::HashSet::new();
+        for &d in BatchDescriptor::all() {
+            let names = d.feature_names();
+            assert_eq!(names.len(), d.feature_len(), "{}", d.name());
+            for n in names {
+                assert!(seen.insert(n.clone()), "duplicate feature name {n}");
+            }
+        }
     }
 }

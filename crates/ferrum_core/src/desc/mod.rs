@@ -49,7 +49,6 @@
 // Public modules
 pub mod aromatic_ring_count;
 pub mod atom_count;
-mod atomic_props;
 pub mod autocorrelation;
 pub mod balaban;
 pub mod batch;
@@ -57,6 +56,11 @@ pub mod bcut;
 pub mod biosynfoni;
 pub mod bond_count;
 pub mod carbon_types;
+mod cdk_charges;
+pub(crate) mod cdk_daylight;
+mod cdk_graph;
+mod cdk_perception;
+mod cdk_polarizability;
 pub mod chains;
 pub mod chi;
 pub mod context;
@@ -75,15 +79,22 @@ pub mod logp;
 pub mod maccs;
 pub mod mde;
 pub mod molecular_weight;
+mod mordred_data;
 pub mod path_fingerprints;
 pub mod petitjean;
 pub mod pi_system;
 pub mod polarizability;
 pub mod pubchem;
+mod pubchem_cdk;
+mod pubchem_keys;
+mod pubchem_smarts;
 pub mod qed;
+pub mod rdkit_extra;
+pub mod rdkit_fragments_data;
 pub mod ring_types;
 pub mod simple_counts;
 pub mod small_ring;
+pub mod table;
 pub mod spiro;
 pub mod shape_3d;
 pub mod topo;
@@ -117,14 +128,13 @@ mod descriptor_tests {
     ///
     /// Function context: `crates/ferrum_core/src/desc/mod.rs`.
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-    fn calc_float(desc: &dyn Descriptor, smiles: &str) -> f32 {
+    fn calc_float(desc: &dyn Descriptor, smiles: &str) -> f64 {
         let mut mol = parse(smiles);
         match desc.calculate(
             &mut mol,
             &mut crate::desc::context::CalculationContext::new(),
         ) {
             DescriptorValue::Float(v) => v,
-            DescriptorValue::Float64(v) => v as f32,
             other => panic!("{} expected Float, got {:?}", desc.name(), other),
         }
     }
@@ -148,7 +158,7 @@ mod descriptor_tests {
     ///
     /// Function context: `crates/ferrum_core/src/desc/mod.rs`.
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-    fn calc_float_vec(desc: &dyn Descriptor, smiles: &str) -> Vec<f32> {
+    fn calc_float_vec(desc: &dyn Descriptor, smiles: &str) -> Vec<f64> {
         let mut mol = parse(smiles);
         match desc.calculate(
             &mut mol,
@@ -494,7 +504,7 @@ mod descriptor_tests {
     fn test_chi_indices() {
         use super::chi::ChiIndices;
         let v = calc_float_vec(&ChiIndices, "c1ccccc1");
-        assert_eq!(v.len(), 26, "chi indices should have 26 values");
+        assert_eq!(v.len(), 7, "RDKit chi indices: Chi0, Chi1, Chi0v..Chi4v");
         assert!(
             v.iter().any(|&x| x > 0.0),
             "benzene should have nonzero chi"
@@ -525,7 +535,7 @@ mod descriptor_tests {
     fn test_estate_indices() {
         use super::estate::EStateIndices;
         let v = calc_float_vec(&EStateIndices, "CCO");
-        assert_eq!(v.len(), 47, "E-State has 47 values");
+        assert_eq!(v.len(), 82, "E-State has 82 values");
     }
 
     // ======================================================================
@@ -540,7 +550,7 @@ mod descriptor_tests {
     fn test_autocorrelation() {
         use super::autocorrelation::Autocorrelation;
         let v = calc_float_vec(&Autocorrelation, "c1ccccc1");
-        assert_eq!(v.len(), 32, "ATS has 32 values");
+        assert_eq!(v.len(), 33, "ATS has 33 values (CDK ATSm/p/c 1-5 + Mordred ATS0-8pe/v)");
     }
 
     #[test]
@@ -551,7 +561,7 @@ mod descriptor_tests {
     fn test_bcut() {
         use super::bcut::BCUT;
         let v = calc_float_vec(&BCUT, "c1ccccc1");
-        assert_eq!(v.len(), 8, "BCUT has 8 values");
+        assert_eq!(v.len(), 10, "BCUT has 10 values (CDK w/c/p + Mordred BCUTpe/v)");
     }
 
     #[test]
@@ -562,7 +572,7 @@ mod descriptor_tests {
     fn test_weighted_path() {
         use super::weighted_path::WeightedPath;
         let v = calc_float_vec(&WeightedPath, "c1ccccc1");
-        assert_eq!(v.len(), 10, "WeightedPath has 10 values");
+        assert_eq!(v.len(), 5, "WeightedPath has 5 values (WTPT-1..5)");
     }
 
     #[test]
@@ -573,7 +583,7 @@ mod descriptor_tests {
     fn test_mde() {
         use super::mde::MDE;
         let v = calc_float_vec(&MDE, "c1ccccc1");
-        assert_eq!(v.len(), 15, "MDE has 15 values");
+        assert_eq!(v.len(), 19, "MDE has 19 values");
     }
 
     // ======================================================================
@@ -587,8 +597,8 @@ mod descriptor_tests {
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn test_wiener_index() {
         use super::wiener_numbers::WienerIndex;
-        let v = calc_float(&WienerIndex, "CCCC");
-        assert!(v > 0.0, "wiener index > 0 for butane: {}", v);
+        let v = calc_float_vec(&WienerIndex, "CCCC");
+        assert_eq!(v, vec![10.0, 1.0], "butane WienerPath / WienerPolarity");
     }
 
     #[test]
@@ -918,7 +928,7 @@ mod descriptor_tests {
     fn test_largest_chain() {
         use super::chains::LargestChain;
         assert_eq!(calc_int(&LargestChain, "CCCCCC"), 6);
-        assert_eq!(calc_int(&LargestChain, "c1ccccc1"), 6);
+        assert_eq!(calc_int(&LargestChain, "c1ccccc1"), 0); // CDK: ring atoms excluded
     }
 
     #[test]
@@ -941,7 +951,7 @@ mod descriptor_tests {
         use super::pi_system::LargestPiSystem;
         assert_eq!(calc_int(&LargestPiSystem, "c1ccccc1"), 6);
         assert_eq!(calc_int(&LargestPiSystem, "CC"), 0);
-        assert_eq!(calc_int(&LargestPiSystem, "C=C"), 2);
+        assert_eq!(calc_int(&LargestPiSystem, "C=C"), 1); // CDK seed-atom quirk
     }
 
     // ======================================================================
@@ -995,8 +1005,8 @@ mod descriptor_tests {
     fn test_apol() {
         use super::polarizability::APol;
         let v = calc_float(&APol, "C");
-        // methane: C(1.76) + 4H(0.387) = 3.308
-        assert!((v - 3.308).abs() < 0.01, "methane APol: {v}");
+        // CDK APolDescriptor: C(1.76) + 4H(0.666793) = 4.427172
+        assert!((v - 4.427172).abs() < 1e-5, "methane APol: {v}");
     }
 
     #[test]
@@ -1007,7 +1017,8 @@ mod descriptor_tests {
     fn test_bpol() {
         use super::polarizability::BPol;
         let v = calc_float(&BPol, "c1ccccc1");
-        assert!(v.abs() < 0.01, "benzene BPol should be ~0 (symmetric): {v}");
+        // CDK BPolDescriptor: C-C bonds contribute 0, 6 C-H bonds |1.76 - 0.666793|
+        assert!((v - 6.559242).abs() < 1e-5, "benzene BPol: {v}");
     }
 
     #[test]
@@ -1019,7 +1030,7 @@ mod descriptor_tests {
         use super::vsa::PeoeVsa;
         let v = calc_float_vec(&PeoeVsa, "CCO");
         assert_eq!(v.len(), 14, "PEOE_VSA should have 14 bins");
-        let sum: f32 = v.iter().sum();
+        let sum: f64 = v.iter().sum();
         assert!(sum > 0.0, "PEOE_VSA sum should be positive");
     }
 

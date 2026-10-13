@@ -55,9 +55,81 @@ use crate::types::BondType;
 use ndarray::ArrayViewMut2;
 #[cfg(not(target_os = "macos"))]
 use ndarray::linalg::general_mat_mul;
-use crate::ml::pca::jacobi_eigen;
+fn jacobi_eigen(a: &Array2<f64>) -> (Vec<f64>, Array2<f64>) {
+    let n = a.nrows();
+    if n == 0 {
+        return (Vec::new(), Array2::<f64>::zeros((0, 0)));
+    }
+    if n == 1 {
+        return (vec![a[[0, 0]]], Array2::<f64>::eye(1));
+    }
+    let mut d = a.clone();
+    let mut v = Array2::<f64>::eye(n);
+
+    let max_iter = 100 * n * n;
+    let eps = 1e-12;
+
+    for _ in 0..max_iter {
+        let mut max_val = 0.0f64;
+        let mut p = 0;
+        let mut q = 1;
+        for i in 0..n {
+            for j in (i + 1)..n {
+                let val = d[[i, j]].abs();
+                if val > max_val {
+                    max_val = val;
+                    p = i;
+                    q = j;
+                }
+            }
+        }
+
+        if max_val < eps {
+            break;
+        }
+
+        let dpp = d[[p, p]];
+        let dqq = d[[q, q]];
+        let dpq = d[[p, q]];
+
+        let theta = if (dpp - dqq).abs() < eps {
+            std::f64::consts::FRAC_PI_4
+        } else {
+            0.5 * (2.0 * dpq / (dpp - dqq)).atan()
+        };
+
+        let c = theta.cos();
+        let s = theta.sin();
+
+        for i in 0..n {
+            if i != p && i != q {
+                let dip = d[[i, p]];
+                let diq = d[[i, q]];
+                let new_ip = c * dip + s * diq;
+                let new_iq = -s * dip + c * diq;
+                d[[i, p]] = new_ip;
+                d[[p, i]] = new_ip;
+                d[[i, q]] = new_iq;
+                d[[q, i]] = new_iq;
+            }
+        }
+        d[[p, p]] = c * c * dpp + 2.0 * s * c * dpq + s * s * dqq;
+        d[[q, q]] = s * s * dpp - 2.0 * s * c * dpq + c * c * dqq;
+        d[[p, q]] = 0.0;
+        d[[q, p]] = 0.0;
+
+        for i in 0..n {
+            let vip = v[[i, p]];
+            let viq = v[[i, q]];
+            v[[i, p]] = c * vip + s * viq;
+            v[[i, q]] = -s * vip + c * viq;
+        }
+    }
+
+    let eigenvalues: Vec<f64> = (0..n).map(|i| d[[i, i]]).collect();
+    (eigenvalues, v)
+}
 use ndarray::Array2;
-use smallvec::SmallVec;
 use std::hash::{BuildHasherDefault, Hasher};
 
 /// Minimal hasher for `u64` keys used in Bertz connection counting.
@@ -133,7 +205,7 @@ pub struct FractionCSP3;
 ///
 /// Function context: `crates/ferrum_core/src/desc/extra_counts.rs`.
 /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-fn compute_fraction_csp3(mol: &Molecule) -> f32 {
+fn compute_fraction_csp3(mol: &Molecule) -> f64 {
     use crate::algo::electronic::effective_hybridization_pub;
     use crate::types::Hybridization;
 
@@ -155,7 +227,7 @@ fn compute_fraction_csp3(mol: &Molecule) -> f32 {
     }
 
     if total_c > 0 {
-        sp3_c as f32 / total_c as f32
+        sp3_c as f64 / total_c as f64
     } else {
         0.0
     }
@@ -328,7 +400,7 @@ pub struct AromaticAtomFraction;
 ///
 /// Function context: `crates/ferrum_core/src/desc/extra_counts.rs`.
 /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-fn compute_aromatic_atom_fraction(mol: &Molecule) -> f32 {
+fn compute_aromatic_atom_fraction(mol: &Molecule) -> f64 {
     let heavy: usize = mol.atoms.iter().filter(|a| a.atomic_number > 1).count();
     if heavy == 0 {
         return 0.0;
@@ -338,7 +410,7 @@ fn compute_aromatic_atom_fraction(mol: &Molecule) -> f32 {
         .iter()
         .filter(|a| a.atomic_number > 1 && a.is_aromatic())
         .count();
-    aromatic as f32 / heavy as f32
+    aromatic as f64 / heavy as f64
 }
 
 impl Descriptor for AromaticAtomFraction {
@@ -439,8 +511,8 @@ fn compute_hall_kier_alpha_sum(mol: &Molecule) -> f64 {
 ///
 /// Function context: `crates/ferrum_core/src/desc/extra_counts.rs`.
 /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-fn compute_hall_kier_alpha(mol: &Molecule) -> f32 {
-    compute_hall_kier_alpha_sum(mol) as f32
+fn compute_hall_kier_alpha(mol: &Molecule) -> f64 {
+    compute_hall_kier_alpha_sum(mol)
 }
 
 /// Public f64 accessor for Kappa index computation.
@@ -486,217 +558,204 @@ impl Descriptor for HallKierAlpha {
 /// Reference: S. H. Bertz, J. Am. Chem. Soc., 103, 3599-3601 (1981)
 pub struct BertzCT;
 
-/// Encodes a 2-class Bertz connection key into a compact `u64`.
-///
-/// Layout:
-/// - bit 63 = 1 (pair discriminator)
-/// - bits 31..16 = lower class id
-/// - bits 15..0  = higher class id
-///
-/// Class ids originate from atom-index bounded symmetry classes (`<= u16::MAX`),
-/// so this packing is lossless for Ferrum's molecule-size constraints.
-#[inline]
-fn pack_bertz_pair_key(class_lo: usize, class_hi: usize) -> u64 {
-    debug_assert!(class_lo <= u16::MAX as usize);
-    debug_assert!(class_hi <= u16::MAX as usize);
-    (1u64 << 63) | ((class_lo as u64) << 16) | class_hi as u64
+/// `float(Chem.BondType)` as used by RDKit's Python BertzCT for non-aromatic bonds.
+fn rdkit_bond_type_value(bond: &crate::mol::bond::Bond) -> f64 {
+    match bond.bond_type {
+        crate::types::BondType::Single => 1.0,
+        crate::types::BondType::Double => 2.0,
+        crate::types::BondType::Triple => 3.0,
+        crate::types::BondType::Aromatic => 12.0,
+        crate::types::BondType::Dative => 17.0,
+        crate::types::BondType::Unknown => 0.0,
+    }
 }
 
-/// Encodes a 3-class Bertz connection key into a compact `u64`.
-///
-/// Layout:
-/// - bit 62 = 1 (triple discriminator)
-/// - bits 55..48 = hinge atomic number
-/// - bits 47..32 = first class id (min neighbor class)
-/// - bits 31..16 = hinge class id
-/// - bits 15..0  = third class id (max neighbor class)
-///
-/// Bit 63 remains 0, so pair and triple key-spaces are disjoint.
-#[inline]
-fn pack_bertz_triple_key(class_a: usize, class_b: usize, class_c: usize, hinge_z: u8) -> u64 {
-    debug_assert!(class_a <= u16::MAX as usize);
-    debug_assert!(class_b <= u16::MAX as usize);
-    debug_assert!(class_c <= u16::MAX as usize);
-    (1u64 << 62)
-        | ((hinge_z as u64) << 48)
-        | ((class_a as u64) << 32)
-        | ((class_b as u64) << 16)
-        | class_c as u64
+/// RDKit `Bond::getBondTypeAsDouble`.
+fn rdkit_bond_type_as_double(bond: &crate::mol::bond::Bond) -> f64 {
+    match bond.bond_type {
+        crate::types::BondType::Single | crate::types::BondType::Dative => 1.0,
+        crate::types::BondType::Double => 2.0,
+        crate::types::BondType::Triple => 3.0,
+        crate::types::BondType::Aromatic => 1.5,
+        crate::types::BondType::Unknown => 0.0,
+    }
 }
 
-/// Computes bertz ct.
+/// RDKit `InfoEntropy` (bits), summing in the given order.
+pub(crate) fn info_entropy(values: &[f64]) -> f64 {
+    let total: f64 = values.iter().sum();
+    let mut accum = 0.0;
+    if total != 0.0 {
+        for &v in values {
+            let d = v / total;
+            if d != 0.0 {
+                accum += -d * d.ln();
+            }
+        }
+    }
+    accum / 2f64.ln()
+}
+
+/// BertzCT symmetry classes: first-seen index (1-based) of the sorted
+/// bond-order distance row (first `CUTOFF` entries), compared at '%.4f'
+/// precision.
 ///
-/// Function context: `crates/ferrum_core/src/desc/extra_counts.rs`.
-/// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-fn compute_bertz_ct(mol: &mut Molecule, ctx: &mut crate::desc::context::CalculationContext) -> f32 {
-    use crate::algo::distance_matrix::compute_distance_matrix;
+/// Distances are multiples of 1/6, so `round(d * 10000)` is strictly
+/// increasing in the exact distance in sixths and the rounded rows of
+/// RDKit's floating-point matrix (off by a few ulp, far from a rounding
+/// boundary) compare exactly like the integer rows; unreachable pairs
+/// (1e8 in RDKit) are larger than every finite distance either way.
+fn bertz_symmetry_classes(mol: &Molecule, ctx: &mut crate::desc::context::CalculationContext) -> Vec<usize> {
+    const CUTOFF: usize = 100;
+    let n = mol.num_atoms();
+    let dist = crate::algo::distance_matrix::bond_order_distances_sixths_cached(mol, ctx);
+    let width = n.min(CUTOFF);
+    let mut keys = vec![0u32; n * width];
+    if width == n {
+        keys.copy_from_slice(dist);
+        for key in keys.chunks_exact_mut(n) {
+            key.sort_unstable();
+        }
+    } else {
+        let mut row: Vec<u32> = Vec::with_capacity(n);
+        for i in 0..n {
+            row.clear();
+            row.extend_from_slice(&dist[i * n..(i + 1) * n]);
+            row.select_nth_unstable(width - 1);
+            row.truncate(width);
+            row.sort_unstable();
+            keys[i * width..(i + 1) * width].copy_from_slice(&row);
+        }
+    }
+    let mut class_of_key: rustc_hash::FxHashMap<&[u32], usize> =
+        rustc_hash::FxHashMap::with_capacity_and_hasher(n, Default::default());
+    (0..n)
+        .map(|i| {
+            let next = class_of_key.len() + 1;
+            *class_of_key.entry(&keys[i * width..(i + 1) * width]).or_insert(next)
+        })
+        .collect()
+}
+
+/// Reference symmetry classes from RDKit's floating-point Floyd-Warshall
+/// (bonds of unknown type, whose `1 / order` is infinite).
+fn bertz_symmetry_classes_fw(mol: &Molecule) -> Vec<usize> {
+    const LOCAL_INF: f64 = 1e8;
+    const CUTOFF: usize = 100;
+    let n = mol.num_atoms();
+    // Bond-order weighted distance matrix (getDistanceMat(useBO=1)) with
+    // RDKit's double-buffered Floyd-Warshall.
+    let mut last = vec![LOCAL_INF; n * n];
+    for i in 0..n {
+        last[i * n + i] = 0.0;
+    }
+    for bond in &mol.bonds {
+        let (i, j) = (bond.source as usize, bond.target as usize);
+        let contrib = if bond.is_aromatic() { 2.0 / 3.0 } else { 1.0 / rdkit_bond_type_as_double(bond) };
+        last[i * n + j] = contrib;
+        last[j * n + i] = contrib;
+    }
+    let mut curr = vec![0.0f64; n * n];
+    for k in 0..n {
+        for i in 0..n {
+            let dik = last[i * n + k];
+            for j in 0..n {
+                let v1 = last[i * n + j];
+                let v2 = dik + last[k * n + j];
+                curr[i * n + j] = if v1 <= v2 { v1 } else { v2 };
+            }
+        }
+        std::mem::swap(&mut last, &mut curr);
+    }
+
+    let mut class_of_key: rustc_hash::FxHashMap<Vec<i64>, usize> = rustc_hash::FxHashMap::default();
+    let mut sym = vec![0usize; n];
+    let mut row: Vec<f64> = Vec::with_capacity(n);
+    for i in 0..n {
+        row.clear();
+        row.extend_from_slice(&last[i * n..(i + 1) * n]);
+        row.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        let key: Vec<i64> = row.iter().take(CUTOFF).map(|&x| (x * 10_000.0).round() as i64).collect();
+        let next = class_of_key.len() + 1;
+        sym[i] = *class_of_key.entry(key).or_insert(next);
+    }
+    sym
+}
+
+/// Port of RDKit `GraphDescriptors.BertzCT` (Python, cutoff = 100).
+fn compute_bertz_ct(mol: &mut Molecule, ctx: &mut crate::desc::context::CalculationContext) -> f64 {
     let n = mol.num_atoms();
     if n < 2 {
         return 0.0;
     }
 
-    // Step 1: Build an adjacency list that carries the effective bond-order weight used by
-    // Bertz connection counting.
-    let neighbors = &mut ctx.weighted_neighbors;
-    neighbors.clear();
-    neighbors.resize(n, SmallVec::new());
+    let sym = if mol.bonds.iter().any(|b| b.bond_type == crate::types::BondType::Unknown && !b.is_aromatic()) {
+        bertz_symmetry_classes_fw(mol)
+    } else {
+        bertz_symmetry_classes(mol, ctx)
+    };
 
+    // Sorted neighbour lists and bond lookup.
+    let mut neighbors: Vec<smallvec::SmallVec<[(usize, f64); 4]>> = vec![smallvec::SmallVec::new(); n];
     for bond in &mol.bonds {
-        let a1 = bond.source as usize;
-        let a2 = bond.target as usize;
-        let bo: f64 = if bond.is_aromatic() || bond.bond_type == BondType::Aromatic {
-            1.5
-        } else {
-            match bond.bond_type {
-                BondType::Double => 2.0,
-                BondType::Triple => 3.0,
-                BondType::Dative => 17.0,
-                _ => 1.0,
-            }
-        };
-        neighbors[a1].push((a2, bo));
-        neighbors[a2].push((a1, bo));
+        let (i, j) = (bond.source as usize, bond.target as usize);
+        let order = if bond.is_aromatic() { 1.5 } else { rdkit_bond_type_value(bond) };
+        if !neighbors[i].iter().any(|&(x, _)| x == j) {
+            neighbors[i].push((j, order));
+        }
+        if !neighbors[j].iter().any(|&(x, _)| x == i) {
+            neighbors[j].push((i, order));
+        }
+    }
+    for list in neighbors.iter_mut() {
+        list.sort_by_key(|&(x, _)| x);
     }
 
-    // Step 2: Symmetry classes from unweighted distance matrix (matching RDKit).
-    let unweighted_dist = compute_distance_matrix(mol, false);
-    let bo_dist = unweighted_dist.as_slice();
-
-    ctx.bfs_dist.clear();
-    ctx.bfs_dist.resize(n, 0);
-    let sym_classes = &mut ctx.bfs_dist;
-    let cutoff = n.min(100);
-
-    let mut class_by_key: std::collections::HashMap<SmallVec<[i32; 64]>, usize> =
-        std::collections::HashMap::with_capacity(n);
-    let mut next_class = 1usize;
-
-    let sorted_distances = &mut ctx.vec_a;
-    let mut key_buf = SmallVec::<[i32; 64]>::new();
-    for i in 0..n {
-        sorted_distances.clear();
-        sorted_distances.extend_from_slice(&bo_dist[i * n..(i + 1) * n]);
-        sorted_distances.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-
-        key_buf.clear();
-        key_buf.extend(
-            sorted_distances
-                .iter()
-                .take(cutoff)
-                .map(|x| (x * 10_000.0).round() as i32),
-        );
-        let class = if let Some(&class) = class_by_key.get(&key_buf) {
-            class
-        } else {
-            let class = next_class;
-            next_class += 1;
-            class_by_key.insert(key_buf.clone(), class);
-            class
-        };
-        sym_classes[i] = class;
-    }
-
-    // Step 3: Connection counting.
-    //
-    // Pair/triple keys are packed into a single integer-key map to keep per-update
-    // hashing and key materialization costs low in this central nested loop.
-    // We also maintain `tot_conn` incrementally, avoiding an extra full-map pass.
-    let mut connection_counts: U64FastMap<f64> = U64FastMap::default();
-    connection_counts.reserve(mol.num_bonds().saturating_mul(4).max(16));
-    let mut atom_type_counts = [0u32; 256];
-    let mut tot_conn = 0.0f64;
+    // Python dicts keep insertion order; mirror that for identical summation.
+    let mut atom_type_index: rustc_hash::FxHashMap<u8, usize> = rustc_hash::FxHashMap::default();
+    let mut atom_types: Vec<f64> = Vec::new();
+    let mut conn_index: rustc_hash::FxHashMap<(usize, usize, usize), usize> =
+        rustc_hash::FxHashMap::with_capacity_and_hasher(2 * mol.num_bonds() + 4, Default::default());
+    let mut connections: Vec<f64> = Vec::with_capacity(2 * mol.num_bonds() + 4);
+    let add_conn = |key: (usize, usize, usize), v: f64, conn_index: &mut rustc_hash::FxHashMap<(usize, usize, usize), usize>, connections: &mut Vec<f64>| {
+        let idx = *conn_index.entry(key).or_insert_with(|| {
+            connections.push(0.0);
+            connections.len() - 1
+        });
+        connections[idx] += v;
+    };
 
     for atom_idx in 0..n {
         let z = mol.atoms[atom_idx].atomic_number;
-        atom_type_counts[z as usize] += 1;
-
-        let hinge_class = sym_classes[atom_idx];
+        let t = *atom_type_index.entry(z).or_insert_with(|| {
+            atom_types.push(0.0);
+            atom_types.len() - 1
+        });
+        atom_types[t] += 1.0;
+        let hinge = sym[atom_idx];
         let nbrs = &neighbors[atom_idx];
-        let num_nbrs = nbrs.len();
-
-        for i in 0..num_nbrs {
+        for i in 0..nbrs.len() {
             let (ni, bo_i) = nbrs[i];
-            let ni_class = sym_classes[ni];
-
-            // Extra connections from multi-order bonds
+            let ni_class = sym[ni];
             if bo_i > 1.0 && ni > atom_idx {
-                let num_conn = bo_i * (bo_i - 1.0) / 2.0;
-                let key = pack_bertz_pair_key(ni_class.min(hinge_class), ni_class.max(hinge_class));
-                *connection_counts.entry(key).or_insert(0.0) += num_conn;
-                tot_conn += num_conn;
+                let key = (ni_class.min(hinge), 0, ni_class.max(hinge));
+                add_conn(key, bo_i * (bo_i - 1.0) / 2.0, &mut conn_index, &mut connections);
             }
-
-            // Pairs of neighbors through hinge
-            for j in (i + 1)..num_nbrs {
-                let (nj, bo_j) = nbrs[j];
-                let nj_class = sym_classes[nj];
-                let num_conn = bo_i * bo_j;
-                let key = pack_bertz_triple_key(
-                    ni_class.min(nj_class),
-                    hinge_class,
-                    ni_class.max(nj_class),
-                    z,
-                );
-                *connection_counts.entry(key).or_insert(0.0) += num_conn;
-                tot_conn += num_conn;
+            for &(nj, bo_j) in &nbrs[i + 1..] {
+                let nj_class = sym[nj];
+                let key = (ni_class.min(nj_class), hinge, ni_class.max(nj_class));
+                add_conn(key, bo_i * bo_j, &mut conn_index, &mut connections);
             }
         }
     }
-
-    // Step 4: Calculate entropies.
-    //
-    // Connection entropy is computed in closed form to reduce hot-loop arithmetic:
-    //
-    // H = -sum_i p_i log2(p_i), p_i = c_i / T
-    // T * H           == T*log2(T) - sum_i c_i*log2(c_i)
-    // T * (H + log2(T)) == 2*T*log2(T) - sum_i c_i*log2(c_i)
-    //
-    // So we avoid per-entry probability divisions and compute:
-    // conn_ie = 2*T*log2(T) - sum_i c_i*log2(c_i)
-    //
-    // This is algebraically equivalent to the previous implementation.
-    if tot_conn <= 0.0 {
-        // Preserve previous behavior for empty connection dictionaries:
-        // using a synthetic [1.0] count yields zero entropy contribution.
-        tot_conn = 1.0;
+    if connections.is_empty() {
+        connections.push(1.0);
     }
 
-    let mut sum_c_log_c = 0.0f64;
-    for &v in connection_counts.values() {
-        if v > 0.0 {
-            sum_c_log_c = v.mul_add(v.log2(), sum_c_log_c);
-        }
-    }
-    let conn_ie = 2.0 * tot_conn * tot_conn.log2() - sum_c_log_c;
-
-    // Atom entropy uses the same closed-form reduction:
-    // n * H(atom_counts) == sum_i c_i * log2(n / c_i)
-    let n_f64 = n as f64;
-    let mut atom_ie = 0.0f64;
-    for &count in &atom_type_counts {
-        if count > 0 {
-            let c = count as f64;
-            atom_ie = c.mul_add((n_f64 / c).log2(), atom_ie);
-        }
-    }
-
-    (conn_ie + atom_ie) as f32
-}
-
-/// Shannon information entropy: H = -sum(p_i * log2(p_i))
-fn info_entropy(counts: &[f64]) -> f64 {
-    let total: f64 = counts.iter().sum();
-    if total <= 0.0 {
-        return 0.0;
-    }
-    let mut h = 0.0;
-    for &c in counts {
-        if c > 0.0 {
-            let p = c / total;
-            h -= p * p.log2();
-        }
-    }
-    h
+    let tot: f64 = connections.iter().sum();
+    let connection_ie = tot * (info_entropy(&connections) + tot.ln() / 2f64.ln());
+    let atom_type_ie = n as f64 * info_entropy(&atom_types);
+    atom_type_ie + connection_ie
 }
 
 impl Descriptor for BertzCT {
@@ -756,80 +815,132 @@ pub struct Ipc;
 
 
 
-/// Computes ipc.
+/// Characteristic polynomial coefficients exactly as RDKit's
+/// `Graphs.CharacteristicPolynomial` (Le Verrier-Faddeev-Frame in float64).
 ///
-/// Function context: `crates/ferrum_core/src/desc/extra_counts.rs`.
-/// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-fn compute_ipc_recurrence(
-    mol: &Molecule,
-    ctx: &mut crate::desc::context::CalculationContext,
-    average: bool,
-) -> f64 {
+/// `A` is the 0/1 adjacency matrix, so `A @ Bn` is evaluated over neighbour
+/// lists (O(n^3 * degree) instead of a dense O(n^4) product). For large,
+/// flexible molecules this recurrence is numerically unstable; RDKit's values
+/// are then dominated by rounding and can only be reproduced approximately.
+///
+/// Every floating-point operation of the straightforward recurrence is kept
+/// (same operands, same order), so the result is bit-identical to it:
+/// - row `i` of `A @ Bn` is `((Bn[k0] + Bn[k1]) + Bn[k2]) ...` over the sorted
+///   neighbours `k0 < k1 < ...`; the leading `0.0 +` of a zero-initialised
+///   accumulator is dropped (exact, no entry is ever `-0.0`);
+/// - `Bn = An - c I` reuses the `An` buffer instead of copying it;
+/// - the last product is only needed for its trace, so only its diagonal is
+///   formed.
+pub(crate) fn characteristic_polynomial(mol: &Molecule) -> Vec<f64> {
     let n = mol.num_atoms();
-    if n < 2 {
-        return 0.0;
-    }
-
-    // Build the dense adjacency matrix
-    let mut adj = Array2::<f64>::zeros((n, n));
+    let mut nbrs: Vec<smallvec::SmallVec<[u32; 4]>> = vec![smallvec::SmallVec::new(); n];
     for bond in &mol.bonds {
-        let i = bond.source as usize;
-        let j = bond.target as usize;
-        adj[[i, j]] = 1.0;
-        adj[[j, i]] = 1.0;
+        let (i, j) = (bond.source as usize, bond.target as usize);
+        nbrs[i].push(j as u32);
+        nbrs[j].push(i as u32);
     }
-
-    // Compute eigenvalues using Jacobi eigendecomposition
-    let (eigenvalues, _) = jacobi_eigen(&adj);
-
-    // Compute the characteristic polynomial coefficients using an O(N^2) convolution.
-    // Let P(x) = \prod_{i=1}^n (x - \lambda_i).
-    // The coefficients are expanded exactly via dynamic programming.
-    // cpoly[k] will store the coefficient of x^{n-k}.
-    ctx.vec_a.clear();
-    ctx.vec_a.resize(n + 1, 0.0);
-    let cpoly = &mut ctx.vec_a;
-    cpoly[0] = 1.0;
-
-    for k in 1..=n {
-        let lambda = eigenvalues[k - 1];
-        // cpoly[i] = cpoly[i] - lambda * cpoly[i-1]
-        // Iterate backwards to update in-place safely.
-        for i in (1..=k).rev() {
-            cpoly[i] -= lambda * cpoly[i - 1];
+    for list in nbrs.iter_mut() {
+        list.sort_unstable();
+        list.dedup();
+    }
+    let mut res = vec![0.0f64; n + 1];
+    res[0] = 1.0;
+    if n == 0 {
+        return res;
+    }
+    // An starts as A (dense, row-major)
+    let mut an = vec![0.0f64; n * n];
+    for i in 0..n {
+        for &k in &nbrs[i] {
+            an[i * n + k as usize] = 1.0;
         }
     }
-
-    let mut total = 0.0f64;
-    for &c in cpoly.iter() {
-        total += c.abs();
-    }
-
-    let mut ie = 0.0f64;
-    if total > 0.0 {
-        for &c in cpoly.iter() {
-            let ac = c.abs();
-            if ac > 0.0 {
-                let p = ac / total;
-                ie -= p * p.log2();
+    let mut bn = vec![0.0f64; n * n];
+    for step in 1..=n {
+        let trace: f64 = (0..n).map(|i| an[i * n + i]).sum();
+        let c = 1.0 / step as f64 * trace;
+        res[step] = c;
+        if step == n {
+            break;
+        }
+        // Bn = An - c I
+        std::mem::swap(&mut an, &mut bn);
+        for i in 0..n {
+            bn[i * n + i] -= c;
+        }
+        if step + 1 == n {
+            // only the trace of the last An = A @ Bn is used
+            for i in 0..n {
+                let mut d = 0.0f64;
+                let mut first = true;
+                for &k in &nbrs[i] {
+                    let v = bn[k as usize * n + i];
+                    d = if first { v } else { d + v };
+                    first = false;
+                }
+                an[i * n + i] = d;
+            }
+            continue;
+        }
+        // An = A @ Bn
+        for i in 0..n {
+            let row = &mut an[i * n..(i + 1) * n];
+            let b = |k: u32| &bn[k as usize * n..(k as usize + 1) * n];
+            match nbrs[i].as_slice() {
+                [] => row.fill(0.0),
+                &[k0] => row.copy_from_slice(b(k0)),
+                &[k0, k1] => {
+                    for ((r, x0), x1) in row.iter_mut().zip(b(k0)).zip(b(k1)) {
+                        *r = x0 + x1;
+                    }
+                }
+                &[k0, k1, k2] => {
+                    for (((r, x0), x1), x2) in row.iter_mut().zip(b(k0)).zip(b(k1)).zip(b(k2)) {
+                        *r = (x0 + x1) + x2;
+                    }
+                }
+                &[k0, k1, k2, k3, ref rest @ ..] => {
+                    for ((((r, x0), x1), x2), x3) in row.iter_mut().zip(b(k0)).zip(b(k1)).zip(b(k2)).zip(b(k3)) {
+                        *r = ((x0 + x1) + x2) + x3;
+                    }
+                    for &k in rest {
+                        for (r, x) in row.iter_mut().zip(b(k)) {
+                            *r += x;
+                        }
+                    }
+                }
             }
         }
     }
-
-    if average { ie } else { total * ie }
+    for c in res.iter_mut().skip(1) {
+        *c = -*c;
+    }
+    res
 }
 
-/// Implements compute ipc.
-///
-/// Function context: `crates/ferrum_core/src/desc/extra_counts.rs`.
-/// Descriptor-layer note: computes molecular properties for ML pipelines.
+/// `|characteristic polynomial coefficients|`, computed once per molecule and
+/// shared by `Ipc` and `AvgIpc` through the calculation context.
+pub(crate) fn abs_characteristic_polynomial_cached<'a>(
+    mol: &Molecule,
+    ctx: &'a mut crate::desc::context::CalculationContext,
+) -> &'a [f64] {
+    let key = crate::desc::context::molecule_cache_key(mol);
+    if ctx.char_poly_key != Some(key) {
+        ctx.char_poly_abs.clear();
+        ctx.char_poly_abs.extend(characteristic_polynomial(mol).into_iter().map(f64::abs));
+        ctx.char_poly_key = Some(key);
+    }
+    &ctx.char_poly_abs
+}
+
+/// RDKit `GraphDescriptors.Ipc` (avg = False): `sum(|c|) * InfoEntropy(|c|)`.
 fn compute_ipc(mol: &Molecule, ctx: &mut crate::desc::context::CalculationContext) -> f64 {
-    let average = std::env::var("FERRUM_IPC_MODE")
-        .ok()
-        .as_deref()
-        .map(|s| s.trim().to_ascii_lowercase())
-        == Some("avg".to_string());
-    compute_ipc_recurrence(mol, ctx, average)
+    if mol.num_atoms() == 0 {
+        return 0.0;
+    }
+    let cpoly = abs_characteristic_polynomial_cached(mol, ctx);
+    let total: f64 = cpoly.iter().sum();
+    total * info_entropy(cpoly)
 }
 
 impl Descriptor for Ipc {
@@ -850,7 +961,7 @@ impl Descriptor for Ipc {
         mol: &mut Molecule,
         ctx: &mut crate::desc::context::CalculationContext,
     ) -> DescriptorValue {
-        DescriptorValue::Float64(compute_ipc(mol, ctx))
+        DescriptorValue::Float(compute_ipc(mol, ctx))
     }
 }
 
@@ -868,14 +979,14 @@ pub struct FragmentComplexity;
 ///
 /// Function context: `crates/ferrum_core/src/desc/extra_counts.rs`.
 /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-fn compute_fragment_complexity(mol: &Molecule) -> f32 {
+fn compute_fragment_complexity(mol: &Molecule) -> f64 {
     let mut element_counts = [0u32; 120];
     for atom in &mol.atoms {
         if atom.atomic_number > 0 {
             element_counts[atom.atomic_number as usize] += 1;
         }
     }
-    shannon_entropy(&element_counts) as f32
+    shannon_entropy(&element_counts)
 }
 
 impl Descriptor for FragmentComplexity {
@@ -926,11 +1037,89 @@ mod tests {
     use super::*;
     use crate::io::smiles::parse_smiles;
 
+    /// The straightforward recurrence `characteristic_polynomial` must match bit for bit.
+    fn characteristic_polynomial_reference(mol: &Molecule) -> Vec<f64> {
+        let n = mol.num_atoms();
+        let mut nbrs: Vec<Vec<usize>> = vec![Vec::new(); n];
+        for bond in &mol.bonds {
+            let (i, j) = (bond.source as usize, bond.target as usize);
+            nbrs[i].push(j);
+            nbrs[j].push(i);
+        }
+        for list in nbrs.iter_mut() {
+            list.sort_unstable();
+            list.dedup();
+        }
+        let mut res = vec![0.0f64; n + 1];
+        res[0] = 1.0;
+        let mut an = vec![0.0f64; n * n];
+        for i in 0..n {
+            for &k in &nbrs[i] {
+                an[i * n + k] = 1.0;
+            }
+        }
+        let mut bn = vec![0.0f64; n * n];
+        for step in 1..=n {
+            let trace: f64 = (0..n).map(|i| an[i * n + i]).sum();
+            res[step] = 1.0 / step as f64 * trace;
+            bn.copy_from_slice(&an);
+            for i in 0..n {
+                bn[i * n + i] -= res[step];
+            }
+            for i in 0..n {
+                let row = &mut an[i * n..(i + 1) * n];
+                row.fill(0.0);
+                for &k in &nbrs[i] {
+                    let brow = &bn[k * n..(k + 1) * n];
+                    for j in 0..n {
+                        row[j] += brow[j];
+                    }
+                }
+            }
+        }
+        for c in res.iter_mut().skip(1) {
+            *c = -*c;
+        }
+        res
+    }
+
+    #[test]
+    fn bertz_symmetry_classes_match_floyd_warshall() {
+        for smi in [
+            "CC", "C=CC#N", "c1ccccc1", "c1ccc2ccccc2c1C#N", "CC.O", "[Na+].[Cl-]", "O=C1C=CC(=O)C=C1",
+            "CN1C=NC2=C1C(=O)N(C(=O)N2C)C", "C12C3C4C1C5C2C3C45", "OC(=O)C=CC=CC=CC#CC#N",
+            "CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC(C)C",
+            "CC(C)CC(NC(=O)CNC(=O)C(CC(=O)O)NC(=O)C(CS)NC(=O)C(CS)NC(=O)C(CC1=CC=C(O)C=C1)NC(=O)C(N)CCC(N)=O)C(=O)O",
+        ] {
+            let mol = parse_smiles(smi).unwrap();
+            let mut ctx = crate::desc::context::CalculationContext::new();
+            assert_eq!(bertz_symmetry_classes(&mol, &mut ctx), bertz_symmetry_classes_fw(&mol), "{smi}");
+        }
+    }
+
+    #[test]
+    fn characteristic_polynomial_bit_identical_to_reference() {
+        for smi in [
+            "C", "CC", "CCO", "c1ccccc1", "CC(C)(C)C", "[Na+].[Cl-]", "CC.O", "C12C3C4C1C5C2C3C45",
+            "CS(=O)(=O)c1ccc(Cl)cc1", "CC(C)(C)P(C(C)(C)C)(C(C)(C)C)(C(C)(C)C)C",
+            "CN1C=NC2=C1C(=O)N(C(=O)N2C)C", "OCC1OC(O)C(O)C(O)C1O.OCC1OC(O)C(O)C(O)C1O",
+            "CCCCCCCCCCCCCCCC(=O)OCC(COC(=O)CCCCCCCCCCCCCCC)OC(=O)CCCCCCCCCCCCCCC",
+            "CC(C)CC(NC(=O)CNC(=O)C(CC(=O)O)NC(=O)C(CS)NC(=O)C(CS)NC(=O)C(CC1=CC=C(O)C=C1)NC(=O)C(N)CCC(N)=O)C(=O)O",
+        ] {
+            let mol = parse_smiles(smi).unwrap();
+            let (fast, slow) = (characteristic_polynomial(&mol), characteristic_polynomial_reference(&mol));
+            assert_eq!(fast.len(), slow.len());
+            for (f, s) in fast.iter().zip(&slow) {
+                assert!(f.to_bits() == s.to_bits(), "{smi}: {fast:?} vs {slow:?}");
+            }
+        }
+    }
+
     /// Implements float.
     ///
     /// Function context: `crates/ferrum_core/src/desc/extra_counts.rs`.
     /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-    fn calc_float(desc: &dyn Descriptor, smiles: &str) -> f32 {
+    fn calc_float(desc: &dyn Descriptor, smiles: &str) -> f64 {
         let mut mol = parse_smiles(smiles).expect("valid SMILES");
         desc.calculate(
             &mut mol,
@@ -1212,7 +1401,7 @@ mod tests {
         // The bridging O has a C=O neighbour (not hypervalent) → SP2, RDKit-confirmed.
         let v = calc_float(&HallKierAlpha, "CC(=O)OC");
         assert!(
-            (v - (-0.53_f32)).abs() < 0.01,
+            (v - (-0.53_f64)).abs() < 0.01,
             "methyl acetate HallKierAlpha expected -0.53, got {v}"
         );
     }
@@ -1228,7 +1417,7 @@ mod tests {
         // COOH-OH: C(=O) neighbour (not hypervalent P/S) → SP2.
         let v = calc_float(&HallKierAlpha, "CC(=O)O");
         assert!(
-            (v - (-0.53_f32)).abs() < 0.01,
+            (v - (-0.53_f64)).abs() < 0.01,
             "acetic acid HallKierAlpha expected -0.53, got {v}"
         );
     }
@@ -1244,7 +1433,7 @@ mod tests {
         // Phenol O has an aromatic C neighbour → SP2 (Case 1).
         let v = calc_float(&HallKierAlpha, "c1ccc(O)cc1");
         assert!(
-            (v - (-0.98_f32)).abs() < 0.01,
+            (v - (-0.98_f64)).abs() < 0.01,
             "phenol HallKierAlpha expected -0.98, got {v}"
         );
     }
@@ -1260,7 +1449,7 @@ mod tests {
         // Ether O has 2 aliphatic C neighbours and no pi → SP3.
         let v = calc_float(&HallKierAlpha, "COC");
         assert!(
-            (v - (-0.04_f32)).abs() < 0.01,
+            (v - (-0.04_f64)).abs() < 0.01,
             "dimethyl ether HallKierAlpha expected -0.04, got {v}"
         );
     }
@@ -1276,7 +1465,7 @@ mod tests {
         // All three P–OH oxygens have P (non-C) neighbour → SP3.
         let v = calc_float(&HallKierAlpha, "OP(=O)(O)O");
         assert!(
-            (v - 0.11_f32).abs() < 0.01,
+            (v - 0.11_f64).abs() < 0.01,
             "phosphoric acid HallKierAlpha expected 0.11, got {v}"
         );
     }
@@ -1294,7 +1483,7 @@ mod tests {
         // The P–OH also has only P neighbour → SP3.
         let v = calc_float(&HallKierAlpha, "COP(=O)(OC)O");
         assert!(
-            (v - 0.11_f32).abs() < 0.01,
+            (v - 0.11_f64).abs() < 0.01,
             "dimethyl phosphate HallKierAlpha expected 0.11, got {v}"
         );
     }
@@ -1307,7 +1496,7 @@ mod tests {
     fn test_hka_allene_central_carbon_sp() {
         let v = calc_float(&HallKierAlpha, "C=C=C");
         assert!(
-            (v - (-0.48_f32)).abs() < 0.01,
+            (v - (-0.48_f64)).abs() < 0.01,
             "allene HallKierAlpha = {}",
             v
         );
@@ -1431,5 +1620,68 @@ mod tests {
         let less = calc_float(&FragmentComplexity, "CCCC");
         let more = calc_float(&FragmentComplexity, "CCNO");
         assert!(more > less);
+    }
+}
+
+/// CDK `FragmentComplexityDescriptor` (`fragC`).
+pub struct CdkFragmentComplexity;
+
+impl Descriptor for CdkFragmentComplexity {
+    fn name(&self) -> &str {
+        "FragmentComplexityCDK"
+    }
+
+    /// `|B^2 - A^2 + A| + H/100` with A = non-hydrogen atoms, B = bonds
+    /// (hydrogens included) and H = atoms other than H and C.
+    fn calculate(&self, mol: &mut Molecule, _ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
+        let mut a = 0i64;
+        let mut hetero = 0i64;
+        let mut hydrogens = 0i64;
+        for atom in &mol.atoms {
+            // CDK has no radicals from plain SMILES: for neutral C, N, O, P,
+            // S, As its hydrogen adder fills the valence of the atom type, one
+            // H per unpaired electron (other elements keep the SMILES count).
+            hydrogens += atom.total_h() as i64;
+            if atom.formal_charge == 0 && matches!(atom.atomic_number, 6 | 7 | 8 | 15 | 16 | 33) {
+                hydrogens += atom.num_radicals() as i64;
+            }
+            if atom.atomic_number != 1 {
+                a += 1;
+                if atom.atomic_number != 6 {
+                    hetero += 1;
+                }
+            }
+        }
+        // CDK's bond count includes the bonds to explicit hydrogen atoms, which
+        // FerrumChem folds into the hydrogen count: B = bonds + all hydrogens.
+        let b = mol.num_bonds() as i64 + hydrogens;
+        // Java int arithmetic in CDK
+        let core = (b as i32).wrapping_mul(b as i32).wrapping_sub((a as i32).wrapping_mul(a as i32)).wrapping_add(a as i32);
+        DescriptorValue::Float((core as f64).abs() + hetero as f64 / 100.0)
+    }
+}
+
+#[cfg(test)]
+mod cdk_fragment_complexity_tests {
+    use super::*;
+    use crate::io::smiles::parse_smiles;
+
+    fn frag_c(smiles: &str) -> f64 {
+        let mut mol = parse_smiles(smiles).unwrap();
+        CdkFragmentComplexity.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()).as_float()
+    }
+
+    // Expected values from CDK 2.13 FragmentComplexityDescriptor.
+    #[test]
+    fn test_cdk_fragment_complexity() {
+        assert_eq!(frag_c("c1ccccc1"), 114.0);
+        // explicit hydrogen atoms: CDK counts their bonds instead of implicit H
+        assert_eq!(frag_c("[H]OC([H])([H])C"), 58.01);
+        assert_eq!(frag_c("CCO"), 58.01);
+        // radicals are saturated by CDK's hydrogen adder
+        assert_eq!(frag_c("[CH3]"), 16.0);
+        assert_eq!(frag_c("[C]"), 16.0);
+        assert!((frag_c("[N]1C=CC=C1") - 80.01).abs() < 1e-9);
+        assert!((frag_c("[Se]") - 0.01).abs() < 1e-9);
     }
 }

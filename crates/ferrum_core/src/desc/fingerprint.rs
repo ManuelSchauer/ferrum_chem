@@ -46,12 +46,11 @@
 use super::typed::{Descriptor, DescriptorValue};
 use crate::algo::iso::visit_matches;
 use crate::io::smarts::parse_smarts;
-use crate::mol::elements::ATOMIC_MASSES;
 use crate::mol::molecule::Molecule;
 use crate::types::BondType;
 use bitvec::prelude::*;
 use once_cell::sync::Lazy;
-use std::collections::HashSet;
+use rustc_hash::FxHashSet as HashSet;
 
 /// Implements hash combine.
 ///
@@ -130,12 +129,8 @@ impl BondNeighborhood {
 ///
 /// Function context: `crates/ferrum_core/src/desc/fingerprint.rs`.
 /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-fn atom_mass(atom: &crate::mol::atom::Atom) -> f32 {
-    if atom.isotope > 0 {
-        atom.isotope as f32
-    } else {
-        ATOMIC_MASSES[atom.atomic_number as usize]
-    }
+fn atom_mass(atom: &crate::mol::atom::Atom) -> f64 {
+    crate::mol::rdkit_data::atom_mass(atom.atomic_number, atom.isotope)
 }
 
 /// Default RDKit-like connectivity invariants for Morgan fingerprints.
@@ -151,9 +146,11 @@ fn morgan_connectivity_invariants(mol: &Molecule, include_ring_membership: bool)
     let mut invars = vec![0u32; mol.num_atoms()];
     for atom_idx in 0..mol.num_atoms() {
         let atom = &mol.atoms[atom_idx];
-        let total_h = atom.total_h() as u32;
-        let total_degree = mol.get_degree(atom_idx as u16) as u32 + total_h;
-        let base_mass = ATOMIC_MASSES[atom.atomic_number as usize];
+        // RDKit: getTotalDegree() and getTotalNumHs(true)
+        let total_degree = mol.get_degree(atom_idx as u16) as u32 + atom.total_h() as u32;
+        let total_h = mol.total_hs_with_neighbors(atom_idx);
+        // RDKit: int(getMass() - getAtomicWeight()) in double precision
+        let base_mass = crate::mol::rdkit_data::ELEMENTS[atom.atomic_number as usize].mass;
         let delta_mass = (atom_mass(atom) - base_mass) as i32;
 
         let mut components = [0u32; 6];
@@ -250,7 +247,7 @@ fn morgan_features_from_invariants(
     let neighborhood_word_count = (mol.num_bonds() + 63) / 64;
     let mut atom_neighborhoods = vec![BondNeighborhood::new(neighborhood_word_count); n_atoms];
     let mut round_atom_neighborhoods = atom_neighborhoods.clone();
-    let mut seen_neighborhoods = HashSet::with_capacity((radius as usize + 1) * n_atoms);
+    let mut seen_neighborhoods = HashSet::with_capacity_and_hasher((radius as usize + 1) * n_atoms, Default::default());
 
     for layer in 0..radius {
         let mut all_neighborhoods_this_round: Vec<(BondNeighborhood, u32, usize)> =
@@ -318,27 +315,15 @@ fn morgan_features_from_invariants(
     features
 }
 
-/// Context-aware Morgan feature generation with reusable scratch buffers and
-/// cross-molecule cache lookup by topology/signature.
-fn morgan_features_from_invariants_cached(
+/// Context-aware Morgan feature generation with reusable scratch buffers.
+fn morgan_features_from_invariants_ctx(
     mol: &Molecule,
     radius: u32,
     atom_invariants: Vec<u32>,
-    feature_mode: u8, // 0 = ECFP/connectivity, 1 = FCFP/feature invariants
     ctx: &mut crate::desc::context::CalculationContext,
 ) -> Vec<u64> {
-    let cache_key = (
-        crate::desc::context::molecule_cache_key(mol),
-        radius,
-        feature_mode,
-    );
-    if let Some(cached) = ctx.morgan_features_global_cache.get(&cache_key) {
-        return cached.clone();
-    }
-
     let n_atoms = mol.num_atoms();
     if n_atoms == 0 {
-        ctx.morgan_features_global_cache.insert(cache_key, Vec::new());
         return Vec::new();
     }
 
@@ -360,7 +345,7 @@ fn morgan_features_from_invariants_cached(
     let neighborhood_word_count = (mol.num_bonds() + 63) / 64;
     let mut atom_neighborhoods = vec![BondNeighborhood::new(neighborhood_word_count); n_atoms];
     let mut round_atom_neighborhoods = atom_neighborhoods.clone();
-    let mut seen_neighborhoods = HashSet::with_capacity((radius as usize + 1) * n_atoms);
+    let mut seen_neighborhoods = HashSet::with_capacity_and_hasher((radius as usize + 1) * n_atoms, Default::default());
 
     for layer in 0..radius {
         let mut all_neighborhoods_this_round: Vec<(BondNeighborhood, u32, usize)> =
@@ -426,10 +411,7 @@ fn morgan_features_from_invariants_cached(
         atom_neighborhoods = round_atom_neighborhoods.clone();
     }
 
-    let computed = ctx.morgan_features.clone();
-    ctx.morgan_features_global_cache
-        .insert(cache_key, computed.clone());
-    computed
+    ctx.morgan_features.clone()
 }
 
 /// ECFP features: Morgan with atomic invariants.
@@ -498,10 +480,8 @@ fn fold_fingerprint(features: &[u64], num_bits: usize) -> BitVec<u8, Lsb0> {
 /// use ferrum_core::desc::fingerprint::ECFP;
 /// use ferrum_core::desc::typed::Descriptor;
 /// use ferrum_core::io::smiles::parse_smiles;
-/// use ferrum_core::algo::aromaticity::perceive_aromaticity;
 ///
 /// let mut mol = parse_smiles("c1ccccc1").unwrap();
-/// perceive_aromaticity(&mut mol);
 ///
 /// let descriptor = ECFP::ecfp4();
 /// let fp = descriptor.calculate(&mut mol, &mut ferrum_core::desc::context::CalculationContext::new());
@@ -578,11 +558,10 @@ impl Descriptor for ECFP {
         ctx: &mut crate::desc::context::CalculationContext,
     ) -> DescriptorValue {
         let atom_invariants = morgan_connectivity_invariants(mol, true);
-        let features = morgan_features_from_invariants_cached(
+        let features = morgan_features_from_invariants_ctx(
             mol,
             self.radius as u32,
             atom_invariants,
-            0,
             ctx,
         );
         let bits = fold_fingerprint(&features, self.num_bits);
@@ -601,10 +580,8 @@ impl Descriptor for ECFP {
 /// use ferrum_core::desc::fingerprint::FCFP;
 /// use ferrum_core::desc::typed::Descriptor;
 /// use ferrum_core::io::smiles::parse_smiles;
-/// use ferrum_core::algo::aromaticity::perceive_aromaticity;
 ///
 /// let mut mol = parse_smiles("c1ccccc1").unwrap();
-/// perceive_aromaticity(&mut mol);
 ///
 /// let descriptor = FCFP::fcfp4();
 /// let fp = descriptor.calculate(&mut mol, &mut ferrum_core::desc::context::CalculationContext::new());
@@ -677,11 +654,10 @@ impl Descriptor for FCFP {
         ctx: &mut crate::desc::context::CalculationContext,
     ) -> DescriptorValue {
         let atom_invariants = morgan_feature_invariants(mol);
-        let features = morgan_features_from_invariants_cached(
+        let features = morgan_features_from_invariants_ctx(
             mol,
             self.radius as u32,
             atom_invariants,
-            1,
             ctx,
         );
         let bits = fold_fingerprint(&features, self.num_bits);

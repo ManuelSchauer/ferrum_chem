@@ -152,48 +152,85 @@ impl Descriptor for PiSystemCounts {
     }
 }
 
-/// Largest pi system size descriptor.
+/// Largest pi system (CDK 2.13 `LargestPiSystemDescriptor`, `nAtomP`).
 ///
-/// Returns Int(u32) with the number of atoms in the largest π-system.
+/// CDK seeds a breadth-first search at every unvisited "pi" atom: an atom with
+/// a double/triple bond (Kekulé form), a formal charge, an aromatic flag (CDK
+/// Daylight model) or an N/O element. Only atoms reached from a neighbour are
+/// counted, so the seed itself is counted only when one of its neighbours in the
+/// system has more than one connection. Returns Int(u32).
 pub struct LargestPiSystem;
 
 impl Descriptor for LargestPiSystem {
-    /// Implements the behavior encoded by this function.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/pi_system.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn name(&self) -> &str {
         "LargestPiSystem"
     }
 
-    /// Calculates the behavior encoded by this function.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/pi_system.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn calculate(
         &self,
         mol: &mut Molecule,
         _ctx: &mut crate::desc::context::CalculationContext,
     ) -> DescriptorValue {
-        let mut visited = HashSet::new();
-        let mut largest_system_size = 0;
+        DescriptorValue::Int(cdk_largest_pi_system(mol))
+    }
+}
 
-        for i in 0..mol.atoms.len() {
-            let atom_idx = i as AtomIdx;
-
-            if visited.contains(&atom_idx) {
-                continue;
+/// CDK `LargestPiSystemDescriptor` value (see [`LargestPiSystem`]).
+pub(crate) fn cdk_largest_pi_system(mol: &Molecule) -> u32 {
+    use crate::desc::cdk_daylight::{CdkMol, daylight_model_contrib, on_huckel_cycle};
+    let n = mol.num_atoms();
+    if n < 2 {
+        return 0;
+    }
+    let m = CdkMol::new(mol);
+    // atoms whose qualification depends on the aromatic flag only
+    let mut contrib: Option<Vec<i32>> = None;
+    let qualifies: Vec<bool> = (0..n)
+        .map(|a| {
+            let z = m.z[a];
+            if z == 7 || z == 8 || m.charge[a] != 0 {
+                return true;
             }
+            if m.adj[a].iter().any(|&(_, bi)| m.order[bi as usize] != 1) {
+                return true;
+            }
+            if m.adj[a].is_empty() {
+                return true; // no bonds: max bond order is not SINGLE
+            }
+            if !m.ring_atom[a] {
+                return false;
+            }
+            let c = contrib.get_or_insert_with(|| daylight_model_contrib(&m));
+            on_huckel_cycle(&m, c, a)
+        })
+        .collect();
 
-            if is_pi_atom(mol, atom_idx) {
-                let mut system = HashSet::new();
-                dfs_pi_system(mol, atom_idx, &mut visited, &mut system);
-                largest_system_size = largest_system_size.max(system.len());
+    let mut comp = vec![false; n];
+    let mut stack = Vec::new();
+    let mut best = 0u32;
+    for s in 0..n {
+        if !qualifies[s] || comp[s] {
+            continue;
+        }
+        comp[s] = true;
+        stack.push(s);
+        let mut size = 0u32;
+        while let Some(a) = stack.pop() {
+            size += 1;
+            for &(w, _) in &m.adj[a] {
+                let w = w as usize;
+                if qualifies[w] && !comp[w] {
+                    comp[w] = true;
+                    stack.push(w);
+                }
             }
         }
-
-        DescriptorValue::Int(largest_system_size as u32)
+        // the seed is only re-reached through a neighbour with degree > 1
+        let seed_counted = m.adj[s].iter().any(|&(w, _)| qualifies[w as usize] && m.degree(w as usize) > 1);
+        let counted = if seed_counted { size } else { size - 1 };
+        best = best.max(counted);
     }
+    best
 }
 
 const _: () = {
@@ -209,177 +246,46 @@ const _: () = {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::algo::aromaticity::perceive_aromaticity;
-    use crate::algo::valency::assign_implicit_hydrogens;
     use crate::io::smiles::parse_smiles;
 
-    /// Parses and prepare.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/pi_system.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
     fn parse_and_prepare(smiles: &str) -> Molecule {
-        let mut mol = parse_smiles(smiles).unwrap();
-        assign_implicit_hydrogens(&mut mol).unwrap();
-        perceive_aromaticity(&mut mol);
-        mol
+        parse_smiles(smiles).unwrap()
+    }
+
+    fn n_atom_p(smiles: &str) -> u32 {
+        cdk_largest_pi_system(&parse_and_prepare(smiles))
     }
 
     #[test]
-    /// Runs regression test for pi system benzene.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/pi_system.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-    fn test_pi_system_benzene() {
+    /// `nAtomP` values verified against CDK 2.13.
+    fn test_largest_pi_system_cdk() {
+        assert_eq!(n_atom_p("c1ccccc1"), 6);
+        assert_eq!(n_atom_p("c1ccc2ccccc2c1"), 10);
+        assert_eq!(n_atom_p("C=CC=C"), 4);
+        assert_eq!(n_atom_p("C=CC=CC=C"), 6);
+        assert_eq!(n_atom_p("C=Cc1ccccc1"), 8);
+        assert_eq!(n_atom_p("c1ccccc1CCC"), 6);
+        assert_eq!(n_atom_p("CC"), 0);
+        // CDK quirk: the seed atom is only counted when re-reached through a
+        // neighbour with more than one connection
+        assert_eq!(n_atom_p("C=C"), 1);
+        assert_eq!(n_atom_p("C#C"), 1);
+        assert_eq!(n_atom_p("C=CCC=C"), 2);
+        assert_eq!(n_atom_p("C=C=C"), 3);
+        assert_eq!(n_atom_p("CS(C)=O"), 1);
+        // N and O always qualify
+        assert_eq!(n_atom_p("OP(O)(O)=O"), 5);
+        assert_eq!(n_atom_p("CO"), 0);
+        // aromatic S/As (CDK Daylight model) qualify without a double bond
+        assert_eq!(n_atom_p("c1ccsc1"), 5);
+        assert_eq!(n_atom_p("[As]1C=CC=C1"), 5);
+    }
+
+    #[test]
+    fn test_largest_pi_system_descriptor() {
         let mut mol = parse_and_prepare("c1ccccc1");
         assert_eq!(
-            LargestPiSystem.calculate(
-                &mut mol,
-                &mut crate::desc::context::CalculationContext::new()
-            ),
-            DescriptorValue::Int(6)
-        );
-    }
-
-    #[test]
-    /// Runs regression test for pi system ethene.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/pi_system.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-    fn test_pi_system_ethene() {
-        let mut mol = parse_and_prepare("C=C");
-        assert_eq!(
-            LargestPiSystem.calculate(
-                &mut mol,
-                &mut crate::desc::context::CalculationContext::new()
-            ),
-            DescriptorValue::Int(2)
-        );
-    }
-
-    #[test]
-    /// Runs regression test for pi system butadiene.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/pi_system.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-    fn test_pi_system_butadiene() {
-        let mut mol = parse_and_prepare("C=CC=C");
-        assert_eq!(
-            LargestPiSystem.calculate(
-                &mut mol,
-                &mut crate::desc::context::CalculationContext::new()
-            ),
-            DescriptorValue::Int(4)
-        );
-    }
-
-    #[test]
-    /// Runs regression test for pi system ethane.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/pi_system.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-    fn test_pi_system_ethane() {
-        let mut mol = parse_and_prepare("CC");
-        assert_eq!(
-            LargestPiSystem.calculate(
-                &mut mol,
-                &mut crate::desc::context::CalculationContext::new()
-            ),
-            DescriptorValue::Int(0)
-        );
-    }
-
-    #[test]
-    /// Runs regression test for pi system naphthalene.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/pi_system.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-    fn test_pi_system_naphthalene() {
-        let mut mol = parse_and_prepare("c1ccc2ccccc2c1");
-        assert_eq!(
-            LargestPiSystem.calculate(
-                &mut mol,
-                &mut crate::desc::context::CalculationContext::new()
-            ),
-            DescriptorValue::Int(10)
-        );
-    }
-
-    #[test]
-    /// Runs regression test for pi system styrene.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/pi_system.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-    fn test_pi_system_styrene() {
-        let mut mol = parse_and_prepare("C=Cc1ccccc1");
-        assert_eq!(
-            LargestPiSystem.calculate(
-                &mut mol,
-                &mut crate::desc::context::CalculationContext::new()
-            ),
-            DescriptorValue::Int(8)
-        );
-    }
-
-    #[test]
-    /// Runs regression test for pi system separated double bonds.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/pi_system.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-    fn test_pi_system_separated_double_bonds() {
-        let mut mol = parse_and_prepare("C=CCC=C");
-        assert_eq!(
-            LargestPiSystem.calculate(
-                &mut mol,
-                &mut crate::desc::context::CalculationContext::new()
-            ),
-            DescriptorValue::Int(2)
-        );
-    }
-
-    #[test]
-    /// Runs regression test for pi system benzyl alkane.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/pi_system.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-    fn test_pi_system_benzyl_alkane() {
-        let mut mol = parse_and_prepare("c1ccccc1CCC");
-        assert_eq!(
-            LargestPiSystem.calculate(
-                &mut mol,
-                &mut crate::desc::context::CalculationContext::new()
-            ),
-            DescriptorValue::Int(6)
-        );
-    }
-
-    #[test]
-    /// Runs regression test for pi system triple bond.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/pi_system.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-    fn test_pi_system_triple_bond() {
-        let mut mol = parse_and_prepare("C#C");
-        assert_eq!(
-            LargestPiSystem.calculate(
-                &mut mol,
-                &mut crate::desc::context::CalculationContext::new()
-            ),
-            DescriptorValue::Int(2)
-        );
-    }
-
-    #[test]
-    /// Runs regression test for pi system extended conjugation.
-    ///
-    /// Function context: `crates/ferrum_core/src/desc/pi_system.rs`.
-    /// Descriptor-path note: keep deterministic chemistry semantics so parity and batch runs stay reproducible.
-    fn test_pi_system_extended_conjugation() {
-        let mut mol = parse_and_prepare("C=CC=CC=C");
-        assert_eq!(
-            LargestPiSystem.calculate(
-                &mut mol,
-                &mut crate::desc::context::CalculationContext::new()
-            ),
+            LargestPiSystem.calculate(&mut mol, &mut crate::desc::context::CalculationContext::new()),
             DescriptorValue::Int(6)
         );
     }

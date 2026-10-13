@@ -49,14 +49,14 @@
 //! - FerrumChem regression tests that pin `Mod` behavior on representative molecules.
 //! - Code-local source of truth: symbols and tests declared in `crates/ferrum_core/src/algo/mod.rs`.
 
-pub mod aromaticity;
 pub mod canon;
 pub mod components;
 pub mod distance_matrix;
 pub mod electronic;
 pub mod iso;
-pub mod kekulize;
+pub mod linalg;
 pub mod paths;
 pub mod rings;
-pub mod standardize;
-pub mod valency;
+pub mod sanitize;
+pub mod sssr;
+pub mod stereo;
