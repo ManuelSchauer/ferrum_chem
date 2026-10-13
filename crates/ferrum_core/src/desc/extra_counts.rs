@@ -51,10 +51,6 @@
 use super::typed::{Descriptor, DescriptorValue};
 use crate::mol::molecule::Molecule;
 use crate::types::BondType;
-#[cfg(not(target_os = "macos"))]
-use ndarray::ArrayViewMut2;
-#[cfg(not(target_os = "macos"))]
-use ndarray::linalg::general_mat_mul;
 fn jacobi_eigen(a: &Array2<f64>) -> (Vec<f64>, Array2<f64>) {
     let n = a.nrows();
     if n == 0 {
