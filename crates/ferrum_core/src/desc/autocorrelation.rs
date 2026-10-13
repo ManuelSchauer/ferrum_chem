@@ -8,7 +8,7 @@
 //!   count every unordered pair once). Weights: natural mass / carbon mass,
 //!   CDK Gasteiger-Hückel effective polarizability (explicit H, cdkLegacy
 //!   aromaticity) and CDK Gasteiger-Marsili charges on the H-suppressed graph.
-//! - `ATS0pe..ATS8pe`, `ATS0v..ATS8v`: Mordred 1.2.0 `ATS(order, prop)` with
+//! - `ATS0pe..ATS8pe`, `ATS0v..ATS8v`: Mordred (mordred-community 2.0.7) `ATS(order, prop)` with
 //!   `pe` = Pauling electronegativity and `v` = van der Waals volume (Mordred
 //!   atomic property tables, `mordred_data.rs`). Mordred works on the graph
 //!   with every hydrogen explicit (`Chem.AddHs`); lag 0 = Σ w_i², lag k =
@@ -287,7 +287,7 @@ mod tests {
         }
     }
 
-    // Expected values: Mordred 1.2.0 (tests/data/mordred_parity_reference.csv).
+    // Expected values: Mordred (mordred-community 2.0.7) (tests/data/mordred_parity_reference.csv).
 
     #[test]
     fn test_ats_mordred_ethanol() {

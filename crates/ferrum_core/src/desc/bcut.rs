@@ -11,7 +11,7 @@
 //!   explicit H) / Gasteiger-Hückel effective polarizability; off-diagonal
 //!   0.15 for cdkLegacy-aromatic bonds, else 0.1/0.2/0.3 by Kekulé order,
 //!   +0.01 if a bond atom is terminal, 0.001 for non-bonded pairs.
-//! - `BCUTpe-1l/h`, `BCUTv-1l/h`: Mordred 1.2.0 `BCUT(prop, nth)` with
+//! - `BCUTpe-1l/h`, `BCUTv-1l/h`: Mordred (mordred-community 2.0.7) `BCUT(prop, nth)` with
 //!   `pe` = Pauling electronegativity and `v` = van der Waals volume
 //!   (Mordred atomic property tables, `mordred_data.rs`). Burden matrix of the
 //!   hydrogen-suppressed RDKit graph (hydrogen atoms kept by RDKit stay):
@@ -282,7 +282,7 @@ mod tests {
         }
     }
 
-    // Expected values: Mordred 1.2.0 (tests/data/mordred_parity_reference.csv).
+    // Expected values: Mordred (mordred-community 2.0.7) (tests/data/mordred_parity_reference.csv).
 
     #[test]
     fn test_bcut_mordred_values() {

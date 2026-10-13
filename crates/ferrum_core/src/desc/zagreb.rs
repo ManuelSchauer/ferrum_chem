@@ -21,7 +21,7 @@ use crate::mol::molecule::Molecule;
 /// - **M1 (First Zagreb Index)**: Sum of squared degrees — M1 = Σᵢ deg(i)²
 ///   (CDK 2.13 `ZagrebIndexDescriptor`)
 /// - **M2 (Second Zagreb Index)**: Sum of degree products over edges — M2 = Σ(i,j)∈E deg(i) × deg(j)
-///   (Mordred 1.2.0 `Zagreb2`)
+///   (Mordred (mordred-community 2.0.7) `Zagreb2`)
 ///
 /// # Properties
 /// - Correlate with molecular branching
@@ -68,7 +68,7 @@ impl Descriptor for ZagrebIndices {
             m1 += (degree * degree) as u64;
         }
 
-        // Zagreb2 follows Mordred 1.2.0 `ZagrebIndex(2, 1)`: Σ_bonds d_i·d_j with
+        // Zagreb2 follows Mordred (mordred-community 2.0.7) `ZagrebIndex(2, 1)`: Σ_bonds d_i·d_j with
         // d = RDKit adjacency-matrix degree of the hydrogen-suppressed graph,
         // so hydrogen atoms kept by RDKit (e.g. [2H]) do count.
         let mut m2: u64 = 0;

@@ -8,7 +8,7 @@
 //! - Petitjean Index = (D - R) / D (shape measure, 0 = sphere, 1 = rod)
 //!
 //! Output (3 values, `BatchDescriptor::feature_names` order):
-//! - `Radius`, `Diameter`: Mordred 1.2.0 `TopologicalIndex.Radius` / `Diameter`
+//! - `Radius`, `Diameter`: Mordred (mordred-community 2.0.7) `TopologicalIndex.Radius` / `Diameter`
 //!   on the hydrogen-suppressed graph. Mordred takes eccentricities from
 //!   RDKit's distance matrix, where unreachable pairs are 1e8, so a
 //!   disconnected molecule has radius = diameter = 100000000.

@@ -20,7 +20,7 @@ the same molecule always gives the same numbers as RDKit/CDK/Mordred would.
 
 - **Exact, not approximate.** 512 of the 531 scalar columns and all 6
   fingerprints are compared molecule by molecule against the original
-  implementation of RDKit 2026.03.2, CDK 2.13, Mordred 1.2.0 and Biosynfoni
+  implementation of RDKit 2026.03.2, CDK 2.13, Mordred (mordred-community 2.0.7) and Biosynfoni
   (`|a − b| ≤ 1e-9 + 1e-9·|b|`; fingerprints and atom perception bit-exact).
   The tests fail when any column gets worse.
 - **Fast.** On one core: SMILES parsing 4× faster than RDKit, the complete
@@ -49,7 +49,7 @@ the same molecule always gives the same numbers as RDKit/CDK/Mordred would.
 | scalar descriptors | 531 (88 descriptor families) |
 | fingerprints | MACCS (166), PubChem (881), ECFP4, FCFP4, AtomPair, TopologicalTorsion (2,048 each) |
 | validated against a reference | 512 scalar columns + all 6 fingerprints + per-atom perception |
-| references | RDKit 2026.03.2 (2D + 3D), CDK 2.13, Mordred 1.2.0, Biosynfoni `full_1103` |
+| references | RDKit 2026.03.2 (2D + 3D), CDK 2.13, mordred-community 2.0.7, Biosynfoni `full_1103` |
 | input | SMILES (`.smi`), CSV with a SMILES column, SDF (V2000/V3000, incl. 3D conformers) |
 | output | CSV (exact round-trip `f64`, fingerprints as hex / on-bits / 0-1 columns), NumPy arrays, Rust `DescriptorTable` |
 | throughput (Apple M4 Pro, 14 cores) | ~14,000 molecules/s, full bundle, end to end |
@@ -213,7 +213,7 @@ everything with FerrumChem:
 | `rdkit_parity` | RDKit 2026.03.2 | 1,277 | 325 of 327 (321 scalars, 5 fingerprints, atom perception) |
 | `rdkit_3d_parity` | RDKit 2026.03.2, ETKDG conformers | 296 | 4 of 5 (PMI1–3, Asphericity; perception see below) |
 | `cdk_parity` | CDK 2.13 | 1,277 | 124 of 124 |
-| `mordred_parity` | Mordred 1.2.0 | 1,277 | 25 of 25 |
+| `mordred_parity` | mordred-community 2.0.7 | 1,277 | 25 of 25 |
 | `biosynfoni_parity` | Biosynfoni (original Python package) | 1,277 | 39 of 39 |
 
 Known deviations, tracked per column in `tests/data/*_baseline.tsv` (a column
@@ -358,7 +358,7 @@ Regenerating the references (only needed after upgrading a reference toolkit):
 |---|---|
 | RDKit (2D + 3D) | `python scripts/generate_parity_reference.py` (`--check` verifies, `--embed-3d` re-embeds the 3D set) |
 | CDK | `bash scripts/cdk_reference/run.sh` (`CDK_JAR` points to a CDK bundle jar; also prints CDK timings) |
-| Mordred | `MORDRED_SRC=~/mordred python scripts/generate_mordred_reference.py` |
+| Mordred | `python scripts/generate_mordred_reference.py` (needs `pip install mordredcommunity`) |
 | Biosynfoni | `BIOSYNFONI_SRC=~/biosynfoni/src python scripts/generate_biosynfoni_reference.py` |
 | data tables | `scripts/gen_element_data.py`, `gen_fragment_data.py`, `gen_mordred_data.py` |
 
