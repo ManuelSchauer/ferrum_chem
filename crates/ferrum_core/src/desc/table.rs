@@ -7,7 +7,13 @@
 //! - one [`FingerprintBlock`] per fingerprint, bit-packed into `u64` words:
 //!   bit `i` of a row is bit `i % 64` of word `i / 64`. Read as little-endian
 //!   bytes, bit `i` is bit `i % 8` (LSB first) of byte `i / 8`, which is the
-//!   layout of `numpy.packbits(bits, bitorder="little")`.
+//!   layout of `numpy.packbits(bits, bitorder="little")`;
+//! - count fingerprints (one integer per key, e.g. `KRFPC1..KRFPC4860`) are
+//!   ordinary scalar columns by default ([`CountFingerprintFormat::Columns`]);
+//!   with [`CountFingerprintFormat::Sparse`] each one is a [`CountBlock`]
+//!   instead: only the non-zero `(key index, count)` pairs of each row, in
+//!   compressed sparse row form (a few hundred bytes per molecule instead of
+//!   8 bytes per key).
 //!
 //! Tables are computed by [`super::calculator::DescriptorCalculator`]; callers
 //! stream large inputs chunk by chunk (see `io::stream`) so memory stays
@@ -21,25 +27,90 @@ use super::batch::BatchDescriptor;
 use super::typed::DescriptorValue;
 use crate::mol::molecule::Molecule;
 
+/// How count fingerprints ([`BatchDescriptor::is_count_fingerprint`]) are output.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum CountFingerprintFormat {
+    /// One scalar column per key (`KRFPC1`, `KRFPC2`, ...), like any other
+    /// count descriptor.
+    #[default]
+    Columns,
+    /// One [`CountBlock`] per count fingerprint with the non-zero
+    /// `(key index, count)` pairs of each row (0-based key indices); in CSV one
+    /// column per count fingerprint holding space-separated `index:count` pairs.
+    Sparse,
+}
+
 /// Column layout for a descriptor selection: which descriptors are scalars and
 /// which are fingerprints, plus the scalar column names.
 #[derive(Debug, Clone)]
 pub struct TableLayout {
+    descriptors: Vec<BatchDescriptor>,
     scalars: Vec<BatchDescriptor>,
     fingerprints: Vec<BatchDescriptor>,
+    count_fingerprints: Vec<BatchDescriptor>,
+    count_format: CountFingerprintFormat,
     scalar_names: Vec<String>,
     n_scalars: usize,
 }
 
 impl TableLayout {
     /// Splits `descriptors` into scalar and fingerprint descriptors (order is kept
-    /// within each group).
+    /// within each group); count fingerprints are scalar columns.
     pub fn new(descriptors: &[BatchDescriptor]) -> Self {
-        let (fingerprints, scalars): (Vec<_>, Vec<_>) =
-            descriptors.iter().copied().partition(|d| d.is_fingerprint());
+        Self::with_count_format(descriptors, CountFingerprintFormat::Columns)
+    }
+
+    /// Like [`Self::new`], with count fingerprints output as `count_format`.
+    pub fn with_count_format(descriptors: &[BatchDescriptor], count_format: CountFingerprintFormat) -> Self {
+        let sparse = count_format == CountFingerprintFormat::Sparse;
+        let mut scalars = Vec::new();
+        let mut fingerprints = Vec::new();
+        let mut count_fingerprints = Vec::new();
+        for &d in descriptors {
+            if d.is_fingerprint() {
+                fingerprints.push(d);
+            } else if sparse && d.is_count_fingerprint() {
+                assert!(d.feature_len() <= 1 << 16, "count fingerprint {} has too many keys", d.name());
+                count_fingerprints.push(d);
+            } else {
+                scalars.push(d);
+            }
+        }
         let scalar_names = super::batch::feature_names(&scalars);
         let n_scalars = scalar_names.len();
-        Self { scalars, fingerprints, scalar_names, n_scalars }
+        Self {
+            descriptors: descriptors.to_vec(),
+            scalars,
+            fingerprints,
+            count_fingerprints,
+            count_format,
+            scalar_names,
+            n_scalars,
+        }
+    }
+
+    /// The descriptor selection this layout was made for.
+    pub fn descriptors(&self) -> &[BatchDescriptor] {
+        &self.descriptors
+    }
+
+    /// How count fingerprints are output.
+    pub fn count_format(&self) -> CountFingerprintFormat {
+        self.count_format
+    }
+
+    /// Count fingerprints output as [`CountBlock`]s (empty with
+    /// [`CountFingerprintFormat::Columns`]).
+    pub fn count_fingerprint_descriptors(&self) -> &[BatchDescriptor] {
+        &self.count_fingerprints
+    }
+
+    /// `(name, number of keys)` of every [`CountBlock`], in output order.
+    pub fn count_fingerprint_shapes(&self) -> Vec<(&'static str, usize)> {
+        self.count_fingerprints
+            .iter()
+            .map(|d| (d.count_fingerprint_name().unwrap_or_default(), d.feature_len()))
+            .collect()
     }
 
     /// Layout of the full default bundle ([`BatchDescriptor::all`]).
@@ -137,6 +208,54 @@ impl FingerprintBlock {
     }
 }
 
+/// One count fingerprint for all rows of a table, in compressed sparse row
+/// form: row `r` holds the keys `indices[indptr[r]..indptr[r + 1]]`
+/// (ascending, 0-based) with the (non-zero) `counts` at the same positions.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CountBlock {
+    pub descriptor: BatchDescriptor,
+    /// Name (`"KlekotaRothCount"`, ...).
+    pub name: &'static str,
+    /// Number of keys (columns).
+    pub n_keys: usize,
+    /// `rows + 1` offsets into `indices` / `counts`.
+    pub indptr: Vec<u32>,
+    pub indices: Vec<u16>,
+    pub counts: Vec<u32>,
+}
+
+impl CountBlock {
+    /// Non-zero `(key indices, counts)` of `row`.
+    pub fn row(&self, row: usize) -> (&[u16], &[u32]) {
+        let (lo, hi) = (self.indptr[row] as usize, self.indptr[row + 1] as usize);
+        (&self.indices[lo..hi], &self.counts[lo..hi])
+    }
+
+    /// Count of `key` in `row` (0 when absent).
+    pub fn get(&self, row: usize, key: usize) -> u32 {
+        assert!(key < self.n_keys, "key index out of range");
+        let (keys, counts) = self.row(row);
+        keys.binary_search(&(key as u16)).map_or(0, |i| counts[i])
+    }
+
+    /// Number of rows.
+    pub fn rows(&self) -> usize {
+        self.indptr.len().saturating_sub(1)
+    }
+
+    /// The whole block as a dense row-major `rows x n_keys` matrix.
+    pub fn to_dense(&self) -> Vec<u32> {
+        let mut out = vec![0u32; self.rows() * self.n_keys];
+        for r in 0..self.rows() {
+            let (keys, counts) = self.row(r);
+            for (&k, &c) in keys.iter().zip(counts) {
+                out[r * self.n_keys + k as usize] = c;
+            }
+        }
+        out
+    }
+}
+
 /// Descriptor values for a chunk of records.
 #[derive(Debug, Clone, PartialEq)]
 pub struct DescriptorTable {
@@ -145,6 +264,8 @@ pub struct DescriptorTable {
     /// `rows x scalar_names.len()` values, row-major.
     pub scalars: Vec<f64>,
     pub fingerprints: Vec<FingerprintBlock>,
+    /// Count fingerprints with [`CountFingerprintFormat::Sparse`] (empty otherwise).
+    pub counts: Vec<CountBlock>,
     /// `false` for records whose molecule could not be parsed (NaN scalars,
     /// empty fingerprints).
     pub valid: Vec<bool>,
@@ -164,6 +285,12 @@ impl DescriptorTable {
     /// Fingerprint block by short name (`"ECFP4"`, ...).
     pub fn fingerprint(&self, name: &str) -> Option<&FingerprintBlock> {
         self.fingerprints.iter().find(|f| f.name == name)
+    }
+
+    /// Count block by name (`"KlekotaRothCount"`, ...), with
+    /// [`CountFingerprintFormat::Sparse`].
+    pub fn count_fingerprint(&self, name: &str) -> Option<&CountBlock> {
+        self.counts.iter().find(|c| c.name == name)
     }
 }
 
@@ -221,12 +348,15 @@ where
     // all fingerprints of a row side by side; split into blocks afterwards
     let mut fp_all = vec![0u64; rows * total_words];
     let mut valid = vec![false; rows];
+    // sparse count fingerprints: the non-zero (key, count) pairs of each row
+    let n_counts = layout.count_fingerprints.len();
+    let mut count_rows: Vec<Vec<Vec<(u16, u32)>>> = vec![Vec::new(); rows];
 
     // `par_chunks_mut(0)` panics, so empty segments use a dummy chunk size
     let scalar_chunks = scalars.par_chunks_mut(ns.max(1));
     let fp_chunks = fp_all.par_chunks_mut(total_words.max(1));
-    let work = molecules.par_iter().zip(valid.par_iter_mut());
-    let run = |(((slot, ok), srow), frow): (((&M, &mut bool), &mut [f64]), &mut [u64])| {
+    let work = molecules.par_iter().zip(valid.par_iter_mut().zip(count_rows.par_iter_mut()));
+    let run = |(((slot, (ok, crow)), srow), frow): (((&M, (&mut bool, &mut Vec<Vec<(u16, u32)>>)), &mut [f64]), &mut [u64])| {
         if should_cancel() {
             return Err(Cancelled);
         }
@@ -238,6 +368,9 @@ where
                 d.write_into(mol, srow, &mut offset, ctx);
             }
             debug_assert_eq!(offset, srow.len().min(ns));
+            if n_counts > 0 {
+                crow.extend(layout.count_fingerprints.iter().map(|&d| sparse_counts(d.calculate(mol, ctx))));
+            }
             let mut word = 0;
             for (&d, &nw) in layout.fingerprints.iter().zip(&fp_words) {
                 pack_bits(d.calculate(mol, ctx), &mut frow[word..word + nw]);
@@ -253,6 +386,9 @@ where
         work.zip(scalar_chunks).try_for_each(|(w, s)| run(((w, s), &mut [])))?;
     } else if total_words > 0 {
         work.zip(fp_chunks).try_for_each(|(w, f)| run(((w, &mut []), f)))?;
+    } else {
+        // only sparse count fingerprints (or nothing): still mark valid rows
+        work.try_for_each(|w| run(((w, &mut []), &mut [])))?;
     }
 
     let mut fingerprints = Vec::with_capacity(layout.fingerprints.len());
@@ -273,13 +409,56 @@ where
         word += nw;
     }
 
+    let counts = layout
+        .count_fingerprints
+        .iter()
+        .enumerate()
+        .map(|(i, &d)| {
+            let nnz: usize = count_rows.iter().map(|r| r.get(i).map_or(0, Vec::len)).sum();
+            let mut block = CountBlock {
+                descriptor: d,
+                name: d.count_fingerprint_name().unwrap_or_default(),
+                n_keys: d.feature_len(),
+                indptr: Vec::with_capacity(rows + 1),
+                indices: Vec::with_capacity(nnz),
+                counts: Vec::with_capacity(nnz),
+            };
+            block.indptr.push(0);
+            for r in &count_rows {
+                if let Some(pairs) = r.get(i) {
+                    block.indices.extend(pairs.iter().map(|p| p.0));
+                    block.counts.extend(pairs.iter().map(|p| p.1));
+                }
+                block.indptr.push(block.indices.len() as u32);
+            }
+            block
+        })
+        .collect();
+
     Ok(DescriptorTable {
         rows,
         scalar_names: layout.scalar_names.clone(),
         scalars,
         fingerprints,
+        counts,
         valid,
     })
+}
+
+/// The non-zero `(key index, count)` pairs of a count fingerprint value.
+fn sparse_counts(value: DescriptorValue) -> Vec<(u16, u32)> {
+    match value {
+        DescriptorValue::IntVec(v) => {
+            v.into_iter().enumerate().filter(|&(_, c)| c > 0).map(|(i, c)| (i as u16, c)).collect()
+        }
+        DescriptorValue::IntU16Vec(v) => {
+            v.into_iter().enumerate().filter(|&(_, c)| c > 0).map(|(i, c)| (i as u16, c as u32)).collect()
+        }
+        other => {
+            debug_assert!(false, "count fingerprint returned {other:?}");
+            Vec::new()
+        }
+    }
 }
 
 /// Packs a fingerprint value into `out` (words already zeroed).
@@ -335,6 +514,9 @@ pub fn write_csv_header<W: Write>(
             }
             FingerprintFormat::None => {}
         }
+    }
+    for &d in &layout.count_fingerprints {
+        write!(w, ",{}", d.count_fingerprint_name().unwrap_or_default())?;
     }
     writeln!(w)
 }
@@ -417,6 +599,20 @@ fn format_csv_row(line: &mut Vec<u8>, ids: &[String], table: &DescriptorTable, r
                     }
                 }
                 FingerprintFormat::None => {}
+            }
+        }
+        for block in &table.counts {
+            line.push(b',');
+            if ok {
+                let (keys, counts) = block.row(r);
+                for (k, (&key, &count)) in keys.iter().zip(counts).enumerate() {
+                    if k > 0 {
+                        line.push(b' ');
+                    }
+                    line.extend_from_slice(itoa::Buffer::new().format(key).as_bytes());
+                    line.push(b':');
+                    line.extend_from_slice(itoa::Buffer::new().format(count).as_bytes());
+                }
             }
         }
         line.push(b'\n');
@@ -543,6 +739,50 @@ mod tests {
         assert_eq!(bits.lines().next().unwrap().split(',').count(), 3 + 166);
         let none = render(FingerprintFormat::None);
         assert_eq!(none.lines().next().unwrap(), "SMILES,HeavyAtomCount,MolLogP");
+    }
+
+    #[test]
+    fn count_fingerprints_as_columns_or_sparse() {
+        let descriptors =
+            [BatchDescriptor::HeavyAtomCount, BatchDescriptor::CdkSubstructureCount, BatchDescriptor::KlekotaRoth];
+        let smiles = ["CC(=O)Oc1ccccc1C(=O)O", "bad", "CCO"];
+        let mols: Vec<Option<Molecule>> = smiles.iter().map(|s| parse_smiles(s).ok()).collect();
+        let calc = crate::desc::calculator::DescriptorCalculator::new(&descriptors);
+        let cols = calc.calculate(&mols);
+        assert_eq!(cols.n_scalars(), 1 + 307);
+        assert!(cols.counts.is_empty());
+        assert_eq!(cols.scalar_names[1], "SubFPC1");
+
+        let calc = calc.with_count_format(CountFingerprintFormat::Sparse);
+        let layout = calc.layout();
+        assert_eq!(layout.count_fingerprint_shapes(), vec![("CDKSubstructureCount", 307)]);
+        let sparse = calc.calculate(&mols);
+        assert_eq!(sparse.scalar_names, vec!["HeavyAtomCount"]);
+        let block = sparse.count_fingerprint("CDKSubstructureCount").unwrap();
+        assert_eq!((block.rows(), block.n_keys), (3, 307));
+        let dense = block.to_dense();
+        for r in [0, 2] {
+            assert!(!block.row(r).0.is_empty());
+            for k in 0..307 {
+                assert_eq!(dense[r * 307 + k] as f64, cols.scalar_row(r)[1 + k]);
+                assert_eq!(block.get(r, k), dense[r * 307 + k]);
+            }
+        }
+        assert!(block.row(1).0.is_empty(), "invalid row has no counts");
+        assert_eq!(sparse.fingerprints, cols.fingerprints);
+
+        let ids: Vec<String> = smiles.iter().map(|s| s.to_string()).collect();
+        let mut out = Vec::new();
+        write_csv_header(&mut out, "SMILES", layout, FingerprintFormat::OnBits).unwrap();
+        write_csv_rows(&mut out, &ids, &sparse, FingerprintFormat::OnBits).unwrap();
+        let text = String::from_utf8(out).unwrap();
+        let lines: Vec<&str> = text.lines().collect();
+        assert_eq!(lines[0], "SMILES,HeavyAtomCount,KlekotaRoth,CDKSubstructureCount");
+        let (keys, counts) = block.row(2);
+        let pairs: Vec<String> = keys.iter().zip(counts).map(|(k, c)| format!("{k}:{c}")).collect();
+        assert!(lines[3].ends_with(&format!(",{}", pairs.join(" "))));
+        assert_eq!(lines[2], "bad,,,");
+        assert_eq!(format_csv_rows_par(&ids, &sparse, FingerprintFormat::OnBits), text.split_once('\n').unwrap().1.as_bytes());
     }
 
     #[test]

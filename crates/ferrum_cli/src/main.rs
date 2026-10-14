@@ -1,6 +1,6 @@
 use clap::{Parser, Subcommand, ValueEnum};
-use ferrum_core::desc::table::FingerprintFormat;
-use ferrum_cli::calc::run_calc;
+use ferrum_core::desc::table::{CountFingerprintFormat, FingerprintFormat};
+use ferrum_cli::calc::run_calc_with_counts;
 use ferrum_cli::tui::run_tui;
 use std::path::PathBuf;
 
@@ -35,6 +35,12 @@ enum Commands {
         #[arg(long, value_enum, default_value_t = FpFormat::Hex)]
         fingerprints: FpFormat,
 
+        /// How count fingerprints (Klekota-Roth, CDK substructure counts) are
+        /// written: one column per key (KRFPC1, ...), or one column per count
+        /// fingerprint with space-separated `index:count` pairs (0-based)
+        #[arg(long, value_enum, default_value_t = CountFormat::Columns)]
+        count_fingerprints: CountFormat,
+
         /// Records processed per chunk (memory scales with this)
         #[arg(long, default_value_t = 1024)]
         chunk_size: usize,
@@ -49,6 +55,21 @@ enum FpFormat {
     Onbits,
     Bits,
     None,
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+enum CountFormat {
+    Columns,
+    Sparse,
+}
+
+impl From<CountFormat> for CountFingerprintFormat {
+    fn from(f: CountFormat) -> Self {
+        match f {
+            CountFormat::Columns => CountFingerprintFormat::Columns,
+            CountFormat::Sparse => CountFingerprintFormat::Sparse,
+        }
+    }
 }
 
 impl From<FpFormat> for FingerprintFormat {
@@ -66,8 +87,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
 
     match cli.command {
-        Some(Commands::Calc { input, output, fingerprints, chunk_size }) => {
-            if let Err(e) = run_calc(&input, &output, fingerprints.into(), chunk_size) {
+        Some(Commands::Calc { input, output, fingerprints, count_fingerprints, chunk_size }) => {
+            if let Err(e) = run_calc_with_counts(&input, &output, fingerprints.into(), count_fingerprints.into(), chunk_size) {
                 eprintln!("Error: {}", e);
                 std::process::exit(1);
             }

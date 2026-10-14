@@ -1,12 +1,13 @@
 # FerrumChem
 
 **A molecular descriptor engine in Rust that reproduces RDKit, CDK, Mordred and
-Biosynfoni exactly, and computes them 10–900× faster.**
+Biosynfoni exactly, and computes them 10–400× faster.**
 
-FerrumChem calculates 2,037 scalar descriptors and 6 fingerprints (9,239 bits)
-per molecule: the complete RDKit descriptor catalogue, the CDK descriptors
-commonly used in QSAR, all 1,613 Mordred 2D descriptors, the Biosynfoni natural-product
-fingerprint and a few extras. It is available as a Rust crate
+FerrumChem calculates 2,157 scalar descriptors, 2 count fingerprints (5,167
+counts) and 14 bit fingerprints (18,503 bits) per molecule: the complete RDKit
+descriptor catalogue, all 2D descriptors and fingerprints of CDK 2.13 that
+PaDEL-Descriptor uses, all 1,613 Mordred 2D descriptors, the Biosynfoni
+natural-product fingerprint and a few extras. It is available as a Rust crate
 (`ferrum_core`), a command-line tool with an interactive terminal UI
 (`ferrum_cli`) and Python bindings (`ferrum_py`).
 
@@ -18,18 +19,18 @@ the same molecule always gives the same numbers as RDKit/CDK/Mordred would.
 
 ## Why FerrumChem
 
-- **Exact, not approximate.** 2,018 of the 2,037 scalar columns and all 6
-  fingerprints are compared molecule by molecule against the original
+- **Exact, not approximate.** 2,138 of the 2,157 scalar columns, both count
+  fingerprints and all 14 bit fingerprints are compared molecule by molecule against the original
   implementation of RDKit 2026.03.2, CDK 2.13, Mordred (mordred-community 2.0.7) and Biosynfoni
   (`|a − b| ≤ 1e-9 + 1e-9·|b|`; fingerprints and atom perception bit-exact).
   The tests fail when any column gets worse.
 - **Fast.** On one core: SMILES parsing 4× faster than RDKit, the complete
   RDKit descriptor catalogue 25–28× faster, the five RDKit fingerprints
-  7–10× faster, all tested CDK descriptors ~900× faster than CDK. On all cores
-  the CLI processes about 8,000–9,000 molecules per second with the full bundle
-  (2,037 scalars + 6 fingerprints).
+  7–10× faster, all CDK descriptors and fingerprints ~400× faster than CDK. On all cores
+  the CLI processes about 6,000 molecules per second with the full bundle
+  (7,324 numeric columns + 14 fingerprints).
 - **Constant memory.** Input is streamed in chunks; 100,000 molecules need
-  about 650 MB peak, the same order as 10,000.
+  about 0.7–0.9 GB peak, the same order as 10,000.
 - **One chemistry model.** A port of RDKit's `SanitizeMol` (valence model,
   Kekulé assignment, aromaticity, conjugation, hybridization, ring
   perception) is used everywhere. Where CDK descriptors depend on CDK's own
@@ -47,13 +48,13 @@ the same molecule always gives the same numbers as RDKit/CDK/Mordred would.
 
 | | |
 |---|---|
-| scalar descriptors | 2,037 (101 descriptor families) |
-| fingerprints | MACCS (166), PubChem (881), ECFP4, FCFP4, AtomPair, TopologicalTorsion (2,048 each) |
-| validated against a reference | 2,018 scalar columns + all 6 fingerprints + per-atom perception |
+| scalar descriptors | 2,157 + 5,167 counts of 2 count fingerprints (115 descriptor families) |
+| fingerprints | RDKit: MACCS (166), ECFP4, FCFP4, AtomPair, TopologicalTorsion (2,048 each); CDK: PubChem (881), CDK, CDKExtended, CDKGraphOnly (1,024 each), CDKMACCS (166), CDKEState (79), CDKSubstructure (307), KlekotaRoth (4,860), AtomPairs2D (780) |
+| validated against a reference | 2,138 scalar columns + both count fingerprints + all 14 fingerprints + per-atom perception |
 | references | RDKit 2026.03.2 (2D + 3D), CDK 2.13, mordred-community 2.0.7, Biosynfoni `full_1103` |
 | input | SMILES (`.smi`), CSV with a SMILES column, SDF (V2000/V3000, incl. 3D conformers) |
 | output | CSV (exact round-trip `f64`, fingerprints as hex / on-bits / 0-1 columns), NumPy arrays, Rust `DescriptorTable` |
-| throughput (Apple M4 Pro, 14 cores) | ~8,500 molecules/s, full bundle, end to end |
+| throughput (Apple M4 Pro, 14 cores) | ~6,000 molecules/s, full bundle, end to end |
 
 ---
 
@@ -79,8 +80,12 @@ target/release/ferrum_cli tui
 ```
 
 `--fingerprints` takes `hex` (default; one column per fingerprint), `onbits`,
-`bits` (one 0/1 column per bit) or `none`. Every input record gives one output
-row; records that cannot be parsed have empty cells.
+`bits` (one 0/1 column per bit) or `none`. Count fingerprints (Klekota-Roth
+`KRFPC1..4860`, CDK substructure `SubFPC1..307`) are ordinary columns by default;
+`--count-fingerprints sparse` writes one column per count fingerprint
+(`KlekotaRothCount`, `CDKSubstructureCount`) with space-separated `index:count`
+pairs (0-based key index, non-zero counts only). Every input record gives one
+output row; records that cannot be parsed have empty cells.
 
 ### Python
 
@@ -96,7 +101,7 @@ smiles = ["CC(=O)Oc1ccccc1C(=O)O", "CN1C=NC2=C1C(=O)N(C(=O)N2C)C", "not a smiles
 
 calc = ferrum_py.Calculator()                  # build once, reuse for every call
 names, X, fps, valid = calc.compute(smiles)
-# names: 2,037 column names; X: float64 (3, 2037), NaN rows where valid is False
+# names: 7,324 column names; X: float64 (3, 7324), NaN rows where valid is False
 # fps:   {"MACCS": uint8 (3, 21), "PubChem": (3, 111), "ECFP4": (3, 256), ...}
 
 bits = calc.fingerprint_bits                   # {"MACCS": 166, "ECFP4": 2048, ...}
@@ -104,6 +109,11 @@ ecfp4 = np.unpackbits(fps["ECFP4"], axis=1, bitorder="little", count=bits["ECFP4
 
 scalars = ferrum_py.Calculator(fingerprints=False)                 # scalars only
 names, X, fps, valid = ferrum_py.compute_descriptors(smiles)       # same, shared module-level calculator
+
+# count fingerprints as separate integer arrays instead of KRFPC*/SubFPC* columns
+sparse = ferrum_py.Calculator(count_fingerprints="sparse")
+names, X, fps, counts, valid = sparse.compute(smiles)
+# counts: {"CDKSubstructureCount": uint32 (3, 307), "KlekotaRothCount": uint32 (3, 4860)}
 bio_names, bio = ferrum_py.compute_biosynfoni(smiles)              # 39 counts
 ```
 
@@ -114,6 +124,7 @@ used from several Python threads at the same time.
 
 ```rust
 use ferrum_core::desc::calculator::DescriptorCalculator;
+use ferrum_core::desc::table::CountFingerprintFormat;
 use ferrum_core::io::smiles::parse_smiles;
 
 // one calculator for all molecules and all threads (Send + Sync)
@@ -122,6 +133,11 @@ let calc = DescriptorCalculator::all(); // or ::new(&[BatchDescriptor::Molecular
 let table = calc.calculate_smiles(&["c1ccccc1O", "CCN"]); // parallel
 let logp = table.scalar_row(0)[table.scalar_names.iter().position(|n| n == "MolLogP").unwrap()];
 let ecfp4_bits: Vec<usize> = table.fingerprint("ECFP4").unwrap().on_bits(0).collect();
+
+// count fingerprints as sparse blocks (CSR) instead of scalar columns
+let sparse = DescriptorCalculator::all().with_count_format(CountFingerprintFormat::Sparse);
+let kr = sparse.calculate_smiles(&["c1ccccc1O"]);
+let (keys, counts) = kr.count_fingerprint("KlekotaRothCount").unwrap().row(0); // non-zero keys only
 
 // molecules are only read, so they can be reused or shared between threads
 let mol = parse_smiles("CC(=O)Oc1ccccc1C(=O)O").unwrap();
@@ -138,7 +154,8 @@ by the CLI.
 
 ## Descriptor catalogue
 
-2,037 scalar columns in 101 families, plus 6 fingerprints. "Reference" is the
+2,157 scalar columns and 2 count fingerprints (5,167 count columns) in 115
+families, plus 14 bit fingerprints. "Reference" is the
 implementation each column is tested against; column names follow that
 reference.
 
@@ -165,7 +182,15 @@ reference.
 
 This covers every entry of `rdkit.Chem.Descriptors._descList` (217 of 217).
 
-### CDK (123 scalar columns + PubChem fingerprint)
+### CDK 2.13 (243 scalar columns, 9 fingerprints, 2 count fingerprints)
+
+CDK descriptors use CDK's names; where that name is already a FerrumChem column
+or a Mordred descriptor with another definition, the column is `CDK_<name>`
+(`CDK_nAtom`, `CDK_nB`, `CDK_nAromBond`, `CDK_nHBAcc`, `CDK_nHBDon`,
+`CDK_TopoPSA`, `CDK_MW`, and all 20 amino-acid counts `CDK_nA` … `CDK_nW`).
+This covers every 2D descriptor and fingerprint class of CDK that
+PaDEL-Descriptor uses (PaDEL itself runs the old CDK 1.4.15, whose values often
+differ; FerrumChem follows CDK 2.13), except `IPMolecularLearning`.
 
 | family | columns |
 |---|---|
@@ -179,7 +204,11 @@ This covers every entry of `rdkit.Chem.Descriptors._descList` (217 of 217).
 | Rings and chains | `nSmallRings`, `nAromRings`, `nRingBlocks`, `nAromBlocks`, `nRings3–9`, `nAtomLC`, `nAtomLAC`, `nAtomP` |
 | Polarizability | `apol`, `bpol` |
 | Acid/base groups | `nAcidicGroups`, `nBasicGroups` |
-| Fingerprint | PubChem (881 bits, CDK `PubchemFingerprinter`) |
+| logP / MR | `ALogP`, `ALogp2`, `AMR` (Ghose-Crippen), `XLogP`, `MLogP` (Mannhold), `JPLogP` (NaN for atom types without a coefficient, as in CDK) |
+| Counts and properties | 79 Kier-Hall E-state counts `khs.*`, 20 amino-acid counts, `CDK_nAtom`, `CDK_nB`, `naAromAtom`, `CDK_nAromBond`, `CDK_nHBAcc`, `CDK_nHBDon`, `nRotB`, `CDK_TopoPSA`, `tpsaEfficiency`, `CDK_MW`, `LipinskiFailures`, `FMF`, `Fsp3`, `nSpiroAtoms`, `VABC` |
+| Fingerprints | PubChem (881 bits), `CDK` / `CDKExtended` / `CDKGraphOnly` (1,024 bits, hashed paths), `CDKMACCS` (166, CDK's own keys), `CDKEState` (79) |
+| Substructure keys | `CDKSubstructure` (307 bits, CDK `SubstructureFingerprinter`, Laggner functional groups), `KlekotaRoth` (4,860 bits, CDK `KlekotaRothFingerprinter`) and their count fingerprints `SubFPC1..307`, `KRFPC1..4860` (unique matches per key, CDK `getCountFingerprint`) |
+| Atom pairs | `AtomPairs2D` (780 bits, CDK `AtomPairs2DFingerprinter`) |
 
 ### Mordred (all 1,613 Mordred 2D descriptors; 1,531 own columns)
 
@@ -231,7 +260,7 @@ everything with FerrumChem:
 |---|---|---|---|
 | `rdkit_parity` | RDKit 2026.03.2 | 1,277 | 325 of 327 (321 scalars, 5 fingerprints, atom perception) |
 | `rdkit_3d_parity` | RDKit 2026.03.2, ETKDG conformers | 296 | 4 of 5 (PMI1–3, Asphericity; perception see below) |
-| `cdk_parity` | CDK 2.13 | 1,277 | 124 of 124 |
+| `cdk_parity` | CDK 2.13 | 1,277 | 254 of 254 (243 scalars, 9 fingerprints, 2 count fingerprints) |
 | `mordred_parity` | mordred-community 2.0.7, all 1,613 2D descriptors | 1,277 | 1,611 of 1,613 (`VR1_A`, `VR2_A`: 1 molecule each, see below) |
 | `biosynfoni_parity` | Biosynfoni (original Python package) | 1,277 | 39 of 39 |
 
@@ -260,6 +289,10 @@ Beyond the test set:
 - **Stereo descriptors:** identical on all of COCONUT except 3 SPS values.
 - **Biosynfoni:** identical on 20,000 COCONUT molecules.
 - **RDKit, 5,000 mixed molecules:** identical except Ipc/AvgIpc (as above).
+- **CDK, 5,000 mixed molecules:** all CDK fingerprints, count fingerprints,
+  logP models and counts identical; 21 older columns differ on 1–3 molecules
+  (BCUT of a perchlorate salt, Chi valence indices and `fragC` of a
+  phosphine).
 - **Mordred, 5,000 mixed molecules:** 1,610 of 1,613 columns identical; `VR1_A`/`VR2_A` (16 molecules) and `VR3_A` (8) as above.
 
 All descriptors that the CDK computes on its own perception (atom typing,
@@ -280,20 +313,21 @@ more tables).
 | parse SMILES + sanitize | 52–79 | 13–18 | 4× |
 | full RDKit catalogue (217 descriptors) | 3,874–6,605 | 152–240 | 25–28× |
 | 5 fingerprints | 658–1,119 | 89–114 | 7–10× |
-| FerrumChem full bundle (2,037 scalars + 6 fingerprints) | – | 616–1,058 | – |
+| FerrumChem full bundle (7,324 numeric columns + 14 fingerprints) | – | 882–1,437 | – |
 
 | | reference | FerrumChem |
 |---|---|---|
-| all CDK descriptors, 1,273 molecules, 1 thread | CDK 147.5 s | 0.165 s |
-| all cores, catalogue + fingerprints, 5,000 molecules | RDKit (multiprocessing) 744 mol/s | ~8,900 mol/s with the full bundle (2,037 scalars) |
-| CLI, 100,000 molecules, all cores | – | 12.0 s, 8,350 mol/s, 650 MB peak RSS |
-| CLI, 10,000 molecules, 1 thread | – | 11.1 s, 133 MB peak RSS |
+| all CDK descriptors and fingerprints, 1,277 molecules, 1 thread | CDK 232 s | 0.58 s |
+| all cores, catalogue + fingerprints, 5,000 molecules | RDKit (multiprocessing) 744 mol/s | ~6,400 mol/s with the full bundle |
+| CLI, 100,000 molecules, all cores | – | 17.0 s, 5,870 mol/s, 880 MB peak RSS (730 MB with `--count-fingerprints sparse`) |
+| CLI, 10,000 molecules, 1 thread | – | 15.9 s, 250 MB peak RSS (156 MB sparse) |
 
 Peak memory depends on the largest molecules and the number of threads, not
 on the input size. The most expensive families on a mixed set are the Mordred matrix
-descriptors (207 µs/mol: 11 full eigen-decompositions and the detour matrix,
-i.e. longest paths), BCUT (77; 30 eigenvalue problems), PubChem (72), MACCS
-(68) and the CDK Chi indices (55); the CDK weighted-path descriptor,
+descriptors (212 µs/mol: 11 full eigen-decompositions and the detour matrix,
+i.e. longest paths), the Klekota-Roth counts (174; 4,860 SMARTS keys), BCUT
+(78; 30 eigenvalue problems), PubChem (73), MACCS (70) and the CDK
+substructure counts (66); the CDK weighted-path descriptor,
 whose cost grows exponentially with fused rings in CDK, is computed exactly
 with a memoised search (a 30-ring ladder polyether: 40 s → < 10 ms).
 
@@ -315,9 +349,15 @@ integers without a fraction, and rows of unparseable input are empty.
 `np.unpackbits(a, axis=1, bitorder="little", count=n_bits)` restores the bit
 matrix. In CSV, `hex` writes these bytes as one hex string per fingerprint.
 
+**Count fingerprints** (one integer per key) are scalar columns by default. With
+`CountFingerprintFormat::Sparse` (CLI `--count-fingerprints sparse`, Python
+`count_fingerprints="sparse"`) each is a `CountBlock` in compressed sparse row
+form (`indptr`, `indices`, `counts`; `row`, `get`, `to_dense`): only the non-zero
+keys are stored, a few hundred bytes per molecule instead of 8 bytes per key.
+
 **`DescriptorTable`** (Rust) holds `scalar_names`, the row-major `scalars`, one
 `FingerprintBlock` per fingerprint (`row`, `get`, `on_bits`, `count_ones`,
-`to_bytes`) and the `valid` mask.
+`to_bytes`), one `CountBlock` per sparse count fingerprint and the `valid` mask.
 
 ---
 

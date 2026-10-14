@@ -91,6 +91,24 @@ pub mod vsa;
 pub mod weighted_path;
 pub mod wiener_numbers;
 pub mod zagreb;
+pub mod cdk_path_fingerprints;
+pub mod cdk_maccs;
+pub mod cdk_estate_fp;
+mod cdk_smarts_target;
+pub mod cdk_logp;
+mod cdk_alogp;
+mod cdk_jplogp;
+mod cdk_xlogp;
+pub mod cdk_amino_acids;
+mod cdk_atom_types;
+mod cdk_cycles;
+pub mod cdk_kierhall;
+pub mod cdk_simple;
+// CDK 2.13 substructure-key and atom-pair fingerprints
+pub mod atom_pairs_2d;
+pub mod cdk_substructure;
+mod cdk_smarts;
+mod cdk_substructure_keys;
 
 // Re-export the core descriptor API
 pub use typed::{

@@ -1,5 +1,5 @@
 use ferrum_core::desc::calculator::DescriptorCalculator;
-use ferrum_core::desc::table::{format_csv_rows_par, write_csv_header, FingerprintFormat};
+use ferrum_core::desc::table::{format_csv_rows_par, write_csv_header, CountFingerprintFormat, FingerprintFormat};
 use ferrum_core::io::stream::MoleculeReader;
 use std::collections::BTreeMap;
 use std::fs::File;
@@ -22,10 +22,17 @@ const IN_FLIGHT_VALUES: usize = 4_000_000;
 /// calculated in parallel, written in input order), so memory stays bounded
 /// for any input size. Every input record gives one output row; records that
 /// cannot be parsed get empty cells.
-pub fn run_calc(
+pub fn run_calc(input: &Path, output: &Path, fp_format: FingerprintFormat, chunk_size: usize) -> Result<(), String> {
+    run_calc_with_counts(input, output, fp_format, CountFingerprintFormat::Columns, chunk_size)
+}
+
+/// [`run_calc`] with the output format of the count fingerprints (scalar
+/// columns `KRFPC1..`, or one sparse `index:count` column per count fingerprint).
+pub fn run_calc_with_counts(
     input: &Path,
     output: &Path,
     fp_format: FingerprintFormat,
+    count_format: CountFingerprintFormat,
     chunk_size: usize,
 ) -> Result<(), String> {
     println!("=== FerrumChem Descriptor Calculation ===");
@@ -37,7 +44,7 @@ pub fn run_calc(
         .with_chunk_size(chunk_size);
 
     // one calculator, shared by every worker for every molecule
-    let calc = Arc::new(DescriptorCalculator::all());
+    let calc = Arc::new(DescriptorCalculator::all().with_count_format(count_format));
     let layout = calc.layout();
     println!(
         "Calculating {} scalar descriptors and {} fingerprints ({})...",
@@ -50,6 +57,9 @@ pub fn run_calc(
             .collect::<Vec<_>>()
             .join(", ")
     );
+    for (name, keys) in layout.count_fingerprint_shapes() {
+        println!("Count fingerprint {name} ({keys} keys) as sparse index:count column");
+    }
 
     let out_file = File::create(output)
         .map_err(|e| format!("Failed to create output file '{}': {}", output.display(), e))?;
@@ -58,8 +68,10 @@ pub fn run_calc(
         .map_err(|e| format!("Failed to write '{}': {}", output.display(), e))?;
 
     let start = Instant::now();
+    // sparse count fingerprints: a few hundred (key, count) pairs per row
     let row_values = layout.n_scalars()
-        + layout.fingerprint_shapes().iter().map(|&(_, bits)| bits.div_ceil(64)).sum::<usize>();
+        + layout.fingerprint_shapes().iter().map(|&(_, bits)| bits.div_ceil(64)).sum::<usize>()
+        + 64 * layout.count_fingerprint_descriptors().len();
     let budget = std::env::var("FERRUM_IN_FLIGHT_VALUES").ok().and_then(|v| v.parse().ok()).unwrap_or(IN_FLIGHT_VALUES);
     let in_flight = (budget / row_values.max(1) / chunk_size.max(1)).max(2);
     let slots = Arc::new((Mutex::new(in_flight), Condvar::new()));

@@ -36,6 +36,18 @@
 // PubChem fingerprint: prepared as the PubchemFingerprinter javadoc prescribes, on a
 // clone: percieveAtomTypesAndConfigureAtoms, Aromaticity.cdkLegacy().apply,
 // convertImplicitToExplicitHydrogens; then getBitFingerprint (881 bits).
+// All other fingerprints (CDK path, extended, graph-only, MACCS, substructure,
+// Klekota-Roth, atom-pair 2D, E-State) run on a clone of the prepared molecule,
+// which is what their javadoc assumes (atom types, aromaticity, implicit
+// hydrogens). Count fingerprints (`fpc:` columns) are written as space-separated
+// `index:count` pairs (0-based, count > 0). The atom-pair 2D count fingerprint
+// is not included: CDK 2.13 throws a NullPointerException for most molecules.
+//
+// Column names: CDK's own descriptor names, except where the name is already a
+// FerrumChem column or a Mordred descriptor name with another definition; those
+// columns get the prefix `CDK_` (as Mordred's clashing columns get `Mordred_`).
+// AminoAcidCountDescriptor's 20 columns all get the prefix, since its `nC`,
+// `nN`, `nH`, ... would read as element counts.
 
 import java.io.BufferedReader;
 import java.io.BufferedWriter;
@@ -53,13 +65,44 @@ import java.util.Map;
 import org.openscience.cdk.CDK;
 import org.openscience.cdk.aromaticity.Aromaticity;
 import org.openscience.cdk.aromaticity.ElectronDonation;
+import org.openscience.cdk.fingerprint.AtomPairs2DFingerprinter;
+import org.openscience.cdk.fingerprint.EStateFingerprinter;
+import org.openscience.cdk.fingerprint.ExtendedFingerprinter;
+import org.openscience.cdk.fingerprint.Fingerprinter;
+import org.openscience.cdk.fingerprint.GraphOnlyFingerprinter;
+import org.openscience.cdk.fingerprint.ICountFingerprint;
+import org.openscience.cdk.fingerprint.IFingerprinter;
+import org.openscience.cdk.fingerprint.KlekotaRothFingerprinter;
+import org.openscience.cdk.fingerprint.MACCSFingerprinter;
 import org.openscience.cdk.fingerprint.PubchemFingerprinter;
+import org.openscience.cdk.fingerprint.SubstructureFingerprinter;
 import org.openscience.cdk.graph.Cycles;
 import org.openscience.cdk.interfaces.IAtomContainer;
 import org.openscience.cdk.interfaces.IChemObjectBuilder;
 import org.openscience.cdk.qsar.DescriptorValue;
 import org.openscience.cdk.qsar.IMolecularDescriptor;
+import org.openscience.cdk.qsar.descriptors.molecular.ALOGPDescriptor;
 import org.openscience.cdk.qsar.descriptors.molecular.APolDescriptor;
+import org.openscience.cdk.qsar.descriptors.molecular.AminoAcidCountDescriptor;
+import org.openscience.cdk.qsar.descriptors.molecular.AromaticAtomsCountDescriptor;
+import org.openscience.cdk.qsar.descriptors.molecular.AromaticBondsCountDescriptor;
+import org.openscience.cdk.qsar.descriptors.molecular.AtomCountDescriptor;
+import org.openscience.cdk.qsar.descriptors.molecular.BondCountDescriptor;
+import org.openscience.cdk.qsar.descriptors.molecular.FMFDescriptor;
+import org.openscience.cdk.qsar.descriptors.molecular.FractionalCSP3Descriptor;
+import org.openscience.cdk.qsar.descriptors.molecular.FractionalPSADescriptor;
+import org.openscience.cdk.qsar.descriptors.molecular.HBondAcceptorCountDescriptor;
+import org.openscience.cdk.qsar.descriptors.molecular.HBondDonorCountDescriptor;
+import org.openscience.cdk.qsar.descriptors.molecular.JPlogPDescriptor;
+import org.openscience.cdk.qsar.descriptors.molecular.KierHallSmartsDescriptor;
+import org.openscience.cdk.qsar.descriptors.molecular.MannholdLogPDescriptor;
+import org.openscience.cdk.qsar.descriptors.molecular.RotatableBondsCountDescriptor;
+import org.openscience.cdk.qsar.descriptors.molecular.RuleOfFiveDescriptor;
+import org.openscience.cdk.qsar.descriptors.molecular.SpiroAtomCountDescriptor;
+import org.openscience.cdk.qsar.descriptors.molecular.TPSADescriptor;
+import org.openscience.cdk.qsar.descriptors.molecular.VABCDescriptor;
+import org.openscience.cdk.qsar.descriptors.molecular.WeightDescriptor;
+import org.openscience.cdk.qsar.descriptors.molecular.XLogPDescriptor;
 import org.openscience.cdk.qsar.descriptors.molecular.AcidicGroupCountDescriptor;
 import org.openscience.cdk.qsar.descriptors.molecular.AutocorrelationDescriptorCharge;
 import org.openscience.cdk.qsar.descriptors.molecular.AutocorrelationDescriptorMass;
@@ -86,6 +129,7 @@ import org.openscience.cdk.qsar.descriptors.molecular.VAdjMaDescriptor;
 import org.openscience.cdk.qsar.descriptors.molecular.WeightedPathDescriptor;
 import org.openscience.cdk.qsar.descriptors.molecular.WienerNumbersDescriptor;
 import org.openscience.cdk.qsar.descriptors.molecular.ZagrebIndexDescriptor;
+import org.openscience.cdk.qsar.result.BooleanResult;
 import org.openscience.cdk.qsar.result.DoubleArrayResult;
 import org.openscience.cdk.qsar.result.DoubleResult;
 import org.openscience.cdk.qsar.result.IDescriptorResult;
@@ -132,7 +176,7 @@ public final class CdkParityReference {
         return m;
     }
 
-    private static List<Spec> specs(IChemObjectBuilder b) {
+    private static List<Spec> specs(IChemObjectBuilder b) throws Exception {
         Map<String, String> none = rename();
         List<Spec> s = new ArrayList<>();
         s.add(new Spec(new SmallRingDescriptor(), b, "", none));
@@ -163,6 +207,29 @@ public final class CdkParityReference {
         s.add(new Spec(new ChiPathClusterDescriptor(), b, "", none));
         s.add(new Spec(new EccentricConnectivityIndexDescriptor(), b, "", none));
         s.add(new Spec(new KappaShapeIndicesDescriptor(), b, "", none));
+        // logP / molar refractivity models
+        s.add(new Spec(new ALOGPDescriptor(), b, "", none));
+        s.add(new Spec(new XLogPDescriptor(), b, "", none));
+        s.add(new Spec(new MannholdLogPDescriptor(), b, "", none));
+        s.add(new Spec(new JPlogPDescriptor(), b, "", none));
+        // counts and simple properties (CDK_ where the name is taken, see above)
+        s.add(new Spec(new KierHallSmartsDescriptor(), b, "", none));
+        s.add(new Spec(new AminoAcidCountDescriptor(), b, "CDK_", none));
+        s.add(new Spec(new AtomCountDescriptor(), b, "", rename("nAtom", "CDK_nAtom")));
+        s.add(new Spec(new BondCountDescriptor(), b, "", rename("nB", "CDK_nB")));
+        s.add(new Spec(new AromaticAtomsCountDescriptor(), b, "", none));
+        s.add(new Spec(new AromaticBondsCountDescriptor(), b, "", rename("nAromBond", "CDK_nAromBond")));
+        s.add(new Spec(new HBondAcceptorCountDescriptor(), b, "", rename("nHBAcc", "CDK_nHBAcc")));
+        s.add(new Spec(new HBondDonorCountDescriptor(), b, "", rename("nHBDon", "CDK_nHBDon")));
+        s.add(new Spec(new RotatableBondsCountDescriptor(), b, "", none));
+        s.add(new Spec(new TPSADescriptor(), b, "", rename("TopoPSA", "CDK_TopoPSA")));
+        s.add(new Spec(new FractionalPSADescriptor(), b, "", none));
+        s.add(new Spec(new WeightDescriptor(), b, "", rename("MW", "CDK_MW")));
+        s.add(new Spec(new RuleOfFiveDescriptor(), b, "", none));
+        s.add(new Spec(new FMFDescriptor(), b, "", none));
+        s.add(new Spec(new FractionalCSP3Descriptor(), b, "", none));
+        s.add(new Spec(new SpiroAtomCountDescriptor(), b, "", none));
+        s.add(new Spec(new VABCDescriptor(), b, "", none));
         return s;
     }
 
@@ -184,6 +251,8 @@ public final class CdkParityReference {
             out.add(fmt(((DoubleResult) r).doubleValue()));
         } else if (r instanceof IntegerResult) {
             out.add(Integer.toString(((IntegerResult) r).intValue()));
+        } else if (r instanceof BooleanResult) {
+            out.add(((BooleanResult) r).booleanValue() ? "1" : "0");
         } else if (r instanceof DoubleArrayResult) {
             DoubleArrayResult a = (DoubleArrayResult) r;
             for (int i = 0; i < a.length(); i++) out.add(fmt(a.get(i)));
@@ -209,12 +278,35 @@ public final class CdkParityReference {
         return mol;
     }
 
-    static String pubchem(PubchemFingerprinter fp, IAtomContainer prepared) throws Exception {
-        IAtomContainer mol = prepared.clone();
-        AtomContainerManipulator.percieveAtomTypesAndConfigureAtoms(mol);
-        Aromaticity.cdkLegacy().apply(mol);
-        AtomContainerManipulator.convertImplicitToExplicitHydrogens(mol);
-        BitSet bits = fp.getBitFingerprint(mol).asBitSet();
+    /** A fingerprint written as on-bit list (`fp:` column) and optionally as counts (`fpc:` column). */
+    private static final class Fp {
+        final String column;
+        final IFingerprinter fingerprinter;
+        final boolean counts;
+        int failed;
+        long nanos;
+
+        Fp(String column, IFingerprinter fingerprinter, boolean counts) {
+            this.column = column;
+            this.fingerprinter = fingerprinter;
+            this.counts = counts;
+        }
+    }
+
+    private static List<Fp> fingerprints(IChemObjectBuilder b) {
+        List<Fp> f = new ArrayList<>();
+        f.add(new Fp("CDK", new Fingerprinter(), false));
+        f.add(new Fp("CDKExtended", new ExtendedFingerprinter(), false));
+        f.add(new Fp("CDKGraphOnly", new GraphOnlyFingerprinter(), false));
+        f.add(new Fp("CDKMACCS", new MACCSFingerprinter(b), false));
+        f.add(new Fp("CDKSubstructure", new SubstructureFingerprinter(), true));
+        f.add(new Fp("KlekotaRoth", new KlekotaRothFingerprinter(), true));
+        f.add(new Fp("AtomPairs2D", new AtomPairs2DFingerprinter(), false));
+        f.add(new Fp("CDKEState", new EStateFingerprinter(), false));
+        return f;
+    }
+
+    static String onBits(BitSet bits) {
         StringBuilder sb = new StringBuilder();
         for (int i = bits.nextSetBit(0); i >= 0; i = bits.nextSetBit(i + 1)) {
             if (sb.length() > 0) sb.append(' ');
@@ -223,7 +315,27 @@ public final class CdkParityReference {
         return sb.toString();
     }
 
-    public static void main(String[] args) throws IOException {
+    static String counts(ICountFingerprint fp) {
+        java.util.TreeMap<Integer, Integer> m = new java.util.TreeMap<>();
+        for (int i = 0; i < fp.numOfPopulatedbins(); i++)
+            if (fp.getCount(i) > 0) m.merge(fp.getHash(i), fp.getCount(i), Integer::sum);
+        StringBuilder sb = new StringBuilder();
+        for (Map.Entry<Integer, Integer> e : m.entrySet()) {
+            if (sb.length() > 0) sb.append(' ');
+            sb.append(e.getKey()).append(':').append(e.getValue());
+        }
+        return sb.toString();
+    }
+
+    static String pubchem(PubchemFingerprinter fp, IAtomContainer prepared) throws Exception {
+        IAtomContainer mol = prepared.clone();
+        AtomContainerManipulator.percieveAtomTypesAndConfigureAtoms(mol);
+        Aromaticity.cdkLegacy().apply(mol);
+        AtomContainerManipulator.convertImplicitToExplicitHydrogens(mol);
+        return onBits(fp.getBitFingerprint(mol).asBitSet());
+    }
+
+    public static void main(String[] args) throws Exception {
         Path root = Paths.get(args.length > 0 ? args[0] : ".").toAbsolutePath().normalize();
         Path in = root.resolve(DATA).resolve("parity_molecules.smi");
         Path out = root.resolve(DATA).resolve("cdk_parity_reference.csv");
@@ -234,11 +346,16 @@ public final class CdkParityReference {
         Aromaticity arom = new Aromaticity(ElectronDonation.daylight(), Cycles.or(Cycles.all(), Cycles.all(6)));
         PubchemFingerprinter pubchem = new PubchemFingerprinter(bldr);
         List<Spec> specs = specs(bldr);
+        List<Fp> fps = fingerprints(bldr);
 
         List<String> header = new ArrayList<>();
         header.add("smiles");
         for (Spec s : specs) header.addAll(s.columns);
         header.add(FP_PUBCHEM);
+        for (Fp f : fps) {
+            header.add("fp:" + f.column);
+            if (f.counts) header.add("fpc:" + f.column);
+        }
         final int nValues = header.size() - 1;
 
         long t0 = System.nanoTime();
@@ -304,6 +421,23 @@ public final class CdkParityReference {
                 }
                 fpNanos += System.nanoTime() - t;
 
+                for (Fp f : fps) {
+                    long tf = System.nanoTime();
+                    String bitsCell = "", countCell = "";
+                    try {
+                        bitsCell = csv(onBits(f.fingerprinter.getBitFingerprint(mol.clone()).asBitSet()));
+                        if (f.counts) countCell = csv(counts(f.fingerprinter.getCountFingerprint(mol.clone())));
+                    } catch (Exception | StackOverflowError e) {
+                        f.failed++;
+                        System.err.println(f.column + " fingerprint threw on " + smi + ": " + e);
+                        bitsCell = "";
+                        countCell = "";
+                    }
+                    row.add(bitsCell);
+                    if (f.counts) row.add(countCell);
+                    f.nanos += System.nanoTime() - tf;
+                }
+
                 dst.write(String.join(",", row));
                 dst.write("\n");
             }
@@ -317,5 +451,8 @@ public final class CdkParityReference {
             System.err.printf("  %-42s %5d %5d %5d %8.2f%n", s.name(), s.calls, s.cdkErrors, s.thrown, s.nanos / 1e9);
         System.err.printf("  %-42s %5d %5s %5d %8.2f%n", "PubchemFingerprinter", n - failed, "-", fpFailed,
                           fpNanos / 1e9);
+        for (Fp f : fps)
+            System.err.printf("  %-42s %5d %5s %5d %8.2f%n", f.fingerprinter.getClass().getSimpleName(), n - failed, "-",
+                              f.failed, f.nanos / 1e9);
     }
 }

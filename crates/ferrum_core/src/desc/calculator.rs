@@ -24,7 +24,7 @@ use rayon::prelude::*;
 
 use super::batch::BatchDescriptor;
 use super::context::CalculationContext;
-use super::table::{compute_table, Cancelled, DescriptorTable, MoleculeSlot, TableLayout};
+use super::table::{compute_table, Cancelled, CountFingerprintFormat, DescriptorTable, MoleculeSlot, TableLayout};
 use crate::io::smiles::parse_smiles;
 use crate::mol::molecule::Molecule;
 
@@ -78,6 +78,32 @@ impl DescriptorCalculator {
         let scalars: Vec<BatchDescriptor> =
             BatchDescriptor::all().iter().copied().filter(|d| !d.is_fingerprint()).collect();
         Self::new(&scalars)
+    }
+
+    /// The same calculator with count fingerprints (`KRFPC1..`, `SubFPC1..`)
+    /// output as `format`: scalar columns (default) or sparse
+    /// [`super::table::CountBlock`]s.
+    ///
+    /// ```
+    /// use ferrum_core::desc::batch::BatchDescriptor;
+    /// use ferrum_core::desc::calculator::DescriptorCalculator;
+    /// use ferrum_core::desc::table::CountFingerprintFormat;
+    ///
+    /// let calc = DescriptorCalculator::new(&[BatchDescriptor::KlekotaRothCount])
+    ///     .with_count_format(CountFingerprintFormat::Sparse);
+    /// let table = calc.calculate_smiles(&["CC(=O)Oc1ccccc1C(=O)O"]);
+    /// let kr = table.count_fingerprint("KlekotaRothCount").unwrap();
+    /// assert_eq!(table.n_scalars(), 0);
+    /// let (keys, counts) = kr.row(0); // non-zero counts only, keys ascending
+    /// assert!(!keys.is_empty() && counts.iter().all(|&c| c > 0));
+    /// ```
+    pub fn with_count_format(self, format: CountFingerprintFormat) -> Self {
+        Self { layout: TableLayout::with_count_format(self.layout.descriptors(), format) }
+    }
+
+    /// How count fingerprints are output.
+    pub fn count_format(&self) -> CountFingerprintFormat {
+        self.layout.count_format()
     }
 
     /// Column layout (scalar names, fingerprint shapes).

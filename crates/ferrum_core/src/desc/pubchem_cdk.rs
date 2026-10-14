@@ -696,7 +696,7 @@ impl AllCyclesState {
 ///   bare metal ions such as `Zn.2plus`, `Ru.6`, `Mg.neutral`).
 ///
 /// The cases follow `CDKAtomTypeMatcher` and were verified against CDK 2.13.
-fn cdk_hydrogens(mol: &Molecule, a: usize) -> u8 {
+pub(super) fn cdk_hydrogens(mol: &Molecule, a: usize) -> u8 {
     let atom = &mol.atoms[a];
     let h = atom.total_h();
     let z = atom.atomic_number;
@@ -934,7 +934,7 @@ fn lexicographic(p: &[u32]) -> Vec<u32> {
 
 /// `InitialCycles.ofBiconnectedComponent` + `MinimumCycleBasis(ic, true)`; returns
 /// the basis cycles as closed walks.
-fn minimum_cycle_basis(g: &[Vec<u32>]) -> Vec<Vec<u32>> {
+pub(super) fn minimum_cycle_basis(g: &[Vec<u32>]) -> Vec<Vec<u32>> {
     let n = g.len();
     // vertex ordering by degree (counting sort, stable)
     let max_deg = g.iter().map(|x| x.len()).max().unwrap_or(0);

@@ -94,6 +94,9 @@ enum Check {
     Value(usize, usize),
     /// Fingerprint stored as on-bit list: (descriptor index, bit offset).
     Bits(usize, usize),
+    /// Count fingerprint stored as `index:count` pairs: (descriptor index,
+    /// offset of count column 1 in its output, number of counts).
+    Counts(usize, usize, usize),
     Perception,
     /// RDKit column without a FerrumChem counterpart (reported, not checked).
     Missing,
@@ -166,17 +169,23 @@ fn run(
             by_name.insert(name, (di, k));
         }
     }
-    let fp_descriptor = |col: &str| -> (usize, usize) {
-        let (desc, offset) = match col {
-            "fp:MACCS" => (BatchDescriptor::MaccsKeys, 1), // MACCS key i -> output index i-1
-            "fp:ECFP4" => (BatchDescriptor::Ecfp4, 0),
-            "fp:FCFP4" => (BatchDescriptor::Fcfp4, 0),
-            "fp:AtomPair" => (BatchDescriptor::AtomPairFingerprint, 0),
-            "fp:TopoTorsion" => (BatchDescriptor::TopologicalTorsionFingerprint, 0),
-            "fp:PubChem" => (BatchDescriptor::PubChem881, 0),
-            other => panic!("unknown fingerprint column {other}"),
-        };
-        (descriptors.iter().position(|&d| d == desc).unwrap(), offset)
+    // `fp:<name>` is the bit fingerprint whose `fingerprint_name()` is <name>;
+    // `None` while FerrumChem does not implement it (reported as missing).
+    let fp_descriptor = |col: &str| -> Option<(usize, usize)> {
+        let name = col.strip_prefix("fp:").unwrap();
+        let di = descriptors.iter().position(|d| d.fingerprint_name() == Some(name))?;
+        // RDKit MACCS key i is output index i-1
+        let offset = usize::from(name == "MACCS");
+        Some((di, offset))
+    };
+    // `fpc:<name>` (sparse `index:count` pairs) is compared against the scalar
+    // count columns `<prefix>1..`, which every count fingerprint is output as.
+    let count_prefix = |col: &str| -> Option<&'static str> {
+        match col.strip_prefix("fpc:").unwrap() {
+            "KlekotaRoth" => Some("KRFPC"),
+            "CDKSubstructure" => Some("SubFPC"),
+            _ => None,
+        }
     };
 
     let mut rdr = csv::ReaderBuilder::new()
@@ -200,8 +209,19 @@ fn run(
             let check = if col == "perception" {
                 Check::Perception
             } else if col.starts_with("fp:") {
-                let (di, off) = fp_descriptor(col);
-                Check::Bits(di, off)
+                match fp_descriptor(col) {
+                    Some((di, off)) => Check::Bits(di, off),
+                    None => Check::Missing,
+                }
+            } else if col.starts_with("fpc:") {
+                let first = count_prefix(col).and_then(|p| by_name.get(&format!("{p}1")));
+                match (count_prefix(col), first) {
+                    (Some(p), Some(&(di, k))) => {
+                        let n = (1..).take_while(|i| by_name.contains_key(&format!("{p}{i}"))).count();
+                        Check::Counts(di, k, n)
+                    }
+                    _ => Check::Missing,
+                }
             } else {
                 match by_name.get(&column(col)) {
                     Some(&(di, k)) => Check::Value(di, k),
@@ -215,7 +235,7 @@ fn run(
         .map(|di| {
             checks
                 .iter()
-                .any(|(_, c)| matches!(c, Check::Value(d, _) | Check::Bits(d, _) if *d == di))
+                .any(|(_, c)| matches!(c, Check::Value(d, _) | Check::Bits(d, _) | Check::Counts(d, _, _) if *d == di))
         })
         .collect();
 
@@ -299,6 +319,23 @@ fn run(
                         .unwrap_or(f64::NAN);
                     if !close(exp, got) {
                         note(col, format!("rdkit={exp} ferrum={got}"));
+                    }
+                }
+                Check::Counts(di, first, n) => {
+                    let values = values[*di].as_ref().unwrap();
+                    let mut exp = vec![0.0; *n];
+                    let mut bad_index = false;
+                    for pair in expected.split_whitespace() {
+                        let (i, c) = pair.split_once(':').expect("index:count");
+                        match exp.get_mut(i.parse::<usize>().unwrap()) {
+                            Some(slot) => *slot = c.parse::<f64>().unwrap(),
+                            None => bad_index = true,
+                        }
+                    }
+                    let got = values.get(*first..*first + *n).unwrap_or(&[]);
+                    if bad_index || got != exp.as_slice() {
+                        let differing = exp.iter().zip(got).filter(|(a, b)| a != b).count();
+                        note(col, format!("{differing} counts differ"));
                     }
                 }
                 Check::Bits(di, offset) => {

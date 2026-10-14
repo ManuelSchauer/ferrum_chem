@@ -163,11 +163,25 @@ pub enum BatchDescriptor {
     MordredInformationContent,
     MordredEta,
     MordredMatrix,
+    CdkFingerprint,
+    CdkExtendedFingerprint,
+    CdkGraphOnlyFingerprint,
+    CdkMaccs,
+    CdkEStateFingerprint,
+    CdkLogP,
+    CdkSimpleCounts,
+    CdkKierHallSmarts,
+    CdkAminoAcidCount,
+    CdkSubstructureCount,
+    KlekotaRothCount,
+    CdkSubstructure,
+    KlekotaRoth,
+    AtomPairs2D,
 }
 
 impl BatchDescriptor {
     pub fn all() -> &'static [Self] {
-        const ALL: [BatchDescriptor; 101] = [
+        const ALL: [BatchDescriptor; 115] = [
             BatchDescriptor::MolecularWeight,
             BatchDescriptor::LogP,
             BatchDescriptor::MolarRefractivity,
@@ -269,6 +283,21 @@ impl BatchDescriptor {
             BatchDescriptor::MordredInformationContent,
             BatchDescriptor::MordredEta,
             BatchDescriptor::MordredMatrix,
+            BatchDescriptor::CdkFingerprint,
+            BatchDescriptor::CdkExtendedFingerprint,
+            BatchDescriptor::CdkGraphOnlyFingerprint,
+            BatchDescriptor::CdkMaccs,
+            BatchDescriptor::CdkEStateFingerprint,
+            BatchDescriptor::CdkLogP,
+            BatchDescriptor::CdkSimpleCounts,
+            BatchDescriptor::CdkKierHallSmarts,
+            BatchDescriptor::CdkAminoAcidCount,
+            // counts first: the bit fingerprints of a molecule then reuse them
+            BatchDescriptor::CdkSubstructureCount,
+            BatchDescriptor::KlekotaRothCount,
+            BatchDescriptor::CdkSubstructure,
+            BatchDescriptor::KlekotaRoth,
+            BatchDescriptor::AtomPairs2D,
         ];
         &ALL
     }
@@ -429,6 +458,20 @@ impl BatchDescriptor {
             Self::MordredInformationContent => "MordredInformationContent",
             Self::MordredEta => "MordredEta",
             Self::MordredMatrix => "MordredMatrix",
+            Self::CdkFingerprint => "CdkFingerprint",
+            Self::CdkExtendedFingerprint => "CdkExtendedFingerprint",
+            Self::CdkGraphOnlyFingerprint => "CdkGraphOnlyFingerprint",
+            Self::CdkMaccs => "CdkMaccs",
+            Self::CdkEStateFingerprint => "CdkEStateFingerprint",
+            Self::CdkLogP => "CdkLogP",
+            Self::CdkSimpleCounts => "CdkSimpleCounts",
+            Self::CdkKierHallSmarts => "KierHallSmarts",
+            Self::CdkAminoAcidCount => "AminoAcidCount",
+            Self::CdkSubstructure => "CDKSubstructure",
+            Self::CdkSubstructureCount => "CDKSubstructureCount",
+            Self::KlekotaRoth => "KlekotaRoth",
+            Self::KlekotaRothCount => "KlekotaRothCount",
+            Self::AtomPairs2D => "AtomPairs2D",
         }
     }
 
@@ -543,6 +586,20 @@ impl BatchDescriptor {
             }
             Self::MordredEta => super::mordred_eta::MordredEta.calculate(mol, ctx),
             Self::MordredMatrix => super::mordred_matrix::MordredMatrix.calculate(mol, ctx),
+            Self::CdkFingerprint => super::cdk_path_fingerprints::CdkFingerprint.calculate(mol, ctx),
+            Self::CdkExtendedFingerprint => super::cdk_path_fingerprints::CdkExtendedFingerprint.calculate(mol, ctx),
+            Self::CdkGraphOnlyFingerprint => super::cdk_path_fingerprints::CdkGraphOnlyFingerprint.calculate(mol, ctx),
+            Self::CdkMaccs => super::cdk_maccs::CdkMaccs.calculate(mol, ctx),
+            Self::CdkEStateFingerprint => super::cdk_estate_fp::CdkEStateFingerprint.calculate(mol, ctx),
+            Self::CdkLogP => super::cdk_logp::CdkLogP.calculate(mol, ctx),
+            Self::CdkSimpleCounts => super::cdk_simple::CdkSimpleCounts.calculate(mol, ctx),
+            Self::CdkKierHallSmarts => super::cdk_kierhall::CdkKierHallSmarts.calculate(mol, ctx),
+            Self::CdkAminoAcidCount => super::cdk_amino_acids::CdkAminoAcidCount.calculate(mol, ctx),
+            Self::CdkSubstructure => super::cdk_substructure::CdkSubstructure.calculate(mol, ctx),
+            Self::CdkSubstructureCount => super::cdk_substructure::CdkSubstructureCount.calculate(mol, ctx),
+            Self::KlekotaRoth => super::cdk_substructure::KlekotaRoth.calculate(mol, ctx),
+            Self::KlekotaRothCount => super::cdk_substructure::KlekotaRothCount.calculate(mol, ctx),
+            Self::AtomPairs2D => super::atom_pairs_2d::AtomPairs2D.calculate(mol, ctx),
         }
     }
 
@@ -605,6 +662,18 @@ impl BatchDescriptor {
             Self::MordredInformationContent => super::mordred_information::MORDRED_INFORMATION_CONTENT_LEN,
             Self::MordredEta => super::mordred_eta::MORDRED_ETA_LEN,
             Self::MordredMatrix => super::mordred_matrix::MORDRED_MATRIX_LEN,
+            Self::CdkFingerprint | Self::CdkExtendedFingerprint | Self::CdkGraphOnlyFingerprint => {
+                super::cdk_path_fingerprints::CDK_PATH_FP_SIZE
+            }
+            Self::CdkMaccs => super::cdk_maccs::CDK_MACCS_SIZE,
+            Self::CdkEStateFingerprint => super::cdk_estate_fp::CDK_ESTATE_FP_SIZE,
+            Self::CdkLogP => super::cdk_logp::CDK_LOGP_NAMES.len(),
+            Self::CdkSimpleCounts => super::cdk_simple::CDK_SIMPLE_NAMES.len(),
+            Self::CdkKierHallSmarts => super::cdk_kierhall::KIER_HALL_LEN,
+            Self::CdkAminoAcidCount => super::cdk_amino_acids::AMINO_ACID_CODES.len(),
+            Self::CdkSubstructure | Self::CdkSubstructureCount => super::cdk_substructure::CDK_SUBSTRUCTURE_LEN,
+            Self::KlekotaRoth | Self::KlekotaRothCount => super::cdk_substructure::KLEKOTA_ROTH_LEN,
+            Self::AtomPairs2D => super::atom_pairs_2d::ATOM_PAIRS_2D_LEN,
             _ => 1,
         }
     }
@@ -775,6 +844,22 @@ impl BatchDescriptor {
             Self::MordredEta => list(&super::mordred_eta::MORDRED_ETA_NAMES),
             // Mordred AdjacencyMatrix, BaryszMatrix, DetourMatrix, DistanceMatrix
             Self::MordredMatrix => super::mordred_matrix::mordred_matrix_names(),
+            Self::CdkFingerprint => seq("CDKFP", 0..=1023),
+            Self::CdkExtendedFingerprint => seq("CDKExtFP", 0..=1023),
+            Self::CdkGraphOnlyFingerprint => seq("CDKGraphFP", 0..=1023),
+            Self::CdkMaccs => seq("CDKMACCS", 0..=165),
+            Self::CdkEStateFingerprint => seq("CDKEStateFP", 0..=78),
+            Self::CdkLogP => list(&super::cdk_logp::CDK_LOGP_NAMES),
+            // CDK 2.13; `CDK_` prefix where the CDK name is taken (see `cdk_simple`)
+            Self::CdkSimpleCounts => list(&super::cdk_simple::CDK_SIMPLE_NAMES),
+            Self::CdkKierHallSmarts => super::cdk_kierhall::kier_hall_names(),
+            Self::CdkAminoAcidCount => super::cdk_amino_acids::amino_acid_names(),
+            // CDK substructure-key / atom-pair fingerprints (PaDEL names)
+            Self::CdkSubstructure => seq("SubFP", 1..=super::cdk_substructure::CDK_SUBSTRUCTURE_LEN),
+            Self::CdkSubstructureCount => seq("SubFPC", 1..=super::cdk_substructure::CDK_SUBSTRUCTURE_LEN),
+            Self::KlekotaRoth => seq("KRFP", 1..=super::cdk_substructure::KLEKOTA_ROTH_LEN),
+            Self::KlekotaRothCount => seq("KRFPC", 1..=super::cdk_substructure::KLEKOTA_ROTH_LEN),
+            Self::AtomPairs2D => seq("AD2D", 1..=super::atom_pairs_2d::ATOM_PAIRS_2D_LEN),
         }
     }
 
@@ -788,8 +873,33 @@ impl BatchDescriptor {
             Self::Fcfp4 => Some("FCFP4"),
             Self::AtomPairFingerprint => Some("AtomPair"),
             Self::TopologicalTorsionFingerprint => Some("TopoTorsion"),
+            Self::CdkFingerprint => Some("CDK"),
+            Self::CdkExtendedFingerprint => Some("CDKExtended"),
+            Self::CdkGraphOnlyFingerprint => Some("CDKGraphOnly"),
+            Self::CdkMaccs => Some("CDKMACCS"),
+            Self::CdkEStateFingerprint => Some("CDKEState"),
+            Self::CdkSubstructure => Some("CDKSubstructure"),
+            Self::KlekotaRoth => Some("KlekotaRoth"),
+            Self::AtomPairs2D => Some("AtomPairs2D"),
             _ => None,
         }
+    }
+
+    /// Short name of a count fingerprint (one integer count per key), or
+    /// `None`. Count fingerprints are scalar columns by default; with
+    /// [`super::table::CountFingerprintFormat::Sparse`] they become integer
+    /// blocks (CSV column, Python array) with this name.
+    pub fn count_fingerprint_name(self) -> Option<&'static str> {
+        match self {
+            Self::CdkSubstructureCount => Some("CDKSubstructureCount"),
+            Self::KlekotaRothCount => Some("KlekotaRothCount"),
+            _ => None,
+        }
+    }
+
+    /// Whether this descriptor is a count fingerprint (see [`Self::count_fingerprint_name`]).
+    pub fn is_count_fingerprint(self) -> bool {
+        self.count_fingerprint_name().is_some()
     }
 
     /// Whether this descriptor is a bit fingerprint (see [`Self::fingerprint_name`]).

@@ -13,16 +13,18 @@ bit-exact), so the speed-ups compare identical results.
 | parse SMILES + sanitize, 1 thread | RDKit 52–79 µs/mol | 13–18 µs/mol | **4.0–4.4×** |
 | full RDKit descriptor catalogue (217 descriptors), 1 thread | RDKit 3.9–6.6 ms/mol | 152–240 µs/mol | **25–28×** |
 | 5 fingerprints (MACCS, ECFP4, FCFP4, AtomPair, TopoTorsion), 1 thread | RDKit 0.66–1.12 ms/mol | 89–114 µs/mol | **7–10×** |
-| all CDK-equivalent descriptors (124 columns), 1,273 molecules, 1 thread | CDK 147.5 s | 0.165 s | **~900×** |
-| catalogue + fingerprints, all 14 cores | RDKit 744 mol/s | ~8,900 mol/s with the *full* bundle | **12×** |
-| CLI, 100,000 molecules, full bundle, all cores | – | 12.0 s (8,350 mol/s), 650 MB peak RSS | – |
+| all CDK descriptors and fingerprints (243 columns, 9 fingerprints, 2 count fingerprints), 1,277 molecules, 1 thread | CDK 232 s | 0.58 s | **~400×** |
+| catalogue + fingerprints, all 14 cores | RDKit 744 mol/s | ~6,400 mol/s with the *full* bundle | **8.6×** |
+| CLI, 100,000 molecules, full bundle, all cores | – | 17.0 s (5,870 mol/s), 880 MB peak RSS | – |
 
-The FerrumChem full bundle computes 2,037 scalar columns plus 6 fingerprints
-(9,239 bits): the complete RDKit catalogue, the tested CDK descriptors, all
-1,613 Mordred 2D descriptors, Biosynfoni and a few FerrumChem-only
-descriptors. It takes 1,058 µs/mol on one core for the mixed set (616 µs/mol
-for the parity set); before the Mordred expansion (531 columns) it took
-634 / 399 µs/mol.
+The FerrumChem full bundle computes 2,157 scalar columns, 2 count fingerprints
+(5,167 counts) and 14 bit fingerprints (18,503 bits): the complete RDKit
+catalogue, all CDK 2.13 2D descriptors and fingerprints PaDEL uses, all 1,613
+Mordred 2D descriptors, Biosynfoni and a few FerrumChem-only descriptors. It
+takes 1,437 µs/mol on one core for the mixed set (882 µs/mol for the parity
+set). History: 531 columns 634 / 399 µs/mol; with all Mordred descriptors
+(2,037 columns) 1,058 / 616 µs/mol; the CDK additions (Klekota-Roth counts
+alone 174 µs/mol) bring it to the current value.
 
 ## Datasets
 
@@ -45,7 +47,7 @@ extra columns as well).
 | parse SMILES (+ sanitize) | 79 | 18 | 4.4× | 52 | 13 | 4.0× |
 | RDKit descriptor catalogue (217/217) | 6,605 | 240 | 27.5× | 3,874 | 152 | 25.5× |
 | 5 fingerprints | 1,119 | 114 | 9.8× | 658 | 89 | 7.4× |
-| FerrumChem full bundle (2,037 scalars) | – | 1,058 | – | – | 616 | – |
+| FerrumChem full bundle (7,324 numeric columns + 14 fingerprints) | – | 1,437 | – | – | 882 | – |
 
 Selected descriptors (first 1,500 molecules of the mixed 5k sample, µs/mol,
 each group run on its own):
@@ -72,9 +74,9 @@ writing.
 
 | `ferrum_cli calc`, mixed set, full bundle | wall time | molecules/s | peak RSS |
 |---|---|---|---|
-| 10,000 molecules, 1 thread | 11.1 s | 900 | 133 MB |
-| 10,000 molecules, 14 cores | 1.36 s | 7,345 | 422 MB |
-| 100,000 molecules, 14 cores | 12.0 s | 8,353 | 649 MB |
+| 10,000 molecules, 1 thread | 15.9 s | 628 | 247 MB (156 MB with `--count-fingerprints sparse`) |
+| 10,000 molecules, 14 cores | 1.60 s | 6,247 | 660 MB |
+| 100,000 molecules, 14 cores | 17.0 s | 5,872 | 882 MB (730 MB sparse) |
 
 (The parity-set run on all cores, 0.40 s for 1,273 molecules, is dominated by
 process start-up.)
@@ -83,18 +85,20 @@ process start-up.)
 
 `scripts/cdk_reference/run.sh` times every CDK descriptor while generating the
 CDK reference (one pass over the parity set, JIT warm-up included). FerrumChem
-runs the same 23 descriptor families single-threaded on the same molecules
-(its BCUT and autocorrelation families additionally compute the Mordred
-columns).
+runs the same CDK descriptor families and fingerprints single-threaded on the
+same 1,277 molecules (its BCUT and autocorrelation families additionally
+compute the Mordred columns).
 
 | | CDK 2.13 | FerrumChem |
 |---|---|---|
-| Chi indices (path, cluster, path-cluster, chain; 40 columns) | 142.2 s | 0.038 s |
-| PubChem fingerprint | 2.09 s | 0.056 s |
-| BCUT | 0.64 s | 0.026 s |
-| WeightedPath (WTPT) | 0.84 s | 0.015 s |
-| all other CDK descriptors | 1.5 s | 0.030 s |
-| **total** | **147.5 s** | **0.165 s** |
+| Chi indices (path, cluster, path-cluster, chain; 40 columns) | 195.6 s | 0.044 s |
+| Klekota-Roth fingerprint + counts (4,860 SMARTS keys) | 25.3 s | 0.187 s |
+| PubChem fingerprint | 2.21 s | 0.064 s |
+| CDK substructure fingerprint + counts (307 keys) | 1.45 s | 0.063 s |
+| BCUT | 0.67 s | 0.058 s |
+| WeightedPath (WTPT) | 0.81 s | 0.017 s |
+| all other CDK descriptors and fingerprints | 5.6 s | 0.15 s |
+| **total** | **231.6 s** | **0.58 s** |
 
 ## Streaming and memory
 
@@ -107,15 +111,16 @@ its allocator: with the macOS system allocator the peak RSS of a
 single-threaded 10,000-molecule run was 442 MB instead of 135 MB, because freed
 chunk buffers were not returned.
 
-| input | peak RSS |
-|---|---|
-| 10,000 molecules, 1 thread | 133 MB |
-| 10,000 molecules, 14 cores | 422 MB |
-| 100,000 molecules, 14 cores | 649 MB |
+| input | peak RSS, count columns (default) | peak RSS, `--count-fingerprints sparse` |
+|---|---|---|
+| 10,000 molecules, 1 thread | 247 MB | 156 MB |
+| 10,000 molecules, 14 cores | 660 MB | – |
+| 100,000 molecules, 14 cores | 882 MB | 730 MB |
 
 Peak memory depends on the largest molecules and the number of threads
 working at once, not on the file size. CSV size for 100,000 molecules with the
-full bundle: about 2.6 GB with hex-packed fingerprints (default).
+full bundle: 4.0 GB with hex-packed fingerprints and count columns (default),
+3.0 GB with `--count-fingerprints sparse`.
 
 ## Cost per descriptor family
 
@@ -124,21 +129,24 @@ expensive families of the full bundle:
 
 | family | µs/mol |
 |---|---|
-| MordredMatrix (11 full eigen-decompositions, detour matrix) | 207 |
-| BCUT (CDK + 24 Mordred: 30 eigenvalue problems) | 77 |
-| PubChem881 | 72 |
-| MaccsKeys | 68 |
-| CdkChiIndices | 55 |
+| MordredMatrix (11 full eigen-decompositions, detour matrix) | 212 |
+| KlekotaRothCount (4,860 CDK SMARTS keys, unique matches) | 174 |
+| BCUT (CDK + 24 Mordred: 30 eigenvalue problems) | 78 |
+| PubChem881 | 73 |
+| MaccsKeys | 70 |
+| CDKSubstructureCount (307 CDK SMARTS keys) | 66 |
+| CdkChiIndices | 57 |
 | MordredMolecularId | 53 |
-| Biosynfoni | 41 |
-| MordredInformationContent | 37 |
+| Biosynfoni | 42 |
+| CdkMaccs | 40 |
+| MordredInformationContent | 38 |
 | WeightedPath | 30 |
-| QED | 29 |
+| QED | 30 |
 | Fragments | 28 |
-| Ipc (pays the shared characteristic polynomial) | 27 |
 | SPS (pays the shared stereo perception) | 27 |
-| FpDensityMorgan | 25 |
-| MordredChi | 24 |
+
+The CDK bit fingerprints `CDKSubstructure` and `KlekotaRoth` are read from the
+cached counts (1 and 6 µs/mol).
 
 When several descriptors share an intermediate result (distance matrices,
 characteristic polynomial, path tables, stereo perception, Crippen and

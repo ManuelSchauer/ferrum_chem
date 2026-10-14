@@ -24,6 +24,9 @@ pub struct Bond {
     pub flags: u8, // Bit 0: Aromatic, Bit 1: Ring
 }
 
+/// Flag bit of [`Bond::is_input_double`] (bit 4 is used by stereo perception).
+const INPUT_DOUBLE: u8 = 0b10_0000;
+
 // Static assertion: Bond must be Send + Sync
 const _: () = {
     const fn assert_send_sync<T: Send + Sync>() {}
@@ -36,8 +39,16 @@ impl Bond {
             source: u,
             target: v,
             bond_type: t,
-            flags: 0,
+            flags: if t == BondType::Double { INPUT_DOUBLE } else { 0 },
         }
+    }
+
+    /// The bond was created as a double bond (bit 5), i.e. written as `=` in
+    /// SMILES or with order 2 in a molfile. Aromaticity perception replaces
+    /// the bond type but keeps this flag, so descriptors reproducing toolkits
+    /// that keep the input Kekulé structure (CDK) can recover it.
+    pub fn is_input_double(&self) -> bool {
+        self.flags & INPUT_DOUBLE != 0
     }
 
     /// Check if this bond is aromatic (bit 0 of flags).

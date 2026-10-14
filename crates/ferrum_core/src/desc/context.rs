@@ -73,6 +73,11 @@ pub struct CalculationContext {
     /// E-State indices (EStateIndices, EStateAbs, EState_VSA, VSA_EState).
     pub estates: Vec<f64>,
     pub estates_key: Option<u64>,
+    pub(crate) cdk_path_fps: Option<(u64, Box<crate::desc::cdk_path_fingerprints::CdkPathFps>)>,
+    pub(crate) cdk_smarts_target: Option<(u64, Box<crate::desc::cdk_smarts_target::CdkSmartsTarget>)>,
+    /// CDK view and key counts of the CDK substructure-key fingerprints
+    /// (CDKSubstructure, KlekotaRoth and their counts).
+    pub(crate) cdk_keys: crate::desc::cdk_substructure::CdkKeyCache,
 }
 
 #[inline]
@@ -159,6 +164,9 @@ impl CalculationContext {
             paths_key: None,
             estates: Vec::new(),
             estates_key: None,
+            cdk_path_fps: None,
+            cdk_smarts_target: None,
+            cdk_keys: Default::default(),
         }
     }
 
@@ -193,5 +201,8 @@ impl CalculationContext {
         self.legacy_stereo_key = None;
         self.paths_key = None;
         self.estates_key = None;
+        self.cdk_path_fps = None;
+        self.cdk_smarts_target = None;
+        self.cdk_keys.reset();
     }
 }

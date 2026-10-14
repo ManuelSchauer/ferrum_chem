@@ -2,11 +2,12 @@ use std::sync::OnceLock;
 
 use ferrum_core::desc::biosynfoni::{compute_biosynfoni_fingerprint, get_biosynfoni_feature_names};
 use ferrum_core::desc::calculator::DescriptorCalculator;
+use ferrum_core::desc::table::CountFingerprintFormat;
 use ferrum_core::io::smiles::parse_smiles;
 use ferrum_core::mol::molecule::Molecule;
 use numpy::PyArrayMethods;
 use pyo3::prelude::*;
-use pyo3::types::PyDict;
+use pyo3::types::{PyDict, PyTuple};
 use rayon::prelude::*;
 
 /// SMILES processed per chunk: parsed molecules of one chunk are dropped before
@@ -21,21 +22,20 @@ fn to_numpy_2d<T: numpy::Element>(py: Python<'_>, data: Vec<T>, rows: usize, col
 }
 
 /// Runs `calc` over `smiles` chunk by chunk without the GIL and converts the
-/// result to `(names, scalars, fingerprints, valid)`.
-fn compute(
-    py: Python<'_>,
-    calc: &DescriptorCalculator,
-    smiles: &[String],
-) -> PyResult<(Vec<String>, PyObject, PyObject, PyObject)> {
+/// result to `(names, scalars, fingerprints, valid)`, or with sparse count
+/// fingerprints `(names, scalars, fingerprints, counts, valid)`.
+fn compute(py: Python<'_>, calc: &DescriptorCalculator, smiles: &[String]) -> PyResult<PyObject> {
     let n_rows = smiles.len();
     let layout = calc.layout();
     let ns = layout.n_scalars();
     let shapes = layout.fingerprint_shapes();
+    let count_shapes = layout.count_fingerprint_shapes();
 
-    let (scalars, fp_bytes, valid) = py.allow_threads(|| {
+    let (scalars, fp_bytes, counts, valid) = py.allow_threads(|| {
         let mut scalars = Vec::with_capacity(n_rows * ns);
         let mut fp_bytes: Vec<Vec<u8>> =
             shapes.iter().map(|&(_, bits)| Vec::with_capacity(n_rows * bits.div_ceil(8))).collect();
+        let mut counts: Vec<Vec<u32>> = count_shapes.iter().map(|&(_, keys)| Vec::with_capacity(n_rows * keys)).collect();
         let mut valid = Vec::with_capacity(n_rows);
         for chunk in smiles.chunks(CHUNK) {
             let molecules: Vec<Option<Molecule>> = chunk.par_iter().map(|s| parse_smiles(s).ok()).collect();
@@ -44,17 +44,49 @@ fn compute(
             for (out, block) in fp_bytes.iter_mut().zip(&table.fingerprints) {
                 out.extend(block.to_bytes());
             }
+            for (out, block) in counts.iter_mut().zip(&table.counts) {
+                out.extend(block.to_dense());
+            }
             valid.extend_from_slice(&table.valid);
         }
-        (scalars, fp_bytes, valid)
+        (scalars, fp_bytes, counts, valid)
     });
 
     let fps = PyDict::new(py);
     for ((name, bits), bytes) in shapes.iter().zip(fp_bytes) {
         fps.set_item(*name, to_numpy_2d(py, bytes, n_rows, bits.div_ceil(8))?)?;
     }
+    let names = layout.scalar_names().to_vec().into_pyobject(py)?.into_any().unbind();
+    let scalars = to_numpy_2d(py, scalars, n_rows, ns)?;
     let valid = numpy::PyArray1::from_vec(py, valid).into_any().unbind();
-    Ok((layout.scalar_names().to_vec(), to_numpy_2d(py, scalars, n_rows, ns)?, fps.into_any().unbind(), valid))
+    let fps = fps.into_any().unbind();
+    if layout.count_format() == CountFingerprintFormat::Columns {
+        return Ok(PyTuple::new(py, [names, scalars, fps, valid])?.into_any().unbind());
+    }
+    let cps = PyDict::new(py);
+    for ((name, keys), data) in count_shapes.iter().zip(counts) {
+        cps.set_item(*name, to_numpy_2d(py, data, n_rows, *keys)?)?;
+    }
+    Ok(PyTuple::new(py, [names, scalars, fps, cps.into_any().unbind(), valid])?.into_any().unbind())
+}
+
+/// Parses the `count_fingerprints` argument.
+fn count_format(value: &str) -> PyResult<CountFingerprintFormat> {
+    match value {
+        "columns" => Ok(CountFingerprintFormat::Columns),
+        "sparse" => Ok(CountFingerprintFormat::Sparse),
+        other => Err(pyo3::exceptions::PyValueError::new_err(format!(
+            "count_fingerprints must be \"columns\" or \"sparse\", got {other:?}"
+        ))),
+    }
+}
+
+fn count_dict(py: Python<'_>, calc: &DescriptorCalculator) -> PyResult<PyObject> {
+    let out = PyDict::new(py);
+    for (name, keys) in calc.layout().count_fingerprint_shapes() {
+        out.set_item(name, keys)?;
+    }
+    Ok(out.into_any().unbind())
 }
 
 fn fingerprint_dict(py: Python<'_>, calc: &DescriptorCalculator) -> PyResult<PyObject> {
@@ -66,14 +98,15 @@ fn fingerprint_dict(py: Python<'_>, calc: &DescriptorCalculator) -> PyResult<PyO
 }
 
 /// Shared default calculators (built once per process).
-fn default_calculator(fingerprints: bool) -> &'static DescriptorCalculator {
-    static ALL: OnceLock<DescriptorCalculator> = OnceLock::new();
-    static SCALARS: OnceLock<DescriptorCalculator> = OnceLock::new();
-    if fingerprints {
-        ALL.get_or_init(DescriptorCalculator::all)
-    } else {
-        SCALARS.get_or_init(DescriptorCalculator::scalars_only)
-    }
+fn default_calculator(fingerprints: bool, counts: CountFingerprintFormat) -> &'static DescriptorCalculator {
+    static CALCS: [OnceLock<DescriptorCalculator>; 4] = [const { OnceLock::new() }; 4];
+    let sparse = counts == CountFingerprintFormat::Sparse;
+    CALCS[usize::from(fingerprints) * 2 + usize::from(sparse)].get_or_init(|| new_calculator(fingerprints, counts))
+}
+
+fn new_calculator(fingerprints: bool, counts: CountFingerprintFormat) -> DescriptorCalculator {
+    let calc = if fingerprints { DescriptorCalculator::all() } else { DescriptorCalculator::scalars_only() };
+    calc.with_count_format(counts)
 }
 
 /// One descriptor calculator, built once and reused for any number of calls
@@ -81,6 +114,12 @@ fn default_calculator(fingerprints: bool) -> &'static DescriptorCalculator {
 ///
 /// >>> calc = ferrum_py.Calculator()                  # or Calculator(fingerprints=False)
 /// >>> names, X, fps, valid = calc.compute(smiles)
+///
+/// Count fingerprints (Klekota-Roth `KRFPC1..`, CDK substructure `SubFPC1..`)
+/// are scalar columns by default; with `count_fingerprints="sparse"` they are
+/// returned separately and `compute` gives
+/// `(names, scalars, fingerprints, counts, valid)` with `counts` a dict
+/// name -> uint32 array `(n, keys)` (`"KlekotaRothCount"`, `"CDKSubstructureCount"`).
 #[pyclass(frozen, module = "ferrum_py")]
 struct Calculator {
     inner: DescriptorCalculator,
@@ -89,22 +128,24 @@ struct Calculator {
 #[pymethods]
 impl Calculator {
     #[new]
-    #[pyo3(signature = (fingerprints = true))]
-    fn new(py: Python<'_>, fingerprints: bool) -> Self {
-        let inner = py.allow_threads(|| {
-            if fingerprints {
-                DescriptorCalculator::all()
-            } else {
-                DescriptorCalculator::scalars_only()
-            }
-        });
-        Self { inner }
+    #[pyo3(signature = (fingerprints = true, count_fingerprints = "columns"))]
+    fn new(py: Python<'_>, fingerprints: bool, count_fingerprints: &str) -> PyResult<Self> {
+        let counts = count_format(count_fingerprints)?;
+        let inner = py.allow_threads(|| new_calculator(fingerprints, counts));
+        Ok(Self { inner })
     }
 
-    /// Computes all descriptors; returns `(names, scalars, fingerprints, valid)`
+    /// Computes all descriptors; returns `(names, scalars, fingerprints, valid)`,
+    /// with `count_fingerprints="sparse"` `(names, scalars, fingerprints, counts, valid)`
     /// (see `compute_descriptors`).
-    fn compute(&self, py: Python<'_>, smiles_list: Vec<String>) -> PyResult<(Vec<String>, PyObject, PyObject, PyObject)> {
+    fn compute(&self, py: Python<'_>, smiles_list: Vec<String>) -> PyResult<PyObject> {
         compute(py, &self.inner, &smiles_list)
+    }
+
+    /// `{count fingerprint name: number of keys}` (empty unless `count_fingerprints="sparse"`).
+    #[getter]
+    fn count_fingerprint_keys(&self, py: Python<'_>) -> PyResult<PyObject> {
+        count_dict(py, &self.inner)
     }
 
     /// Names of the scalar columns.
@@ -121,9 +162,10 @@ impl Calculator {
 
     fn __repr__(&self) -> String {
         format!(
-            "Calculator({} scalar columns, fingerprints: {:?})",
+            "Calculator({} scalar columns, fingerprints: {:?}, count fingerprints: {:?})",
             self.inner.layout().n_scalars(),
-            self.inner.layout().fingerprint_shapes().iter().map(|(n, _)| *n).collect::<Vec<_>>()
+            self.inner.layout().fingerprint_shapes().iter().map(|(n, _)| *n).collect::<Vec<_>>(),
+            self.inner.layout().count_fingerprint_shapes().iter().map(|(n, _)| *n).collect::<Vec<_>>()
         )
     }
 }
@@ -139,21 +181,28 @@ impl Calculator {
 ///   with little-endian bit order; unpack with
 ///   `numpy.unpackbits(a, axis=1, bitorder="little", count=fingerprint_bits()[name])`;
 /// - `valid`: bool array `(n,)`, False where the SMILES could not be parsed.
+///
+/// Count fingerprints (`KRFPC1..`, `SubFPC1..`) are scalar columns unless
+/// `count_fingerprints="sparse"`; then the result is
+/// `(names, scalars, fingerprints, counts, valid)` with `counts` a dict
+/// name -> uint32 array `(n, keys)`.
 #[pyfunction]
-#[pyo3(signature = (smiles_list, fingerprints = true))]
+#[pyo3(signature = (smiles_list, fingerprints = true, count_fingerprints = "columns"))]
 fn compute_descriptors(
     py: Python<'_>,
     smiles_list: Vec<String>,
     fingerprints: bool,
-) -> PyResult<(Vec<String>, PyObject, PyObject, PyObject)> {
-    let calc = py.allow_threads(|| default_calculator(fingerprints));
+    count_fingerprints: &str,
+) -> PyResult<PyObject> {
+    let counts = count_format(count_fingerprints)?;
+    let calc = py.allow_threads(|| default_calculator(fingerprints, counts));
     compute(py, calc, &smiles_list)
 }
 
 /// Number of bits of each fingerprint returned by `compute_descriptors`.
 #[pyfunction]
 fn fingerprint_bits(py: Python<'_>) -> PyResult<PyObject> {
-    let calc = py.allow_threads(|| default_calculator(true));
+    let calc = py.allow_threads(|| default_calculator(true, CountFingerprintFormat::Columns));
     fingerprint_dict(py, calc)
 }
 

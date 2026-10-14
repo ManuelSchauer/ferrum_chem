@@ -918,7 +918,7 @@ impl CdkView {
     }
 
     /// `ElectronDonation.cdk()` contributions (`AtomTypeModel`, exocyclic pi bonds excluded).
-    fn electrons(&self, mol: &Molecule) -> Vec<i32> {
+    pub(crate) fn electrons(&self, mol: &Molecule) -> Vec<i32> {
         let n = mol.num_atoms();
         let mut e = vec![-1i32; n];
         for a in 0..n {

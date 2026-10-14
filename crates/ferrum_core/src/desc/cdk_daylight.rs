@@ -95,7 +95,7 @@ impl CdkMol {
             adj.push(v);
         }
         let mut m = CdkMol { z, charge, hcount, ring_atom, adj, ends, order, ring_bond };
-        m.undo_halogen_cleanup();
+        m.undo_halogen_cleanup(mol);
         if arom_bond.iter().any(|&x| x) {
             m.kekulize(mol, &arom_bond);
         }
@@ -121,9 +121,11 @@ impl CdkMol {
     }
 
     /// Undoes RDKit's halogen cleanUp (`Cl(=O)(=O)(=O)O` -> `[Cl+3]([O-])...`).
-    fn undo_halogen_cleanup(&mut self) {
+    /// A halogen written in brackets (`[Cl+3]`) was charged in the input and
+    /// keeps its charge, as in CDK.
+    fn undo_halogen_cleanup(&mut self, mol: &Molecule) {
         for a in 0..self.n() {
-            if !matches!(self.z[a], 17 | 35 | 53) {
+            if !matches!(self.z[a], 17 | 35 | 53) || mol.atoms[a].no_implicit_h() {
                 continue;
             }
             let q = self.charge[a];
