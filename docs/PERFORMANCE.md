@@ -15,7 +15,7 @@ bit-exact), so the speed-ups compare identical results.
 | 5 fingerprints (MACCS, ECFP4, FCFP4, AtomPair, TopoTorsion), 1 thread | RDKit 0.66–1.12 ms/mol | 89–114 µs/mol | **7–10×** |
 | all CDK descriptors and fingerprints (243 columns, 9 fingerprints, 2 count fingerprints), 1,277 molecules, 1 thread | CDK 232 s | 0.58 s | **~400×** |
 | catalogue + fingerprints, all 14 cores | RDKit 744 mol/s | ~6,400 mol/s with the *full* bundle | **8.6×** |
-| CLI, 100,000 molecules, full bundle, all cores | – | 17.0 s (5,870 mol/s), 880 MB peak RSS | – |
+| CLI, 100,000 molecules, full bundle, all cores | – | 16.8 s (5,950 mol/s), 190 MB peak RSS | – |
 
 The FerrumChem full bundle computes 2,157 scalar columns, 2 count fingerprints
 (5,167 counts) and 14 bit fingerprints (18,503 bits): the complete RDKit
@@ -74,9 +74,9 @@ writing.
 
 | `ferrum_cli calc`, mixed set, full bundle | wall time | molecules/s | peak RSS |
 |---|---|---|---|
-| 10,000 molecules, 1 thread | 15.9 s | 628 | 247 MB (156 MB with `--count-fingerprints sparse`) |
-| 10,000 molecules, 14 cores | 1.60 s | 6,247 | 660 MB |
-| 100,000 molecules, 14 cores | 17.0 s | 5,872 | 882 MB (730 MB sparse) |
+| 10,000 molecules, 1 thread | 15.2 s | 657 | 55 MB (53 MB with `--count-fingerprints sparse`) |
+| 10,000 molecules, 14 cores | 1.69 s | 5,920 | 161 MB (145 MB sparse) |
+| 100,000 molecules, 14 cores | 16.8 s | 5,950 | 191 MB (177 MB sparse) |
 
 (The parity-set run on all cores, 0.40 s for 1,273 molecules, is dominated by
 process start-up.)
@@ -102,24 +102,71 @@ compute the Mordred columns).
 
 ## Streaming and memory
 
-The CLI reads its input in chunks (`--chunk-size`, default 1,024 records),
-computes several chunks concurrently, formats the CSV rows in the worker pool
-and writes them in input order, so memory does not grow with the input length.
-The number of records in flight is bounded by a budget of 4 million output
-values, so wider rows mean fewer records in flight. The CLI uses mimalloc as
-its allocator: with the macOS system allocator the peak RSS of a
-single-threaded 10,000-molecule run was 442 MB instead of 135 MB, because freed
-chunk buffers were not returned.
+The CLI reads its input record by record and hands it to the worker pool in
+blocks of a few records (8–9 on 14 cores); each task parses its records,
+calculates one molecule at a time and formats its CSV row right away, and the
+main thread writes the blocks in input order. No descriptor table is built:
+a task needs one row of values (7,324 `f64`), and the only per-record buffer is
+the formatted row (about 38 KB with count columns, 29 KB sparse) until it is
+written. At most about `--chunk-size` records (default 1,024) are in flight —
+read but not yet written — so a slow molecule holds back at most that many
+finished rows while the other cores continue; fewer records in flight save
+memory but can leave cores idle (512: 10% slower on 10,000 molecules; 2,048:
+up to 7% faster, +40–50 MB).
 
-| input | peak RSS, count columns (default) | peak RSS, `--count-fingerprints sparse` |
-|---|---|---|
-| 10,000 molecules, 1 thread | 247 MB | 156 MB |
-| 10,000 molecules, 14 cores | 660 MB | – |
-| 100,000 molecules, 14 cores | 882 MB | 730 MB |
+Peak RSS before and after this design (same machine, same day, identical
+output bytes):
+
+| input | before | after | after, `--count-fingerprints sparse` (before) |
+|---|---|---|---|
+| 5,000 molecules, 14 cores | 524 MB, 0.87 s | 121 MB, 0.89 s | – |
+| 10,000 molecules, 1 thread | 247 MB, 15.2 s | 55 MB, 15.2 s | 53 MB (142 MB) |
+| 10,000 molecules, 14 cores | 586 MB, 1.77 s | 161 MB, 1.69 s | 145 MB (442 MB) |
+| 100,000 molecules, 14 cores | 819 MB, 17.7 s | 191 MB, 16.8 s | 177 MB (641 MB) |
+
+Where the memory went before (10,000 molecules; measured with a counting
+allocator and per-thread counters):
+
+- the `f64` table of a 1,024-record chunk: 1,024 × 7,324 × 8 B = 60 MB, with
+  up to two chunks in flight;
+- the chunk's formatted CSV (39 MB with count columns), built in 64-row
+  blocks and then concatenated, i.e. twice at once;
+- per-thread scratch kept at the size of the largest molecule seen: 18 MB per
+  thread after 10,000 molecules, 21 MB after 100,000, mostly the Mordred
+  matrix workspace (dense matrices of all eleven weightings); 14 threads
+  ≈ 250–300 MB;
+- mimalloc's arena: with many 10–512 KB blocks (row buffers, matrices of
+  medium-sized molecules) per thread its medium/large pages kept about
+  140 MB more address space resident than was in use (macOS counts purged
+  pages as resident until they are reused).
+
+What changed:
+
+- rows are calculated and formatted one at a time per task
+  (`CsvRowFormatter`), with in-flight records bounded as described above;
+- scratch buffers larger than 512 KB (`CalculationContext::trim`, after each
+  molecule) and the Mordred matrix workspace after molecules with more than
+  96 atoms are freed, so a thread keeps about 3 MB between molecules instead
+  of 18–21 MB; very large molecules re-allocate their buffers (no measurable
+  cost: < 1% single-threaded on the 300 largest molecules of the mixed set);
+- the CLI's allocator takes blocks of 10 KB and more from the system
+  allocator and everything smaller from mimalloc (all-system was 12% more CPU
+  time, all-mimalloc 120–300 MB more RSS).
+
+The Python bindings write the scalar values of each 4,096-molecule chunk
+straight into the output matrix (`DescriptorCalculator::calculate_into`)
+instead of building a chunk table and copying it: 10,000 molecules need
+788 MB instead of 888 MB peak RSS for 581 MB of output arrays (sparse counts:
+602 instead of 805 MB for 384 MB). The TUI uses the CLI's streaming pipeline
+and keeps a 100-row preview (it kept the full first 4,096-row table before,
+240 MB with the full bundle).
 
 Peak memory depends on the largest molecules and the number of threads
-working at once, not on the file size. CSV size for 100,000 molecules with the
-full bundle: 4.0 GB with hex-packed fingerprints and count columns (default),
+working at once, not on the file size. The process itself (code, compiled
+SMARTS patterns, lookup tables) takes about 27 MB. `descriptor_timing`
+(single-threaded descriptor calculation, system allocator) peaks at 56 MB on
+10,000 molecules (67 MB before). CSV size for 100,000 molecules with the full
+bundle: 4.0 GB with hex-packed fingerprints and count columns (default),
 3.0 GB with `--count-fingerprints sparse`.
 
 ## Cost per descriptor family
@@ -162,6 +209,7 @@ needs it pays for it and the others read the per-molecule cache.
 | shared characteristic polynomial (Ipc/AvgIpc), exact integer bond-order distances (BalabanJ/BertzCT), shared path table (Chi/ChiN/Kappa), shared stereo perception (SPS/StereoCenters), single-pass CDK Chi subgraph enumeration | 605 → 167 µs/mol for these descriptors |
 | WTPT: pendant trees folded, degree-2 chains contracted, memoised search over reachable core regions for > 8 rings | ladder polyether 40.4 s → < 10 ms; average 804 → 29 µs/mol |
 | CLI: chunked streaming with several chunks in flight, CSV formatting in the worker pool (`ryu`/`itoa`) | 100,000 molecules: 81 s → 7 s |
+| CLI: rows calculated and formatted one at a time in small ordered blocks, per-thread scratch trimmed after large molecules, large blocks from the system allocator | 100,000 molecules, full bundle: 819 → 191 MB peak RSS at the same speed |
 | BCUT solver: 4 matrices per SIMD pass with fused passes; band reduction (reverse Cuthill–McKee + Schwarz) for large sparse Burden matrices | BCUT 104 → 78, BCUT2D 28 → 20 µs/mol; a 344-atom peptide 32.7 → 5.7 ms |
 | Mordred MolecularId / InformationContent / Chi / PathCount: per-block branch lists, single-neighbour atoms folded into their neighbour, bitset subgraph search, paths of pendant atoms derived from their parent | 192 → 129 µs/mol for the four |
 | Mordred matrices: dense spectra in SIMD lanes, 8 Barysz weightings in one Floyd–Warshall, detour search with dominance memo and tighter bounds | 351 → 207 µs/mol; worst molecule on 100k 1.33 s → 0.19 s |

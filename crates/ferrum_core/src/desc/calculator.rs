@@ -24,7 +24,10 @@ use rayon::prelude::*;
 
 use super::batch::BatchDescriptor;
 use super::context::CalculationContext;
-use super::table::{compute_table, Cancelled, CountFingerprintFormat, DescriptorTable, MoleculeSlot, TableLayout};
+use super::table::{
+    compute_table, compute_table_into, Cancelled, CountFingerprintFormat, CsvRowFormatter, DescriptorTable, FingerprintFormat,
+    MoleculeSlot, TableLayout,
+};
 use crate::io::smiles::parse_smiles;
 use crate::mol::molecule::Molecule;
 
@@ -34,11 +37,16 @@ thread_local! {
 }
 
 /// Runs `f` with this thread's calculation context, reset for a new molecule.
+/// Afterwards buffers grown beyond a few typical molecules' worth by a very
+/// large molecule are freed, so a thread's scratch memory does not stay at the
+/// size of the largest molecule it has seen.
 pub(crate) fn with_thread_context<R>(f: impl FnOnce(&mut CalculationContext) -> R) -> R {
     CONTEXT.with(|cell| match cell.try_borrow_mut() {
         Ok(mut ctx) => {
             ctx.reset_for_new_molecule();
-            f(&mut ctx)
+            let r = f(&mut ctx);
+            ctx.trim();
+            r
         }
         // re-entrant use on the same thread: use a fresh context
         Err(_) => f(&mut CalculationContext::new()),
@@ -124,6 +132,36 @@ impl DescriptorCalculator {
             Ok(table) => table,
             Err(Cancelled) => unreachable!("never cancelled"),
         }
+    }
+
+    /// [`Self::calculate`] with the scalar values written to `scalars`
+    /// (`molecules.len() x n_scalars`, row-major; every value is overwritten)
+    /// instead of the returned table, whose `scalars` is empty. Fills a
+    /// preallocated output matrix chunk by chunk without a temporary copy.
+    ///
+    /// ```
+    /// use ferrum_core::desc::batch::BatchDescriptor;
+    /// use ferrum_core::desc::calculator::DescriptorCalculator;
+    /// use ferrum_core::io::smiles::parse_smiles;
+    ///
+    /// let calc = DescriptorCalculator::new(&[BatchDescriptor::HeavyAtomCount, BatchDescriptor::MaccsKeys]);
+    /// let mols = [parse_smiles("CCO").ok(), None];
+    /// let mut out = vec![0.0; 2 * calc.layout().n_scalars()];
+    /// let table = calc.calculate_into(&mols, &mut out);
+    /// assert!(table.scalars.is_empty() && table.fingerprints.len() == 1);
+    /// assert!(out[0] == 3.0 && out[1].is_nan());
+    /// ```
+    pub fn calculate_into<M: MoleculeSlot>(&self, molecules: &[M], scalars: &mut [f64]) -> DescriptorTable {
+        match compute_table_into(molecules, &self.layout, &|| false, scalars) {
+            Ok(table) => table,
+            Err(Cancelled) => unreachable!("never cancelled"),
+        }
+    }
+
+    /// Formatter that calculates and writes CSV rows one record at a time
+    /// (see [`CsvRowFormatter`]; columns as [`super::table::write_csv_header`]).
+    pub fn csv_rows(&self, fp_format: FingerprintFormat) -> CsvRowFormatter<'_> {
+        CsvRowFormatter::new(&self.layout, fp_format)
     }
 
     /// [`Self::calculate`] with cooperative cancellation between molecules.

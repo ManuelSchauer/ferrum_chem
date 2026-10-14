@@ -339,17 +339,36 @@ where
     M: MoleculeSlot,
     F: Fn() -> bool + Sync,
 {
+    let mut scalars = vec![f64::NAN; molecules.len() * layout.n_scalars];
+    let mut table = compute_table_into(molecules, layout, should_cancel, &mut scalars)?;
+    table.scalars = scalars;
+    Ok(table)
+}
+
+/// [`compute_table`] with the scalar values written to `scalars`
+/// (`molecules.len() x n_scalars`, row-major; overwritten completely) instead
+/// of the returned table, whose `scalars` stays empty.
+pub(crate) fn compute_table_into<M, F>(
+    molecules: &[M],
+    layout: &TableLayout,
+    should_cancel: &F,
+    scalars: &mut [f64],
+) -> Result<DescriptorTable, Cancelled>
+where
+    M: MoleculeSlot,
+    F: Fn() -> bool + Sync,
+{
     let rows = molecules.len();
     let ns = layout.n_scalars;
+    assert_eq!(scalars.len(), rows * ns, "scalar buffer has the wrong size");
+    scalars.fill(f64::NAN);
     let fp_words = layout.fingerprint_words();
     let total_words: usize = fp_words.iter().sum();
 
-    let mut scalars = vec![f64::NAN; rows * ns];
     // all fingerprints of a row side by side; split into blocks afterwards
     let mut fp_all = vec![0u64; rows * total_words];
     let mut valid = vec![false; rows];
     // sparse count fingerprints: the non-zero (key, count) pairs of each row
-    let n_counts = layout.count_fingerprints.len();
     let mut count_rows: Vec<Vec<Vec<(u16, u32)>>> = vec![Vec::new(); rows];
 
     // `par_chunks_mut(0)` panics, so empty segments use a dummy chunk size
@@ -362,21 +381,7 @@ where
         }
         let Some(mol) = slot.molecule() else { return Ok(()) };
         *ok = true;
-        super::calculator::with_thread_context(|ctx| {
-            let mut offset = 0;
-            for &d in &layout.scalars {
-                d.write_into(mol, srow, &mut offset, ctx);
-            }
-            debug_assert_eq!(offset, srow.len().min(ns));
-            if n_counts > 0 {
-                crow.extend(layout.count_fingerprints.iter().map(|&d| sparse_counts(d.calculate(mol, ctx))));
-            }
-            let mut word = 0;
-            for (&d, &nw) in layout.fingerprints.iter().zip(&fp_words) {
-                pack_bits(d.calculate(mol, ctx), &mut frow[word..word + nw]);
-                word += nw;
-            }
-        });
+        compute_row(layout, &fp_words, mol, srow, frow, crow);
         Ok(())
     };
 
@@ -408,6 +413,7 @@ where
         });
         word += nw;
     }
+    drop(fp_all);
 
     let counts = layout
         .count_fingerprints
@@ -438,11 +444,122 @@ where
     Ok(DescriptorTable {
         rows,
         scalar_names: layout.scalar_names.clone(),
-        scalars,
+        scalars: Vec::new(),
         fingerprints,
         counts,
         valid,
     })
+}
+
+/// All values of one molecule: scalars into `srow` (NaN-filled, `n_scalars`
+/// long), the fingerprints side by side into `frow` (zeroed; `fp_words[i]`
+/// words for fingerprint `i`) and the non-zero pairs of every sparse count
+/// fingerprint appended to `crow`. Runs on the calling thread with its
+/// calculation context.
+fn compute_row(
+    layout: &TableLayout,
+    fp_words: &[usize],
+    mol: &Molecule,
+    srow: &mut [f64],
+    frow: &mut [u64],
+    crow: &mut Vec<Vec<(u16, u32)>>,
+) {
+    super::calculator::with_thread_context(|ctx| {
+        let mut offset = 0;
+        for &d in &layout.scalars {
+            d.write_into(mol, srow, &mut offset, ctx);
+        }
+        debug_assert_eq!(offset, srow.len().min(layout.n_scalars));
+        if !layout.count_fingerprints.is_empty() {
+            crow.extend(layout.count_fingerprints.iter().map(|&d| sparse_counts(d.calculate(mol, ctx))));
+        }
+        let mut word = 0;
+        for (&d, &nw) in layout.fingerprints.iter().zip(fp_words) {
+            pack_bits(d.calculate(mol, ctx), &mut frow[word..word + nw]);
+            word += nw;
+        }
+    });
+}
+
+/// Computes and formats CSV rows one record at a time, without a
+/// [`DescriptorTable`]: the bytes are the same as [`write_csv_rows`] gives for
+/// a table of the same records, but the memory needed is one row of values,
+/// however many rows are formatted. Use one per thread (e.g. per task of a
+/// streaming pipeline); the molecule is calculated on the calling thread.
+///
+/// ```
+/// use ferrum_core::desc::batch::BatchDescriptor;
+/// use ferrum_core::desc::calculator::DescriptorCalculator;
+/// use ferrum_core::desc::table::{CsvRowFormatter, FingerprintFormat};
+/// use ferrum_core::io::smiles::parse_smiles;
+///
+/// let calc = DescriptorCalculator::new(&[BatchDescriptor::HeavyAtomCount, BatchDescriptor::MaccsKeys]);
+/// let mut rows = CsvRowFormatter::new(calc.layout(), FingerprintFormat::OnBits);
+/// let mut out = Vec::new();
+/// rows.write_row(&mut out, "CCO", parse_smiles("CCO").ok().as_ref());
+/// rows.write_row(&mut out, "bad", None);
+/// let text = String::from_utf8(out).unwrap();
+/// assert!(text.starts_with("CCO,3,"));
+/// assert!(text.ends_with("\nbad,,\n"));
+/// ```
+pub struct CsvRowFormatter<'a> {
+    layout: &'a TableLayout,
+    fp_format: FingerprintFormat,
+    fp_words: Vec<usize>,
+    /// `(first word in `words`, words, bits)` of every fingerprint
+    fp_shapes: Vec<(usize, usize, usize)>,
+    scalars: Vec<f64>,
+    words: Vec<u64>,
+    counts: Vec<Vec<(u16, u32)>>,
+}
+
+impl<'a> CsvRowFormatter<'a> {
+    /// Formatter for the columns of `layout` (see [`write_csv_header`]).
+    pub fn new(layout: &'a TableLayout, fp_format: FingerprintFormat) -> Self {
+        let fp_words = layout.fingerprint_words();
+        let mut word = 0;
+        let fp_shapes = layout
+            .fingerprints
+            .iter()
+            .zip(&fp_words)
+            .map(|(d, &nw)| {
+                word += nw;
+                (word - nw, nw, d.feature_len())
+            })
+            .collect();
+        Self {
+            layout,
+            fp_format,
+            fp_shapes,
+            scalars: vec![f64::NAN; layout.n_scalars],
+            words: vec![0; word],
+            counts: Vec::with_capacity(layout.count_fingerprints.len()),
+            fp_words,
+        }
+    }
+
+    /// Calculates `molecule` (`None`: a record that could not be parsed, which
+    /// gets empty cells) and appends its CSV row with the trailing newline;
+    /// `id` is the first column.
+    pub fn write_row(&mut self, out: &mut Vec<u8>, id: &str, molecule: Option<&Molecule>) {
+        self.scalars.fill(f64::NAN);
+        self.words.fill(0);
+        self.counts.clear();
+        if let Some(mol) = molecule {
+            compute_row(self.layout, &self.fp_words, mol, &mut self.scalars, &mut self.words, &mut self.counts);
+        }
+        let (words, counts) = (&self.words, &self.counts);
+        format_row(
+            out,
+            id,
+            molecule.is_some(),
+            &self.scalars,
+            self.fp_shapes.iter().map(|&(start, nw, bits)| (&words[start..start + nw], bits)),
+            // one cell per count fingerprint, also for rows without a molecule
+            (0..self.layout.count_fingerprints.len()).map(|i| counts.get(i).map_or(&[][..], Vec::as_slice).iter().copied()),
+            self.fp_format,
+        );
+    }
 }
 
 /// The non-zero `(key index, count)` pairs of a count fingerprint value.
@@ -558,65 +675,95 @@ pub fn format_csv_rows_par(ids: &[String], table: &DescriptorTable, fp_format: F
 
 /// Appends row `r` (with trailing newline) to `line`.
 fn format_csv_row(line: &mut Vec<u8>, ids: &[String], table: &DescriptorTable, r: usize, fp_format: FingerprintFormat) {
+    format_row(
+        line,
+        ids.get(r).map(String::as_str).unwrap_or_default(),
+        table.valid[r],
+        table.scalar_row(r),
+        table.fingerprints.iter().map(|fp| (fp.row(r), fp.n_bits)),
+        table.counts.iter().map(|block| {
+            let (keys, counts) = block.row(r);
+            keys.iter().copied().zip(counts.iter().copied())
+        }),
+        fp_format,
+    );
+}
+
+/// Appends one CSV row (with trailing newline) to `line`: the identifier, the
+/// scalar values, every fingerprint as `(packed words, bits)` and the non-zero
+/// `(key, count)` pairs of every sparse count fingerprint. Rows that are not
+/// `ok` get empty cells.
+fn format_row<'r, P: Iterator<Item = (u16, u32)>>(
+    line: &mut Vec<u8>,
+    id: &str,
+    ok: bool,
+    scalars: &[f64],
+    fingerprints: impl Iterator<Item = (&'r [u64], usize)>,
+    counts: impl Iterator<Item = P>,
+    fp_format: FingerprintFormat,
+) {
     const HEX: &[u8; 16] = b"0123456789abcdef";
-    {
-        write_csv_field(line, ids.get(r).map(String::as_str).unwrap_or_default());
-        let ok = table.valid[r];
-        for &v in table.scalar_row(r) {
-            line.push(b',');
-            if ok {
-                write_f64(line, v);
-            }
+    write_csv_field(line, id);
+    for &v in scalars {
+        line.push(b',');
+        if ok {
+            write_f64(line, v);
         }
-        for fp in &table.fingerprints {
-            match fp_format {
-                FingerprintFormat::Hex => {
-                    line.push(b',');
-                    if ok {
-                        for byte in fp.row(r).iter().flat_map(|w| w.to_le_bytes()).take(fp.bytes_per_row()) {
-                            line.push(HEX[(byte >> 4) as usize]);
-                            line.push(HEX[(byte & 15) as usize]);
-                        }
+    }
+    for (words, n_bits) in fingerprints {
+        match fp_format {
+            FingerprintFormat::Hex => {
+                line.push(b',');
+                if ok {
+                    for byte in words.iter().flat_map(|w| w.to_le_bytes()).take(n_bits.div_ceil(8)) {
+                        line.push(HEX[(byte >> 4) as usize]);
+                        line.push(HEX[(byte & 15) as usize]);
                     }
                 }
-                FingerprintFormat::OnBits => {
-                    line.push(b',');
-                    if ok {
-                        for (k, bit) in fp.on_bits(r).enumerate() {
-                            if k > 0 {
+            }
+            FingerprintFormat::OnBits => {
+                line.push(b',');
+                if ok {
+                    let mut first = true;
+                    for (w, &word) in words.iter().enumerate() {
+                        let mut rest = word;
+                        while rest != 0 {
+                            let bit = w * 64 + rest.trailing_zeros() as usize;
+                            rest &= rest - 1;
+                            if !first {
                                 line.push(b' ');
                             }
+                            first = false;
                             line.extend_from_slice(itoa::Buffer::new().format(bit).as_bytes());
                         }
                     }
                 }
-                FingerprintFormat::Bits => {
-                    for bit in 0..fp.n_bits {
-                        line.push(b',');
-                        if ok {
-                            line.push(if fp.get(r, bit) { b'1' } else { b'0' });
-                        }
+            }
+            FingerprintFormat::Bits => {
+                for bit in 0..n_bits {
+                    line.push(b',');
+                    if ok {
+                        line.push(if words[bit / 64] >> (bit % 64) & 1 == 1 { b'1' } else { b'0' });
                     }
                 }
-                FingerprintFormat::None => {}
             }
+            FingerprintFormat::None => {}
         }
-        for block in &table.counts {
-            line.push(b',');
-            if ok {
-                let (keys, counts) = block.row(r);
-                for (k, (&key, &count)) in keys.iter().zip(counts).enumerate() {
-                    if k > 0 {
-                        line.push(b' ');
-                    }
-                    line.extend_from_slice(itoa::Buffer::new().format(key).as_bytes());
-                    line.push(b':');
-                    line.extend_from_slice(itoa::Buffer::new().format(count).as_bytes());
-                }
-            }
-        }
-        line.push(b'\n');
     }
+    for pairs in counts {
+        line.push(b',');
+        if ok {
+            for (k, (key, count)) in pairs.enumerate() {
+                if k > 0 {
+                    line.push(b' ');
+                }
+                line.extend_from_slice(itoa::Buffer::new().format(key).as_bytes());
+                line.push(b':');
+                line.extend_from_slice(itoa::Buffer::new().format(count).as_bytes());
+            }
+        }
+    }
+    line.push(b'\n');
 }
 
 /// Shortest round-trip representation; integral values without fraction.

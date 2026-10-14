@@ -1,11 +1,11 @@
 use clap::{Parser, Subcommand, ValueEnum};
 use ferrum_core::desc::table::{CountFingerprintFormat, FingerprintFormat};
-use ferrum_cli::calc::run_calc_with_counts;
+use ferrum_cli::calc::{run_calc_with_counts, DEFAULT_IN_FLIGHT};
 use ferrum_cli::tui::run_tui;
 use std::path::PathBuf;
 
 #[global_allocator]
-static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+static GLOBAL: ferrum_cli::alloc::Allocator = ferrum_cli::alloc::Allocator;
 
 #[derive(Parser)]
 #[command(name = "ferrum_cli")]
@@ -41,8 +41,9 @@ enum Commands {
         #[arg(long, value_enum, default_value_t = CountFormat::Columns)]
         count_fingerprints: CountFormat,
 
-        /// Records processed per chunk (memory scales with this)
-        #[arg(long, default_value_t = 1024)]
+        /// Records in flight: read but not yet written (memory scales with
+        /// this; fewer can leave cores idle behind a slow molecule)
+        #[arg(long, default_value_t = DEFAULT_IN_FLIGHT)]
         chunk_size: usize,
     },
     /// Launch the interactive Terminal User Interface (TUI)

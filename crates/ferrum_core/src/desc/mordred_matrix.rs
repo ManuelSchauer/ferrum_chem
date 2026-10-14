@@ -117,6 +117,10 @@ const MAX_BATCH_VALUES: usize = 1 << 20;
 /// two per pass are as fast: the working set outgrows the L1 cache).
 const QUAD_MAX_N: usize = 56;
 
+/// Largest molecule (atoms) whose buffers the per-thread [`Workspace`] keeps
+/// for the next molecule (about 1 MB).
+const KEEP_WORKSPACE_ATOMS: usize = 96;
+
 /// Reusable buffers (one per thread).
 #[derive(Default)]
 struct Workspace {
@@ -199,7 +203,15 @@ pub fn mordred_matrix(mol: &Molecule, ctx: &mut CalculationContext) -> Vec<f64> 
     if dist[..n].contains(&DIST_INF) {
         return out; // disconnected (Mordred `require_connected`)
     }
-    WORKSPACE.with(|ws| fill(mol, dist, &mut ws.borrow_mut(), MAX_BATCH_VALUES, &mut out));
+    WORKSPACE.with(|ws| {
+        let mut ws = ws.borrow_mut();
+        fill(mol, dist, &mut ws, MAX_BATCH_VALUES, &mut out);
+        if n > KEEP_WORKSPACE_ATOMS {
+            // the buffers grow with n^2 (up to ~20 MB per thread): keep them
+            // only at the size of typical molecules
+            *ws = Workspace::default();
+        }
+    });
     out
 }
 

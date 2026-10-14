@@ -42,6 +42,8 @@ fn main() {
         let Ok(mol) = parse_smiles(&line) else { continue };
         parse += t.elapsed();
         n += 1;
+        // as `DescriptorCalculator` does between molecules
+        ctx.trim();
         ctx.reset_for_new_molecule();
         for (i, d) in descriptors.iter().enumerate() {
             let t = Instant::now();

@@ -28,6 +28,31 @@ enum Raw {
     Error(String),
 }
 
+/// One input record as read, not yet parsed ([`MoleculeReader::next_record`]);
+/// [`RawRecord::parse`] turns it into an [`InputRecord`], e.g. on a worker
+/// thread.
+pub struct RawRecord {
+    id: String,
+    raw: Raw,
+}
+
+impl RawRecord {
+    /// Identifier of the record (SMILES text or SDF title).
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+
+    /// Parses the molecule (SMILES or molfile block).
+    pub fn parse(self) -> InputRecord {
+        let molecule = match self.raw {
+            Raw::Smiles(s) => super::smiles::parse_smiles(&s).map_err(|e| e.to_string()),
+            Raw::MolBlock(b) => super::sdf::parse_mol_block(&b).map_err(|e| e.to_string()),
+            Raw::Error(e) => Err(e),
+        };
+        InputRecord { id: self.id, molecule }
+    }
+}
+
 enum Source {
     Smiles(BufReader<File>),
     Csv { reader: csv::Reader<File>, smiles_idx: usize },
@@ -87,9 +112,9 @@ impl MoleculeReader {
 
     /// Reads and parses the next chunk; `None` at end of input.
     pub fn next_chunk(&mut self) -> Result<Option<Vec<InputRecord>>> {
-        let mut raw: Vec<(String, Raw)> = Vec::with_capacity(self.chunk_size);
+        let mut raw = Vec::with_capacity(self.chunk_size);
         while raw.len() < self.chunk_size {
-            match self.next_raw()? {
+            match self.next_record()? {
                 Some(r) => raw.push(r),
                 None => break,
             }
@@ -97,18 +122,12 @@ impl MoleculeReader {
         if raw.is_empty() {
             return Ok(None);
         }
-        Ok(Some(
-            raw.into_par_iter()
-                .map(|(id, raw)| {
-                    let molecule = match raw {
-                        Raw::Smiles(s) => super::smiles::parse_smiles(&s).map_err(|e| e.to_string()),
-                        Raw::MolBlock(b) => super::sdf::parse_mol_block(&b).map_err(|e| e.to_string()),
-                        Raw::Error(e) => Err(e),
-                    };
-                    InputRecord { id, molecule }
-                })
-                .collect(),
-        ))
+        Ok(Some(raw.into_par_iter().map(RawRecord::parse).collect()))
+    }
+
+    /// Reads the next record without parsing it; `None` at end of input.
+    pub fn next_record(&mut self) -> Result<Option<RawRecord>> {
+        Ok(self.next_raw()?.map(|(id, raw)| RawRecord { id, raw }))
     }
 
     fn next_raw(&mut self) -> Result<Option<(String, Raw)>> {

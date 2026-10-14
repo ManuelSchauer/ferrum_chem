@@ -29,8 +29,9 @@ the same molecule always gives the same numbers as RDKit/CDK/Mordred would.
   7–10× faster, all CDK descriptors and fingerprints ~400× faster than CDK. On all cores
   the CLI processes about 6,000 molecules per second with the full bundle
   (7,324 numeric columns + 14 fingerprints).
-- **Constant memory.** Input is streamed in chunks; 100,000 molecules need
-  about 0.7–0.9 GB peak, the same order as 10,000.
+- **Constant memory.** Input is streamed and each row is formatted as soon as
+  it is calculated; 100,000 molecules need about 190 MB peak on 14 cores,
+  10,000 about 160 MB (55 MB on one core).
 - **One chemistry model.** A port of RDKit's `SanitizeMol` (valence model,
   Kekulé assignment, aromaticity, conjugation, hybridization, ring
   perception) is used everywhere. Where CDK descriptors depend on CDK's own
@@ -72,8 +73,8 @@ cargo build --release -p ferrum_cli
 # all descriptors for a SMILES, CSV or SDF file
 target/release/ferrum_cli calc -i molecules.smi -o descriptors.csv
 
-# fingerprints as on-bit lists instead of hex, smaller chunks for less memory
-target/release/ferrum_cli calc -i molecules.sdf -o descriptors.csv --fingerprints onbits --chunk-size 1024
+# fingerprints as on-bit lists instead of hex, fewer records in flight for less memory
+target/release/ferrum_cli calc -i molecules.sdf -o descriptors.csv --fingerprints onbits --chunk-size 512
 
 # interactive terminal UI: load a dataset, pick descriptors, preview, export
 target/release/ferrum_cli tui
@@ -319,8 +320,8 @@ more tables).
 |---|---|---|
 | all CDK descriptors and fingerprints, 1,277 molecules, 1 thread | CDK 232 s | 0.58 s |
 | all cores, catalogue + fingerprints, 5,000 molecules | RDKit (multiprocessing) 744 mol/s | ~6,400 mol/s with the full bundle |
-| CLI, 100,000 molecules, all cores | – | 17.0 s, 5,870 mol/s, 880 MB peak RSS (730 MB with `--count-fingerprints sparse`) |
-| CLI, 10,000 molecules, 1 thread | – | 15.9 s, 250 MB peak RSS (156 MB sparse) |
+| CLI, 100,000 molecules, all cores | – | 16.8 s, 5,950 mol/s, 190 MB peak RSS (177 MB with `--count-fingerprints sparse`) |
+| CLI, 10,000 molecules, 1 thread | – | 15.2 s, 55 MB peak RSS (53 MB sparse) |
 
 Peak memory depends on the largest molecules and the number of threads, not
 on the input size. The most expensive families on a mixed set are the Mordred matrix
@@ -386,9 +387,11 @@ keys are stored, a few hundred bytes per molecule instead of 8 bytes per key.
   distance matrices, the characteristic polynomial, path tables, stereo
   perception and the CDK atom-type view). The calculator resets it before
   every molecule, so results never depend on the previous molecule.
-- **Parallelism** comes from Rayon. The CLI streams its input in chunks and
-  keeps several chunks in flight, so a single slow molecule does not stall the
-  other cores; the TUI streams the same way and keeps only a preview in memory.
+- **Parallelism** comes from Rayon. The CLI hands its input to the worker
+  pool in blocks of a few records and keeps about 1,024 records in flight, so
+  a single slow molecule does not stall the other cores; each row is formatted
+  as soon as it is calculated (no descriptor table is built). The TUI streams
+  the same way and keeps only a 100-row preview in memory.
 
 Repository layout:
 

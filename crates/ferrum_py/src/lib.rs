@@ -11,7 +11,8 @@ use pyo3::types::{PyDict, PyTuple};
 use rayon::prelude::*;
 
 /// SMILES processed per chunk: parsed molecules of one chunk are dropped before
-/// the next is parsed, so memory beyond the output arrays stays bounded.
+/// the next is parsed, and the scalar values are written straight into the
+/// output matrix, so memory beyond the output arrays stays bounded.
 const CHUNK: usize = 4096;
 
 fn to_numpy_2d<T: numpy::Element>(py: Python<'_>, data: Vec<T>, rows: usize, cols: usize) -> PyResult<PyObject> {
@@ -32,20 +33,33 @@ fn compute(py: Python<'_>, calc: &DescriptorCalculator, smiles: &[String]) -> Py
     let count_shapes = layout.count_fingerprint_shapes();
 
     let (scalars, fp_bytes, counts, valid) = py.allow_threads(|| {
-        let mut scalars = Vec::with_capacity(n_rows * ns);
+        // zero-initialised (pages are mapped as the chunks fill them)
+        let mut scalars = vec![0.0f64; n_rows * ns];
         let mut fp_bytes: Vec<Vec<u8>> =
             shapes.iter().map(|&(_, bits)| Vec::with_capacity(n_rows * bits.div_ceil(8))).collect();
         let mut counts: Vec<Vec<u32>> = count_shapes.iter().map(|&(_, keys)| Vec::with_capacity(n_rows * keys)).collect();
         let mut valid = Vec::with_capacity(n_rows);
-        for chunk in smiles.chunks(CHUNK) {
+        for (c, chunk) in smiles.chunks(CHUNK).enumerate() {
             let molecules: Vec<Option<Molecule>> = chunk.par_iter().map(|s| parse_smiles(s).ok()).collect();
-            let table = calc.calculate(&molecules);
-            scalars.extend_from_slice(&table.scalars);
+            let rows = c * CHUNK..c * CHUNK + chunk.len();
+            let table = calc.calculate_into(&molecules, &mut scalars[rows.start * ns..rows.end * ns]);
+            drop(molecules);
             for (out, block) in fp_bytes.iter_mut().zip(&table.fingerprints) {
-                out.extend(block.to_bytes());
+                // `FingerprintBlock::to_bytes` without the temporary copy
+                for r in 0..table.rows {
+                    out.extend(block.row(r).iter().flat_map(|w| w.to_le_bytes()).take(block.bytes_per_row()));
+                }
             }
             for (out, block) in counts.iter_mut().zip(&table.counts) {
-                out.extend(block.to_dense());
+                // `CountBlock::to_dense` without the temporary copy
+                let start = out.len();
+                out.resize(start + table.rows * block.n_keys, 0);
+                for r in 0..table.rows {
+                    let (keys, values) = block.row(r);
+                    for (&k, &c) in keys.iter().zip(values) {
+                        out[start + r * block.n_keys + k as usize] = c;
+                    }
+                }
             }
             valid.extend_from_slice(&table.valid);
         }

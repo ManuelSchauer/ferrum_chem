@@ -5,8 +5,10 @@ use crossterm::terminal::{
 };
 use ferrum_core::desc::batch::BatchDescriptor;
 use ferrum_core::desc::calculator::DescriptorCalculator;
-use ferrum_core::desc::table::{format_csv_rows_par, write_csv_header, DescriptorTable, FingerprintFormat};
+use crate::calc::{stream_csv, StreamError, DEFAULT_IN_FLIGHT};
+use ferrum_core::desc::table::{write_csv_header, DescriptorTable, FingerprintFormat};
 use ferrum_core::io::stream::MoleculeReader;
+use ferrum_core::mol::molecule::Molecule;
 use ratatui::prelude::*;
 use ratatui::widgets::{
     Block, Borders, Clear, List, ListItem, ListState, Paragraph, Row, Table, Tabs, Wrap,
@@ -27,6 +29,10 @@ const DEFAULT_EXPORT_PATH: &str = "/tmp/ferrum_descriptors.csv";
 
 /// Records shown in the dataset preview.
 const DATASET_PREVIEW: usize = 15;
+
+/// Records in the result preview (calculated once more after streaming; the
+/// full results are only in the results file).
+const RESULT_PREVIEW: usize = 100;
 
 /// `(identifier, heavy atoms)` of the first records of a dataset.
 type Preview = Vec<(String, String)>;
@@ -62,7 +68,7 @@ enum WorkerResponse {
         preview: Vec<(String, String)>,
     },
     DescriptorsCalculated {
-        /// The first chunk of results (for the preview).
+        /// The first [`RESULT_PREVIEW`] rows of the results (for the preview).
         matrix: DescriptorTable,
         feature_names: Vec<String>,
         rows: usize,
@@ -106,7 +112,7 @@ struct App {
     descriptors: Vec<(BatchDescriptor, bool)>,
     desc_list_state: ListState,
 
-    // Calculated results (preview of the first chunk; all rows are in `results_path()`)
+    // Calculated results (preview of the first rows; all rows are in `results_path()`)
     matrix: Option<DescriptorTable>,
     /// Scalar column names of `matrix` (fingerprints are not previewed).
     feature_names: Vec<String>,
@@ -543,8 +549,10 @@ fn count_records(path: &std::path::Path) -> Result<(usize, usize, Preview), Stri
     Ok((records, failed, preview))
 }
 
-/// Streams `path` through one calculator into `results_path()`. Returns the
-/// first chunk (preview) and the number of rows, or `None` when cancelled.
+/// Streams `path` through one calculator into `results_path()` (the same
+/// pipeline as `ferrum_cli calc`, so memory stays bounded). Returns a preview
+/// table of the first [`RESULT_PREVIEW`] records and the number of rows, or
+/// `None` when cancelled (or the file has no records).
 fn calculate_to_file(
     path: &std::path::Path,
     descriptors: &[BatchDescriptor],
@@ -552,28 +560,38 @@ fn calculate_to_file(
     resp_tx: &Sender<WorkerResponse>,
     should_cancel: &(dyn Fn() -> bool + Sync),
 ) -> Result<Option<(DescriptorTable, usize)>, String> {
-    let calc = DescriptorCalculator::new(descriptors);
+    let calc = Arc::new(DescriptorCalculator::new(descriptors));
+    let read_err = |e: String| format!("Failed to read '{}': {}", path.display(), e);
     let mut reader = MoleculeReader::open(path).map_err(|e| format!("Failed to open '{}': {}", path.display(), e))?;
     let out = results_path();
     let mut writer = BufWriter::new(File::create(&out).map_err(|e| format!("Failed to create '{}': {}", out.display(), e))?);
     let format = FingerprintFormat::Hex;
     let write_err = |e: io::Error| format!("Failed to write '{}': {}", out.display(), e);
     write_csv_header(&mut writer, reader.id_column(), calc.layout(), format).map_err(write_err)?;
-    let (mut first, mut rows) = (None, 0usize);
-    while let Some(chunk) = reader.next_chunk().map_err(|e| format!("Failed to read '{}': {}", path.display(), e))? {
-        let (ids, molecules): (Vec<_>, Vec<Option<_>>) = chunk.into_iter().map(|r| (r.id, r.molecule.ok())).unzip();
-        let Ok(table) = calc.calculate_cancellable(&molecules, &should_cancel) else {
-            return Ok(None);
-        };
-        io::Write::write_all(&mut writer, &format_csv_rows_par(&ids, &table, format)).map_err(write_err)?;
-        rows += table.rows;
-        let _ = resp_tx.send(WorkerResponse::Progress(rows as f32 / total.max(1) as f32));
-        if first.is_none() {
-            first = Some(table);
+    // about 200 progress messages per run
+    let (step, mut reported) = ((total / 200).max(1), 0);
+    let mut progress = |rows: usize| {
+        if rows >= reported + step || rows >= total {
+            reported = rows;
+            let _ = resp_tx.send(WorkerResponse::Progress(rows as f32 / total.max(1) as f32));
         }
-    }
+    };
+    let rows = match stream_csv(&mut reader, &calc, &mut writer, format, DEFAULT_IN_FLIGHT, &mut progress, should_cancel) {
+        Ok(Some(stats)) => stats.rows,
+        Ok(None) => return Ok(None),
+        Err(StreamError::Read(e)) => return Err(read_err(e)),
+        Err(StreamError::Write(e)) => return Err(write_err(e)),
+    };
     io::Write::flush(&mut writer).map_err(write_err)?;
-    Ok(first.map(|t| (t, rows)))
+    if rows == 0 {
+        return Ok(None);
+    }
+    let mut reader = MoleculeReader::open(path)
+        .map_err(|e| read_err(e.to_string()))?
+        .with_chunk_size(RESULT_PREVIEW);
+    let first = reader.next_chunk().map_err(|e| read_err(e.to_string()))?.unwrap_or_default();
+    let molecules: Vec<Option<Molecule>> = first.into_iter().map(|r| r.molecule.ok()).collect();
+    Ok(Some((calc.calculate(&molecules), rows)))
 }
 
 fn ui(f: &mut Frame, app: &mut App) {

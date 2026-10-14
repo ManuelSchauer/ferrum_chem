@@ -11,6 +11,10 @@
 use crate::mol::molecule::Molecule;
 use smallvec::SmallVec;
 
+/// Largest scratch buffer (bytes) a [`CalculationContext`] keeps between
+/// molecules (an `f64` distance matrix of 256 atoms).
+const KEEP_BYTES: usize = 512 * 1024;
+
 #[derive(Default)]
 /// Implements CalculationContext.
 pub struct CalculationContext {
@@ -176,6 +180,49 @@ impl CalculationContext {
             estates_key: None,
             cdk_path_fps: None,
             cdk_keys: Default::default(),
+        }
+    }
+
+    /// Frees scratch buffers larger than [`KEEP_BYTES`] (grown by a very
+    /// large molecule), so the memory a context keeps between molecules is a
+    /// few typical molecules' worth instead of the largest molecule seen.
+    /// Results are unaffected: every buffer is rebuilt on demand, as for a new
+    /// context.
+    pub fn trim(&mut self) {
+        fn trim<T>(v: &mut Vec<T>) {
+            if v.capacity() * std::mem::size_of::<T>() > KEEP_BYTES {
+                *v = Vec::new();
+            }
+        }
+        trim(&mut self.dist);
+        trim(&mut self.dist_bo);
+        trim(&mut self.dist_f64);
+        trim(&mut self.row_f64);
+        trim(&mut self.visited_bool);
+        trim(&mut self.weighted_neighbors);
+        trim(&mut self.bfs_queue);
+        trim(&mut self.bfs_dist);
+        trim(&mut self.bfs_visited_u64);
+        trim(&mut self.bfs_frontier_u64);
+        trim(&mut self.bfs_next_frontier_u64);
+        trim(&mut self.mat_a);
+        trim(&mut self.mat_b);
+        trim(&mut self.mat_c);
+        trim(&mut self.mat_d);
+        trim(&mut self.vec_a);
+        trim(&mut self.vec_b);
+        trim(&mut self.bertz_keys);
+        trim(&mut self.morgan_next_layer_u32);
+        trim(&mut self.morgan_dead_atoms);
+        trim(&mut self.morgan_neighbor_invariants);
+        trim(&mut self.morgan_features);
+        trim(&mut self.char_poly_abs);
+        trim(&mut self.bo_dist6);
+        trim(&mut self.estates);
+        let path_bytes: usize =
+            self.paths_by_len.iter().map(|p| p.capacity() * std::mem::size_of::<crate::types::AtomIdx>()).sum();
+        if path_bytes > KEEP_BYTES {
+            self.paths_by_len = Vec::new();
         }
     }
 
