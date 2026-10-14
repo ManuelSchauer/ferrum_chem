@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "crates/ferrum_core",
-    "crates/ferrum_cli"
+    "crates/ferrum_cli",
+    "crates/ferrum_py",
 ]
 resolver = "2"

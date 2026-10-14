@@ -1,0 +1,18 @@
+[package]
+name = "ferrum_py"
+version = "0.1.0"
+edition = "2024"
+license = "LGPL-2.1-or-later"
+authors = ["Manuel Schauer <info@ferrumchem.com>"]
+description = "Python bindings for FerrumChem"
+
+[lib]
+name = "ferrum_py"
+crate-type = ["cdylib"]
+
+[dependencies]
+ferrum_core = { path = "../ferrum_core" }
+pyo3 = { version = "0.23", features = ["extension-module"] }
+numpy = "0.23"
+ndarray = "0.16"
+rayon = "1.10"

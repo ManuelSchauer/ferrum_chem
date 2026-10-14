@@ -1,0 +1,5 @@
+# Allowed number of molecules per column that differ from Mordred (tests/common/parity.rs).
+# Regenerate with FERRUM_UPDATE_PARITY_BASELINE=1; only ever lower these numbers.
+# molecules: 1273
+VR1_A	1
+VR2_A	1

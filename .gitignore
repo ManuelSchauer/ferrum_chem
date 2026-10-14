@@ -19,3 +19,10 @@ target
 #  and can be added to the global gitignore or merged into this file.  For a more nuclear
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
 #.idea/
+coconut_csv_lite-02-2026.csv
+
+
+# Python virtualenv, macOS metadata
+.venv/
+.DS_Store
+.idea/
