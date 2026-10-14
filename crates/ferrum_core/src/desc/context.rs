@@ -74,10 +74,10 @@ pub struct CalculationContext {
     pub estates: Vec<f64>,
     pub estates_key: Option<u64>,
     pub(crate) cdk_path_fps: Option<(u64, Box<crate::desc::cdk_path_fingerprints::CdkPathFps>)>,
-    pub(crate) cdk_smarts_target: Option<(u64, Box<crate::desc::cdk_smarts_target::CdkSmartsTarget>)>,
-    /// CDK view and key counts of the CDK substructure-key fingerprints
-    /// (CDKSubstructure, KlekotaRoth and their counts).
-    pub(crate) cdk_keys: crate::desc::cdk_substructure::CdkKeyCache,
+    /// Prepared CDK SMARTS target and key counts of the CDK SMARTS-key
+    /// fingerprints (CDKMACCS, CDKEState, CDKSubstructure, KlekotaRoth and
+    /// their counts).
+    pub(crate) cdk_keys: crate::desc::cdk_smarts::CdkKeyCache,
 }
 
 #[inline]
@@ -165,7 +165,6 @@ impl CalculationContext {
             estates: Vec::new(),
             estates_key: None,
             cdk_path_fps: None,
-            cdk_smarts_target: None,
             cdk_keys: Default::default(),
         }
     }
@@ -202,7 +201,6 @@ impl CalculationContext {
         self.paths_key = None;
         self.estates_key = None;
         self.cdk_path_fps = None;
-        self.cdk_smarts_target = None;
         self.cdk_keys.reset();
     }
 }

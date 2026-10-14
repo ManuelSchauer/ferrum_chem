@@ -94,7 +94,6 @@ pub mod zagreb;
 pub mod cdk_path_fingerprints;
 pub mod cdk_maccs;
 pub mod cdk_estate_fp;
-mod cdk_smarts_target;
 pub mod cdk_logp;
 mod cdk_alogp;
 mod cdk_jplogp;

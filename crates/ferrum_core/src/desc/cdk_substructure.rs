@@ -9,7 +9,8 @@
 //! matches), the counts `getCountFingerprint` (per key the number of unique
 //! matches, CDK `Mappings.countUnique()`: distinct matched atom sets). CDK
 //! prepares the molecule once with `SmartsPattern.prepare` (ring flags and
-//! Daylight aromaticity); the SMARTS semantics are CDK's (see `cdk_smarts`).
+//! Daylight aromaticity); the SMARTS semantics are CDK's (see `cdk_smarts`,
+//! whose prepared molecule is shared with CDKMACCS and CDKEState).
 //!
 //! When a key set's bits and counts are both requested for a molecule the
 //! counts are computed once and the bits derived from them (`count > 0`).
@@ -17,9 +18,9 @@
 use bitvec::prelude::*;
 use once_cell::sync::Lazy;
 
-use super::cdk_smarts::{CdkTarget, KeySet};
+use super::cdk_smarts::KeySet;
 use super::cdk_substructure_keys::{CDK_SUBSTRUCTURE_SMARTS, KLEKOTA_ROTH_SMARTS};
-use super::context::{CalculationContext, molecule_cache_key};
+use super::context::CalculationContext;
 use super::typed::{Descriptor, DescriptorValue};
 use crate::mol::molecule::Molecule;
 
@@ -30,34 +31,6 @@ pub const KLEKOTA_ROTH_LEN: usize = 4860;
 
 static SUBSTRUCTURE_KEYS: Lazy<KeySet> = Lazy::new(|| KeySet::new(&CDK_SUBSTRUCTURE_SMARTS, false));
 static KLEKOTA_ROTH_KEYS: Lazy<KeySet> = Lazy::new(|| KeySet::new(&KLEKOTA_ROTH_SMARTS, true));
-
-/// Per-molecule cache shared by the four descriptors (in [`CalculationContext`]).
-#[derive(Default)]
-pub(crate) struct CdkKeyCache {
-    key: Option<u64>,
-    target: Option<CdkTarget>,
-    counts: [Option<Vec<u32>>; 2],
-}
-
-impl CdkKeyCache {
-    /// Forgets the cached molecule.
-    pub(crate) fn reset(&mut self) {
-        self.key = None;
-    }
-
-    fn select(&mut self, mol: &Molecule) {
-        let key = molecule_cache_key(mol);
-        if self.key != Some(key) {
-            self.key = Some(key);
-            self.target = None;
-            self.counts = [None, None];
-        }
-    }
-
-    fn target(&mut self, mol: &Molecule) -> &CdkTarget {
-        self.target.get_or_insert_with(|| CdkTarget::new(mol))
-    }
-}
 
 #[derive(Clone, Copy)]
 enum Keys {

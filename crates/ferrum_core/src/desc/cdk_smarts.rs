@@ -1,5 +1,6 @@
-//! CDK 2.13 SMARTS semantics for the CDK substructure-key fingerprints
-//! (`SubstructureFingerprinter`, `KlekotaRothFingerprinter`).
+//! CDK 2.13 SMARTS semantics for the CDK SMARTS-key fingerprints
+//! (`MACCSFingerprinter`, `EStateFingerprinter`, `SubstructureFingerprinter`,
+//! `KlekotaRothFingerprinter`).
 //!
 //! FerrumChem's general SMARTS engine (`io::smarts`, `algo::iso`) follows
 //! RDKit. CDK differs in perception (Kekulé bond orders, Daylight aromaticity
@@ -22,7 +23,8 @@
 //! The molecule is the CDK reference preparation (`SmilesParser`, atom types,
 //! implicit hydrogens) after `SmartsPattern.prepare` (ring flags +
 //! `Aromaticity.Model.Daylight`), rebuilt locally from the RDKit-perceived
-//! [`Molecule`] in [`CdkTarget::new`].
+//! [`Molecule`] in [`CdkTarget::new`]. It is built once per molecule and
+//! shared by all four fingerprints ([`CdkKeyCache`]).
 //!
 //! Speed (the 4,860 Klekota-Roth keys are matched in about 0.15 ms per
 //! molecule, CDK needs about 35 ms for bits and counts):
@@ -51,6 +53,8 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec::SmallVec;
 
 use super::cdk_daylight::{CdkMol, smarts_daylight_aromaticity};
+use super::cdk_perception::CdkView;
+use super::context::molecule_cache_key;
 use crate::mol::atom::ChiralTag;
 use crate::mol::molecule::Molecule;
 use crate::types::BondType;
@@ -1659,6 +1663,19 @@ impl KeySet {
             out[i] = if m.screen_key(i) { m.search(q, Mode::CountUnique) } else { 0 };
         }
     }
+
+    /// `Mappings.uniqueAtoms().atLeast(min[i])` of every key (`Pattern.matches`
+    /// for `min[i] <= 1`).
+    pub(crate) fn match_at_least(&self, t: &CdkTarget, min: &[u32], out: &mut [bool]) {
+        let mut m = Matcher::new(self, t);
+        for (i, q) in self.keys.iter().enumerate() {
+            out[i] = m.screen_key(i)
+                && match min[i] {
+                    0 | 1 => m.search(q, Mode::Exists) > 0,
+                    k => m.search(q, Mode::CountUnique) >= k,
+                };
+        }
+    }
 }
 
 // ===========================================================================
@@ -1684,6 +1701,21 @@ struct GeoT {
     config: u8,
 }
 
+/// Key-set independent matching data of a target, shared by the key sets.
+struct TargetIndex {
+    /// Classes of atoms with equal local properties: a representative and the
+    /// atom mask of each class, and the class of each atom.
+    class_rep: Vec<u32>,
+    class_mask: Vec<u64>,
+    class_of: Vec<u32>,
+    /// Target adjacency (CSR): neighbour and bond of each entry.
+    adj_start: Vec<u32>,
+    adj_nbr: Vec<u32>,
+    adj_bond: Vec<u32>,
+    /// Random atom keys for hashing matched atom sets.
+    zob: Vec<(u64, u64)>,
+}
+
 /// The CDK view of a molecule after `SmartsPattern.prepare`.
 pub(crate) struct CdkTarget {
     n: usize,
@@ -1691,7 +1723,7 @@ pub(crate) struct CdkTarget {
     charge: Vec<i8>,
     isotope: Vec<u16>,
     arom: Vec<bool>,
-    ring: Vec<bool>,
+    pub(super) ring: Vec<bool>,
     /// Implicit hydrogens (`CDKHydrogenAdder`).
     hcount: Vec<u8>,
     /// Implicit + hydrogen neighbours.
@@ -1699,13 +1731,14 @@ pub(crate) struct CdkTarget {
     /// Valence (implicit H + bond orders).
     valence: Vec<u16>,
     /// Neighbours (atom, bond) in CDK order.
-    adj: Vec<SmallVec<[(u32, u32); 4]>>,
+    pub(super) adj: Vec<SmallVec<[(u32, u32); 4]>>,
     ends: Vec<(u32, u32)>,
     order: Vec<u8>,
-    bond_arom: Vec<bool>,
-    bond_ring: Vec<bool>,
+    pub(super) bond_arom: Vec<bool>,
+    pub(super) bond_ring: Vec<bool>,
     /// Ring count per atom (minimum cycle basis), when a key set needs it.
     ring_count: std::cell::OnceCell<Vec<u8>>,
+    index: std::cell::OnceCell<TargetIndex>,
     tetra: Vec<Option<TetraT>>,
     /// Index into `geo` per atom (`u32::MAX`: none).
     geo_of: Vec<u32>,
@@ -1718,17 +1751,17 @@ impl CdkTarget {
     pub(crate) fn new(mol: &Molecule) -> Self {
         let mut m = CdkMol::new(mol);
         restore_cleaned_charges(mol, &mut m);
-        // implicit hydrogens as CDKHydrogenAdder assigns them from the CDK atom types
-        for a in 0..m.n() {
-            m.hcount[a] = super::pubchem_cdk::cdk_hydrogens(mol, a);
-        }
+        cdk_implicit_hydrogens(mol, &mut m.hcount);
         let n0 = m.n();
         let (mut arom, mut bond_arom) = smarts_daylight_aromaticity(&m);
         // CDK keeps the hydrogen atoms written in the SMILES (`[H]OC`), RDKit
         // folds them into their neighbour. For atoms written without brackets
         // the folded count is exactly `num_explicit_h` (RDKit's adjustHs only
-        // adds explicit H to aromatic N/P-type atoms, which are skipped); for
-        // bracket atoms it cannot be told apart from the bracket H count.
+        // adds explicit H to aromatic N/P-type atoms, which are skipped: `[nH]`,
+        // `N1C=CC=C1` and `[H]n1cccc1` look the same; a non-aromatic ring N/P
+        // keeps its hydrogen atom, `[H]N1CCCC1` has a three-connected N in
+        // CDK); for bracket atoms it cannot be told apart from the bracket H
+        // count.
         for a in 0..n0 {
             let atom = &mol.atoms[a];
             let k = atom.num_explicit_h.min(m.hcount[a]);
@@ -1849,11 +1882,75 @@ impl CdkTarget {
             bond_arom,
             bond_ring: m.ring_bond,
             ring_count: std::cell::OnceCell::new(),
+            index: std::cell::OnceCell::new(),
             tetra,
             geo_of,
             geo,
             comp,
         }
+    }
+
+    /// Number of atoms (with the hydrogen atoms of the SMILES).
+    pub(crate) fn num_atoms(&self) -> usize {
+        self.n
+    }
+
+    /// Some atom has a mass number.
+    pub(crate) fn has_isotope(&self) -> bool {
+        self.isotope.iter().any(|&i| i != 0)
+    }
+
+    /// Number of connected components.
+    pub(crate) fn num_components(&self) -> usize {
+        self.comp.iter().max().map_or(0, |&c| c as usize + 1)
+    }
+
+    /// The matching data shared by all key sets.
+    fn index(&self) -> &TargetIndex {
+        self.index.get_or_init(|| {
+            let (n, words) = (self.n, self.n.div_ceil(64).max(1));
+            let mut ix = TargetIndex {
+                class_rep: Vec::new(),
+                class_mask: Vec::new(),
+                class_of: Vec::with_capacity(n),
+                adj_start: Vec::with_capacity(n + 1),
+                adj_nbr: Vec::with_capacity(2 * self.ends.len()),
+                adj_bond: Vec::with_capacity(2 * self.ends.len()),
+                zob: (0..n as u32).map(zobrist).collect(),
+            };
+            let mut classes: FxHashMap<[u16; 8], u32> = FxHashMap::default();
+            for a in 0..n {
+                let ring_bonds = self.adj[a].iter().filter(|&&(_, b)| self.bond_ring[b as usize]).count();
+                let sig = [
+                    self.z[a] as u16 | (self.arom[a] as u16) << 8 | (self.ring[a] as u16) << 9,
+                    self.charge[a] as u8 as u16,
+                    self.hcount[a] as u16,
+                    self.total_h[a] as u16,
+                    self.adj[a].len() as u16,
+                    self.valence[a],
+                    self.isotope[a],
+                    ring_bonds as u16,
+                ];
+                let c = *classes.entry(sig).or_insert_with(|| {
+                    ix.class_rep.push(a as u32);
+                    ix.class_mask.resize(ix.class_mask.len() + words, 0);
+                    ix.class_rep.len() as u32 - 1
+                }) as usize;
+                ix.class_mask[c * words + a / 64] |= 1 << (a % 64);
+                ix.class_of.push(c as u32);
+            }
+            let mut acc = 0u32;
+            for nb in &self.adj {
+                ix.adj_start.push(acc);
+                acc += nb.len() as u32;
+                for &(w, b) in nb {
+                    ix.adj_nbr.push(w);
+                    ix.adj_bond.push(b);
+                }
+            }
+            ix.adj_start.push(acc);
+            ix
+        })
     }
 
     /// Number of minimum-cycle-basis rings through each atom (`Expr.getRingCounts`).
@@ -1895,6 +1992,40 @@ impl CdkTarget {
 
     fn bond_between(&self, a: u32, b: u32) -> Option<u32> {
         self.adj[a as usize].iter().find(|&&(w, _)| w == b).map(|&(_, bi)| bi)
+    }
+}
+
+/// Per-molecule cache of the CDK SMARTS-key fingerprints (in
+/// [`CalculationContext`](super::context::CalculationContext)): the prepared
+/// target shared by CDKMACCS, CDKEState, CDKSubstructure and KlekotaRoth, and
+/// the key counts of the substructure key sets (see `cdk_substructure`).
+#[derive(Default)]
+pub(crate) struct CdkKeyCache {
+    key: Option<u64>,
+    target: Option<CdkTarget>,
+    pub(super) counts: [Option<Vec<u32>>; 2],
+}
+
+impl CdkKeyCache {
+    /// Forgets the cached molecule.
+    pub(crate) fn reset(&mut self) {
+        self.key = None;
+    }
+
+    /// Makes `mol` the cached molecule (dropping the data of another one).
+    pub(super) fn select(&mut self, mol: &Molecule) {
+        let key = molecule_cache_key(mol);
+        if self.key != Some(key) {
+            self.key = Some(key);
+            self.target = None;
+            self.counts = [None, None];
+        }
+    }
+
+    /// The prepared target of `mol`, built once per molecule.
+    pub(super) fn target(&mut self, mol: &Molecule) -> &CdkTarget {
+        self.select(mol);
+        self.target.get_or_insert_with(|| CdkTarget::new(mol))
     }
 }
 
@@ -1993,11 +2124,34 @@ fn mcb_ring_counts(adj: &[SmallVec<[(u32, u32); 4]>], bond_ring: &[bool]) -> Vec
     counts
 }
 
+/// Implicit hydrogens as `CDKHydrogenAdder` assigns them from the CDK atom
+/// types ([`pubchem_cdk::cdk_hydrogens`](super::pubchem_cdk::cdk_hydrogens):
+/// the RDKit count, metal types with a fixed neighbour count such as
+/// `Zn.2plus`, radicals filled where CDK's type has room for them). CDK's
+/// SMILES parser keeps no radicals; for radical N, O, P, S and As the typed
+/// valence comes from [`CdkView`]'s atom typing, which knows the less common
+/// types (`N#C[S](O)O` is `S.anyl` with one H; untyped `X` atoms keep their
+/// count).
+fn cdk_implicit_hydrogens(mol: &Molecule, hcount: &mut [u8]) {
+    let mut view = None;
+    for (a, atom) in mol.atoms.iter().enumerate() {
+        hcount[a] = if atom.num_radicals() > 0 && matches!(atom.atomic_number, 7 | 8 | 15 | 16 | 33) {
+            let view = view.get_or_insert_with(|| CdkView::new(mol));
+            view.types[a].map_or(atom.total_h(), |_| view.h[a])
+        } else {
+            super::pubchem_cdk::cdk_hydrogens(mol, a)
+        };
+    }
+}
+
 /// Undoes RDKit's `cleanUp` charge separation of neutral hypervalent N/P
 /// groups (`N(=O)=O` -> `[N+](=O)[O-]`, `N=N#N` -> `N=[N+]=[N-]`); CDK keeps
 /// the input form. SMILES can only charge bracket atoms, so a charged atom
 /// without the no-implicit-H flag was charged by cleanUp (same rule as the
-/// PubChem fingerprint's CDK view).
+/// PubChem fingerprint's CDK view). Halogen oxides are restored by [`CdkMol`]
+/// (a bracket halogen keeps its charge; of the terminal oxygens of
+/// `[O-]Cl(=O)(=O)=O` another one than the bracket `[O-]` may stay charged,
+/// which gives the same graph).
 fn restore_cleaned_charges(mol: &Molecule, m: &mut CdkMol) {
     let cleaned = |a: usize| !mol.atoms[a].no_implicit_h();
     for a in 0..m.n() {
@@ -2084,7 +2238,7 @@ struct Matcher<'a> {
     dists: Vec<u8>,
     bfs: Vec<u32>,
     /// Random atom keys for hashing matched atom sets.
-    zob: Vec<(u64, u64)>,
+    zob: &'a [(u64, u64)],
     /// A search is running (its state must survive nested searches).
     searching: bool,
     /// Screen result of each recursive query (0: not yet, 1: pass, 2: fail).
@@ -2093,19 +2247,18 @@ struct Matcher<'a> {
     root_hits: SmallVec<[u64; 4]>,
     /// Start (`need` entry) of the next key search, set by `screen_key`.
     best: usize,
-    /// Classes of atoms with equal local properties: a representative and the
-    /// atom mask of each class.
-    class_rep: Vec<u32>,
-    class_mask: Vec<u64>,
-    class_of: Vec<u32>,
+    /// Classes of atoms with equal local properties (see [`TargetIndex`]).
+    class_rep: &'a [u32],
+    class_mask: &'a [u64],
+    class_of: &'a [u32],
     /// Masks of the local expression nodes (offsets, `u32::MAX`: not yet).
     node_off: Vec<u32>,
     node_masks: Vec<u64>,
     /// All atoms.
     all: SmallVec<[u64; 4]>,
     /// Target adjacency (CSR) with the bond expressions each entry's bond matches.
-    adj_start: Vec<u32>,
-    adj_nbr: Vec<u32>,
+    adj_start: &'a [u32],
+    adj_nbr: &'a [u32],
     adj_ok: Vec<u64>,
     /// Search state.
     map: Vec<u32>,
@@ -2132,6 +2285,7 @@ fn zobrist(i: u32) -> (u64, u64) {
 impl<'a> Matcher<'a> {
     fn new(ks: &'a KeySet, t: &'a CdkTarget) -> Self {
         let words = t.n.div_ceil(64).max(1);
+        let ix = t.index();
         let mut bond_ok = vec![0u64; t.ends.len()];
         for (b, ok) in bond_ok.iter_mut().enumerate() {
             for (i, e) in ks.bexprs.iter().enumerate() {
@@ -2140,6 +2294,7 @@ impl<'a> Matcher<'a> {
                 }
             }
         }
+        let adj_ok = ix.adj_bond.iter().map(|&b| bond_ok[b as usize]).collect();
         let mut m = Matcher {
             ks,
             t,
@@ -2154,14 +2309,14 @@ impl<'a> Matcher<'a> {
             drow: vec![u32::MAX; t.n],
             dists: Vec::new(),
             bfs: Vec::new(),
-            zob: (0..t.n as u32).map(zobrist).collect(),
+            zob: &ix.zob,
             searching: false,
             sub_screen: vec![0; ks.subs.len()],
             root_hits: SmallVec::new(),
             best: 0,
-            class_rep: Vec::new(),
-            class_mask: Vec::new(),
-            class_of: Vec::with_capacity(t.n),
+            class_rep: &ix.class_rep,
+            class_mask: &ix.class_mask,
+            class_of: &ix.class_of,
             node_off: vec![u32::MAX; ks.nodes.len()],
             node_masks: Vec::new(),
             all: {
@@ -2174,44 +2329,13 @@ impl<'a> Matcher<'a> {
                 }
                 all
             },
-            adj_start: Vec::new(),
-            adj_nbr: Vec::new(),
-            adj_ok: Vec::new(),
+            adj_start: &ix.adj_start,
+            adj_nbr: &ix.adj_nbr,
+            adj_ok,
             map: Vec::new(),
             used: vec![0; words],
             seen: FxHashSet::default(),
         };
-        let mut classes: FxHashMap<[u16; 8], u32> = FxHashMap::default();
-        for a in 0..t.n {
-            let ring_bonds = t.adj[a].iter().filter(|&&(_, b)| t.bond_ring[b as usize]).count();
-            let sig = [
-                t.z[a] as u16 | (t.arom[a] as u16) << 8 | (t.ring[a] as u16) << 9,
-                t.charge[a] as u8 as u16,
-                t.hcount[a] as u16,
-                t.total_h[a] as u16,
-                t.adj[a].len() as u16,
-                t.valence[a],
-                t.isotope[a],
-                ring_bonds as u16,
-            ];
-            let c = *classes.entry(sig).or_insert_with(|| {
-                m.class_rep.push(a as u32);
-                m.class_mask.resize(m.class_mask.len() + words, 0);
-                m.class_rep.len() as u32 - 1
-            }) as usize;
-            m.class_mask[c * words + a / 64] |= 1 << (a % 64);
-            m.class_of.push(c as u32);
-        }
-        let mut acc = 0u32;
-        for nb in &t.adj {
-            m.adj_start.push(acc);
-            acc += nb.len() as u32;
-            for &(w, b) in nb {
-                m.adj_nbr.push(w);
-                m.adj_ok.push(m.bond_ok[b as usize]);
-            }
-        }
-        m.adj_start.push(acc);
         if let Some(bs) = &ks.bond_screen {
             m.count_triples(bs);
         }

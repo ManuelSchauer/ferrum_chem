@@ -3,17 +3,14 @@
 //! Bit `i` is set when the SMARTS of E-State fragment `i` (CDK
 //! `EStateFragments`, the Hall/Kier atom types `sLi` ... `ssssPb` as converted
 //! by RDKit) matches. CDK matches them with `SmartsPattern` on the molecule as
-//! `SmartsPattern.prepare` leaves it (Daylight aromaticity), see
-//! [`CdkSmartsTarget`].
+//! `SmartsPattern.prepare` leaves it (Daylight aromaticity), see `cdk_smarts`.
 
-use super::cdk_smarts_target::{CdkSmartsTarget, parse_cdk_smarts};
+use super::cdk_smarts::KeySet;
 use super::context::CalculationContext;
 use super::typed::{Descriptor, DescriptorValue};
-use crate::algo::iso::{IsoTarget, QueryScreen, has_substruct_match_target};
-use crate::io::smarts::QueryGraph;
 use crate::mol::molecule::Molecule;
 use bitvec::prelude::*;
-use std::sync::OnceLock;
+use once_cell::sync::Lazy;
 
 /// CDK `EStateFragments` SMARTS, in bit order.
 const SMARTS: [&str; 79] = [
@@ -101,19 +98,7 @@ const SMARTS: [&str; 79] = [
 /// Number of CDK E-State fingerprint bits.
 pub const CDK_ESTATE_FP_SIZE: usize = SMARTS.len();
 
-fn patterns() -> &'static [(QueryGraph, QueryScreen)] {
-    static PATTERNS: OnceLock<Vec<(QueryGraph, QueryScreen)>> = OnceLock::new();
-    PATTERNS.get_or_init(|| {
-        SMARTS
-            .iter()
-            .map(|s| {
-                let q = parse_cdk_smarts(s);
-                let screen = QueryScreen::build(&q);
-                (q, screen)
-            })
-            .collect()
-    })
-}
+static ESTATE_KEYS: Lazy<KeySet> = Lazy::new(|| KeySet::new(&SMARTS, false));
 
 /// CDK E-State fingerprint (CDK 2.13 `EStateFingerprinter`, 79 bits).
 ///
@@ -138,15 +123,29 @@ impl Descriptor for CdkEStateFingerprint {
     }
 
     fn calculate(&self, mol: &Molecule, ctx: &mut CalculationContext) -> DescriptorValue {
+        let mut hit = [false; CDK_ESTATE_FP_SIZE];
+        ESTATE_KEYS.match_bits(ctx.cdk_keys.target(mol), &mut hit);
         let mut fp = bitvec![u8, Lsb0; 0; CDK_ESTATE_FP_SIZE];
-        CdkSmartsTarget::with_cached(mol, ctx, |target| {
-            let iso = IsoTarget::new(&target.mol);
-            for (i, (q, screen)) in patterns().iter().enumerate() {
-                if screen.passes_target(&iso) && has_substruct_match_target(&iso, q) {
-                    fp.set(i, true);
-                }
-            }
-        });
+        for (i, h) in hit.into_iter().enumerate() {
+            fp.set(i, h);
+        }
         DescriptorValue::Binary(fp)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::io::smiles::parse_smiles;
+
+    #[test]
+    fn prepared_like_cdk() {
+        // CDK 2.13 (reference preparation): hydrogen atoms of the SMILES on
+        // ring N/P stay atoms, the radical Sn of `C[Sn](C)C` gets one H
+        for (smiles, bits) in [("[H]N1CCCC1", vec![8, 26]), ("[H]P1CCCC1", vec![8]), ("C[Sn](C)C", vec![6, 72])] {
+            let mol = parse_smiles(smiles).unwrap();
+            let fp = CdkEStateFingerprint.calculate(&mol, &mut CalculationContext::new());
+            assert_eq!(fp.as_binary().iter_ones().collect::<Vec<_>>(), bits, "{smiles}");
+        }
     }
 }

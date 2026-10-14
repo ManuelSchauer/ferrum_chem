@@ -2,8 +2,8 @@
 //!
 //! The keys are CDK's own definitions (`org/openscience/cdk/fingerprint/data/maccs.txt`,
 //! derived from RDKit's but matched with CDK SMARTS semantics on the molecule
-//! as `SmartsPattern.prepare` leaves it, see [`CdkSmartsTarget`]). Bit `i` is
-//! CDK's bit `i` (MACCS key `i + 1`). As in CDK:
+//! as `SmartsPattern.prepare` leaves it, see `cdk_smarts`). Bit `i` is CDK's
+//! bit `i` (MACCS key `i + 1`). As in CDK:
 //!
 //! - key 1 (`[!0]`) is set when an atom has a mass number;
 //! - keys with a count `k > 0` need at least `k + 1` matches with distinct atom
@@ -13,15 +13,12 @@
 //!   second 6-cycle, and bit 124 (key 125, `[!*]`) by a second aromatic 6-cycle;
 //! - key 166 (`(*).(*)`) is set for disconnected molecules.
 
-use super::cdk_smarts_target::{CdkSmartsTarget, parse_cdk_smarts};
+use super::cdk_smarts::{CdkTarget, KeySet};
 use super::context::CalculationContext;
 use super::typed::{BitVector, Descriptor, DescriptorValue};
-use crate::algo::iso::{IsoTarget, QueryScreen, has_at_least_matches_target, has_substruct_match_target};
-use crate::io::smarts::QueryGraph;
 use crate::mol::molecule::Molecule;
-use crate::types::BondType;
 use bitvec::prelude::*;
-use std::sync::OnceLock;
+use once_cell::sync::Lazy;
 
 /// Number of CDK MACCS bits.
 pub const CDK_MACCS_SIZE: usize = 166;
@@ -196,30 +193,31 @@ const KEYS: [(&str, u8); CDK_MACCS_SIZE] = [
     ("(*).(*)", 0),
 ];
 
-/// A compiled SMARTS key: pattern, screen and the number of unique matches needed.
-type Key = (QueryGraph, QueryScreen, usize);
-
-/// The compiled keys; `None` for keys set from the cycle census, the isotope
+/// The SMARTS keys: compiled key set, MACCS bit and number of unique matches
+/// needed per key. The other keys are set from the cycle census, the isotope
 /// check or the component count.
-fn keys() -> &'static [Option<Key>] {
-    static KEYS_COMPILED: OnceLock<Vec<Option<Key>>> = OnceLock::new();
-    KEYS_COMPILED.get_or_init(|| {
-        KEYS.iter()
-            .map(|&(smarts, count)| {
-                if smarts.starts_with("[R]1") || matches!(smarts, "[!0]" | "[!*]" | "(*).(*)") {
-                    return None;
-                }
-                let q = parse_cdk_smarts(smarts);
-                let screen = QueryScreen::build(&q);
-                Some((q, screen, count as usize + 1))
-            })
-            .collect()
-    })
+struct Keys {
+    set: KeySet,
+    bit: Vec<usize>,
+    need: Vec<u32>,
 }
+
+static MACCS_KEYS: Lazy<Keys> = Lazy::new(|| {
+    let (mut smarts, mut bit, mut need) = (Vec::new(), Vec::new(), Vec::new());
+    for (i, &(s, count)) in KEYS.iter().enumerate() {
+        if s.starts_with("[R]1") || matches!(s, "[!0]" | "[!*]" | "(*).(*)") {
+            continue;
+        }
+        smarts.push(s);
+        bit.push(i);
+        need.push(count as u32 + 1);
+    }
+    Keys { set: KeySet::new(&smarts, false), bit, need }
+});
 
 /// Sets the ring bits from all simple cycles of up to `min(8, atoms)` atoms
 /// (CDK `AllCycles`; `isAromPath` reads the Daylight-model bond flags).
-fn cycle_census(t: &Molecule) -> Census {
+fn cycle_census(t: &CdkTarget) -> Census {
     let n = t.num_atoms();
     let mut census = Census::default();
     if n <= 2 {
@@ -229,7 +227,7 @@ fn cycle_census(t: &Molecule) -> Census {
     let mut path: Vec<usize> = Vec::with_capacity(8);
     let mut on_path = vec![false; n];
     for s in 0..n {
-        if !t.atoms[s].is_in_ring() {
+        if !t.ring[s] {
             continue;
         }
         path.clear();
@@ -269,7 +267,7 @@ struct Census {
 /// Simple cycles through ring bonds whose smallest atom is `s`, each found once
 /// (second atom smaller than the last).
 fn cycles_from(
-    t: &Molecule,
+    t: &CdkTarget,
     s: usize,
     a: usize,
     max_len: usize,
@@ -277,12 +275,11 @@ fn cycles_from(
     on_path: &mut [bool],
     census: &mut Census,
 ) {
-    for &bi in &t.adjacency[a] {
-        let b = &t.bonds[bi as usize];
-        if !b.is_in_ring() {
+    for &(w, b) in &t.adj[a] {
+        if !t.bond_ring[b as usize] {
             continue;
         }
-        let w = if b.source as usize == a { b.target } else { b.source } as usize;
+        let w = w as usize;
         if w == s {
             let len = path.len();
             if len >= 3 && path[1] < path[len - 1] {
@@ -307,13 +304,10 @@ fn cycles_from(
     }
 }
 
-fn cycle_aromatic(t: &Molecule, path: &[usize]) -> bool {
+fn cycle_aromatic(t: &CdkTarget, path: &[usize]) -> bool {
     (0..path.len()).all(|i| {
         let (u, v) = (path[i], path[(i + 1) % path.len()]);
-        t.adjacency[u].iter().any(|&bi| {
-            let b = &t.bonds[bi as usize];
-            (b.source as usize == v || b.target as usize == v) && b.bond_type == BondType::Aromatic
-        })
+        t.adj[u].iter().any(|&(w, b)| w as usize == v && t.bond_arom[b as usize])
     })
 }
 
@@ -341,40 +335,47 @@ impl Descriptor for CdkMaccs {
 
     fn calculate(&self, mol: &Molecule, ctx: &mut CalculationContext) -> DescriptorValue {
         let mut fp = bitvec![u8, Lsb0; 0; CDK_MACCS_SIZE];
-        CdkSmartsTarget::with_cached(mol, ctx, |target| {
-            let t = &target.mol;
-            let iso = IsoTarget::new(t);
-            let census = cycle_census(t);
-            for (i, key) in keys().iter().enumerate() {
-                if let Some((q, screen, need)) = key {
-                    // ring-closure keys need a cycle of their size
-                    let ring = match i {
-                        15 => census.seen[3],
-                        7 => census.seen[4],
-                        82 => census.seen[5],
-                        97 => census.six > 0,
-                        _ => true,
-                    };
-                    let hit = ring
-                        && screen.passes_target(&iso)
-                        && if *need == 1 {
-                            has_substruct_match_target(&iso, q)
-                        } else {
-                            has_at_least_matches_target(&iso, q, *need)
-                        };
-                    if hit {
-                        fp.set(i, true);
-                    }
-                }
-            }
-            if t.atoms.iter().any(|a| a.isotope != 0) {
-                fp.set(0, true);
-            }
-            if t.num_atoms() > 1 && crate::algo::components::num_fragments(t) > 1 {
-                fp.set(165, true);
-            }
-            set_cycle_bits(&census, &mut fp);
-        });
+        let t = ctx.cdk_keys.target(mol);
+        let keys = &*MACCS_KEYS;
+        let mut hit = vec![false; keys.need.len()];
+        keys.set.match_at_least(t, &keys.need, &mut hit);
+        for (&bit, h) in keys.bit.iter().zip(hit) {
+            fp.set(bit, h);
+        }
+        if t.has_isotope() {
+            fp.set(0, true);
+        }
+        if t.num_atoms() > 1 && t.num_components() > 1 {
+            fp.set(165, true);
+        }
+        set_cycle_bits(&cycle_census(t), &mut fp);
         DescriptorValue::Binary(fp)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::io::smiles::parse_smiles;
+
+    fn on_bits(smiles: &str) -> Vec<usize> {
+        let mol = parse_smiles(smiles).unwrap();
+        CdkMaccs.calculate(&mol, &mut CalculationContext::new()).as_binary().iter_ones().collect()
+    }
+
+    #[test]
+    fn prepared_like_cdk() {
+        // CDK 2.13 (reference preparation): the hydrogen atom of `[H]N1CCCC1`
+        // stays an atom, the bracket `[O-]` of a perchlorate stays charged,
+        // `Zn.2plus` gets two H, the radical S of `N#C[S](O)O` is `S.anyl` with one H
+        let cases: [(&str, &[usize]); 4] = [
+            ("[H]N1CCCC1", &[74, 81, 82, 85, 89, 95, 99, 103, 110, 117, 120, 121, 136, 137, 146, 147, 150, 152, 157, 160, 164]),
+            ("[O-]Cl(=O)(=O)=O", &[30, 47, 48, 101, 102, 105, 111, 123, 129, 133, 135, 139, 145, 147, 158, 163]),
+            ("[Zn+2].OC", &[11, 43, 48, 92, 130, 138, 156, 159, 163, 165]),
+            ("N#C[S](O)O", &[39, 40, 42, 46, 50, 54, 57, 60, 66, 67, 68, 87, 94, 101, 123, 129, 130, 138, 147, 158, 160, 163]),
+        ];
+        for (smiles, bits) in cases {
+            assert_eq!(on_bits(smiles), bits, "{smiles}");
+        }
     }
 }
