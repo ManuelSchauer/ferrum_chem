@@ -146,7 +146,7 @@ fn with_core<R>(mol: &Molecule, view: &CdkView, f: impl FnOnce(&PreparedCore) ->
 pub(crate) fn cdk_parser_mol(mol: &Molecule, view: &CdkView) -> CdkMol {
     let mut m = CdkMol::new(mol);
     restore_parser_state(mol, &mut m);
-    let h = cdk_hydrogens(mol, &m, view);
+    let h = view.h.clone();
     // CDK keeps no radicals: an aromatic radical atom that the hydrogen adder
     // fills up (`[C]1=CC=CC=C1` is benzene) needs its pi bond in the Kekulé form
     let filled = |a: usize| {
@@ -723,19 +723,6 @@ fn spiro_atoms(m: &CdkMol) -> u32 {
         }
     }
     count
-}
-
-/// Implicit hydrogens after `CDKHydrogenAdder`: the formal neighbour count of
-/// the atom type minus the degree, the parsed count for untyped (`X`) atoms
-/// (e.g. a radical `[B]` gets two hydrogens, `[Zn+2]` two, like in CDK).
-fn cdk_hydrogens(mol: &Molecule, m: &CdkMol, view: &CdkView) -> Vec<u8> {
-    (0..m.n())
-        .map(|a| match m.z[a] {
-            6 | 7 | 8 | 15 | 16 | 33 => view.h[a],
-            _ => formal_neighbour_count(mol, m, view, a)
-                .map_or(view.h[a], |fnc| fnc.saturating_sub(m.adj[a].len()) as u8),
-        })
-        .collect()
 }
 
 /// Number of independent cycles (bonds - atoms + connected components).

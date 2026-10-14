@@ -458,6 +458,13 @@ mod tests {
     }
 
     #[test]
+    fn test_ats_zinc_ion_hydrogens_cdk() {
+        // `Zn.2plus` gets two hydrogens, which add to its effective polarizability
+        let a = calc_ats("[Zn+2].C");
+        assert!((a[5] - 7.421620000000001).abs() < 1e-9, "ATSp1 = {}", a[5]);
+    }
+
+    #[test]
     fn test_ats_hydrogen_molecule_cdk() {
         let a = calc_ats("[H][H]");
         assert!(close(a[0], 0.014085127136756317), "ATSm1 = {}", a[0]);

@@ -85,8 +85,8 @@ impl CdkMol {
             bond_comp: vec![u32::MAX; m],
             n_comp: 0,
         };
-        for (i, a) in mol.atoms.iter().enumerate() {
-            let h = cdk_hydrogens(mol, i);
+        let hydrogens = super::cdk_perception::cdk_hydrogen_counts(mol);
+        for (a, &h) in mol.atoms.iter().zip(&hydrogens) {
             c.z.push(a.atomic_number);
             c.charge.push(a.formal_charge);
             c.h_fields.push(h);
@@ -200,10 +200,15 @@ impl CdkMol {
                 .count() as u8;
             c.total_h[a] = c.total_h[a].saturating_add(hn);
         }
+        // a triple bond RDKit puts in an aromatic ring (a dehydroannulene such
+        // as `C1#CC2=C(C#CC=C2)C=C1`) keeps its order in CDK
         let arom_bonds: Vec<bool> = mol
             .bonds
             .iter()
-            .map(|b| b.bond_type == BondType::Aromatic || b.is_aromatic())
+            .map(|b| {
+                b.bond_type == BondType::Aromatic
+                    || (b.is_aromatic() && b.bond_type != BondType::Triple)
+            })
             .collect();
         c.kekulize(mol, &arom_bonds, &beam_time);
         c.apply_daylight_aromaticity();
@@ -679,79 +684,6 @@ impl AllCyclesState {
             self.visit[atom] = 0;
         }
     }
-}
-
-/// Hydrogen count CDK assigns to an atom (`CDKHydrogenAdder` after
-/// `CDKAtomTypeMatcher`), where it differs from RDKit's.
-///
-/// CDK sets the implicit H count to the formal neighbour count of the perceived
-/// atom type minus the number of bonds. For ordinary atoms this equals RDKit's
-/// count; it differs for
-///
-/// * radicals: CDK's SMILES parser records no unpaired electrons, so for most
-///   main-group elements the radical electrons become hydrogens (`[CH3]` →
-///   methane, `[N]1C=CC=C1` → pyrrole), while metals, silicon and atoms without
-///   a matching CDK type (e.g. `C[S](=O)=O`) keep their bracket H count;
-/// * a few CDK atom types with unusual formal neighbour counts (`S.trioxide`,
-///   bare metal ions such as `Zn.2plus`, `Ru.6`, `Mg.neutral`).
-///
-/// The cases follow `CDKAtomTypeMatcher` and were verified against CDK 2.13.
-pub(super) fn cdk_hydrogens(mol: &Molecule, a: usize) -> u8 {
-    let atom = &mol.atoms[a];
-    let h = atom.total_h();
-    let z = atom.atomic_number;
-    let q = atom.formal_charge;
-    let degree = mol.adjacency[a].len();
-    let mut valence = h as u32;
-    let mut doubles = 0;
-    for &b in &mol.adjacency[a] {
-        valence += match mol.bonds[b as usize].bond_type {
-            BondType::Double => {
-                doubles += 1;
-                2
-            }
-            BondType::Triple => 3,
-            _ => 1,
-        };
-    }
-    // atom types with fixed formal neighbour counts
-    let fnc: Option<u8> = match (z, q, degree) {
-        (12, 0, 0) => Some(4),                    // Mg.neutral
-        (14, -2, 0) => Some(6),                   // Si.2minus.6
-        (26, -3 | -2, 0) => Some(6),              // Fe.3minus / Fe.2minus
-        (30, 2, 0) => Some(2),                    // Zn.2plus
-        (33, -1, 0) => Some(6),                   // As.minus
-        (37, 0, 0) => Some(1),                    // Rb.neutral
-        (44, 0, _) | (44, -3 | -2, 0) => Some(6), // Ru.6, Ru.3minus.6, Ru.2minus.6
-        (80, -1, 0) => Some(2),                   // Hg.minus
-        (80, 1, 0) => Some(1),                    // Hg.plus
-        (16, 0, 3) if doubles == 3 => Some(6),    // S.trioxide
-        _ => None,
-    };
-    if let Some(fnc) = fnc {
-        return fnc.saturating_sub(degree as u8);
-    }
-    let rad = atom.num_radicals();
-    if rad == 0 {
-        return h;
-    }
-    let filled = valence + rad as u32;
-    let fill = match z {
-        5 | 6 | 7 | 8 | 9 | 17 | 32 | 33 | 35 | 50 | 53 => true,
-        // S.3 (divalent) and S.sp3d1 (four neighbours, one double bond)
-        16 => filled == 2 || (degree == 4 && doubles == 1),
-        // Se.3: divalent with neighbours (a lone [Se] is typed Se.2 without H)
-        34 => filled == 2 && degree > 0,
-        // P.ine (0 or 2 single-bonded neighbours) and P.ate (3 neighbours, one =X)
-        15 => match degree {
-            0 => filled == 3,
-            2 => doubles == 0 && filled == 3,
-            3 => doubles == 1 && filled == 5,
-            _ => false,
-        },
-        _ => false,
-    };
-    if fill { h + rad } else { h }
 }
 
 // ---------------------------------------------------------------------------
@@ -1595,6 +1527,15 @@ mod tests {
     }
 
     #[test]
+    fn aromatic_triple_bonds_stay_triple() {
+        // RDKit flags the dehydroannulene ring aromatic; CDK keeps both C#C
+        let mol = parse_smiles("C1#CC2=C(C#CC=C2)C=C1").unwrap();
+        let m = CdkMol::build(&mol);
+        assert_eq!(m.bond_order.iter().filter(|&&o| o == ORD_TRIPLE).count(), 2);
+        assert_eq!(m.bond_order.iter().filter(|&&o| o == ORD_DOUBLE).count(), 3);
+    }
+
+    #[test]
     fn hydrogens_follow_cdk_atom_types() {
         let h = |smiles: &str| {
             let mol = parse_smiles(smiles).unwrap();
@@ -1606,5 +1547,7 @@ mod tests {
         assert_eq!(h("NC[S](=O)=O"), vec![2, 2, 0, 0, 0]);
         assert_eq!(h("[Zn+2]"), vec![2]);
         assert_eq!(h("C=S(=O)=O"), vec![2, 3, 0, 0]);
+        // radical S with three neighbours: `S.anyl` (formal neighbour count 4)
+        assert_eq!(h("N#C[S](O)O"), vec![0, 0, 1, 1, 1]);
     }
 }

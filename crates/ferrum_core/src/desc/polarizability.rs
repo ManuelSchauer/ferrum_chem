@@ -25,10 +25,14 @@ const POLARIZABILITY: [f64; 103] = [
     23.3, 23.0, 22.7, 20.5, 19.7, 23.8, 18.2, 17.5,
 ];
 
-/// Polarizability of an element; NaN where CDK has no value (CDK then reports an error).
+/// Polarizability of an element; NaN where CDK has no value (CDK then reports
+/// an error and the descriptor is NaN). APol and BPol look the element up with
+/// `Isotopes.getElement(symbol)`, which returns null for the elements without
+/// a major isotope (Tc, Pm, Po-Ac, Np and heavier), so these fail as well.
 #[inline]
 fn atom_pol(atomic_number: u8) -> f64 {
     match atomic_number {
+        43 | 61 | 84..=89 | 93.. => f64::NAN,
         1..=102 => POLARIZABILITY[atomic_number as usize],
         _ => f64::NAN,
     }
@@ -137,6 +141,16 @@ mod tests {
         // [Na+].[Cl-]: 23.6 + 2.18
         assert!((calc(&APol, "[Na+].[Cl-]") - 25.78).abs() < 1e-9);
         assert_eq!(calc(&BPol, "[Na+].[Cl-]"), 0.0);
+    }
+
+    #[test]
+    fn test_cdk_metal_hydrogens_and_unknown_elements() {
+        // `[Zn+2]` is `Zn.2plus` (formal neighbour count 2): CDK adds two H
+        assert!((calc(&APol, "[Zn+2].C") - 12.860758).abs() < 1e-9);
+        assert!((calc(&BPol, "[Zn+2].C") - 17.239242).abs() < 1e-9);
+        // `Isotopes.getElement("Tc")` is null: both descriptors fail (NaN)
+        assert!(calc(&APol, "C.[99Tc]").is_nan());
+        assert!(calc(&BPol, "C.[Tc]").is_nan());
     }
 
     #[test]

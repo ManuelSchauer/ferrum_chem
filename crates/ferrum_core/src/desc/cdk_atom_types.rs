@@ -1,9 +1,9 @@
 //! CDK 2.13 atom types (`CDKAtomTypeMatcher`) of the elements the reduced
 //! matcher of `cdk_perception` does not cover: H, the halogens, B, Si, Se,
 //! the metals, Te, Sb, Sn and the noble gases. Only what the CDK count
-//! descriptors need is reproduced: whether an atom gets a type (otherwise CDK
-//! uses `X`) and that type's formal neighbour count, from which
-//! `CDKHydrogenAdder` derives the implicit hydrogens.
+//! descriptors and `CdkView`'s hydrogen counts need is reproduced: whether an
+//! atom gets a type (otherwise CDK uses `X`) and that type's formal neighbour
+//! count, from which `CDKHydrogenAdder` derives the implicit hydrogens.
 //!
 //! Each element follows its `perceive*` method; a candidate type is taken
 //! when `isAcceptable` holds (neighbours plus implicit hydrogens within the
@@ -17,36 +17,49 @@
 use crate::desc::cdk_daylight::CdkMol;
 use crate::desc::cdk_perception::CdkView;
 use crate::mol::molecule::Molecule;
+use smallvec::SmallVec;
 
 /// Formal neighbour count of the CDK atom type of atom `a` (`None`: type `X`,
-/// no match). C, N, O, P, S and As come from `CdkView`, the other elements are
-/// typed here.
+/// no match) on the bond orders of `m`. C, N, O, P, S and As come from
+/// `CdkView`, the other elements are typed by [`element_fnc`].
 pub(crate) fn formal_neighbour_count(mol: &Molecule, m: &CdkMol, view: &CdkView, a: usize) -> Option<usize> {
-    let z = m.z[a];
-    let q = view.charge[a];
+    let orders: SmallVec<[u8; 8]> = m.adj[a].iter().map(|&(_, bi)| m.order[bi as usize]).collect();
+    element_fnc(mol, a, view.charge[a], &orders, view.types[a].map(|t| t.nb as usize))
+}
+
+/// Formal neighbour count of the CDK atom type of atom `a` (`None`: type `X`,
+/// no match). `q` is the formal charge as CDK sees it, `orders` are the
+/// orders of the bonds of `a` in the molecule graph and `view_nb` is the
+/// formal neighbour count of the `CdkView` type of a C, N, O, P, S or As atom.
+pub(crate) fn element_fnc(
+    mol: &Molecule,
+    a: usize,
+    q: i8,
+    orders: &[u8],
+    view_nb: Option<usize>,
+) -> Option<usize> {
+    let z = mol.atoms[a].atomic_number;
     // CDK counts the hydrogen atoms of the input (`[H][Si](C)(C)C`) as
     // neighbours, not as implicit hydrogens
     let removed = mol.num_removed_hydrogens(a);
-    let deg = m.adj[a].len() + removed;
+    let deg = orders.len() + removed;
     let h = (mol.atoms[a].total_h() as usize).saturating_sub(removed);
-    let orders = || m.adj[a].iter().map(|&(_, bi)| m.order[bi as usize]);
-    let max_order = orders().max().unwrap_or(1).max(1);
-    let n_double = orders().filter(|&o| o == 2).count();
+    let max_order = orders.iter().copied().max().unwrap_or(1).max(1);
+    let n_double = orders.iter().filter(|&&o| o == 2).count();
     // isAcceptable: (formal neighbour count, max bond order (0: none), charge, valency)
     let ok = |fnc: usize, max: u8, charge: i8, val: usize| {
-        let valence: usize = orders().map(|o| o as usize).sum::<usize>() + removed + h;
-        (deg + h <= fnc && (max == 0 || orders().all(|o| o <= max)) && q == charge && valence <= val)
+        let valence: usize = orders.iter().map(|&o| o as usize).sum::<usize>() + removed + h;
+        (deg + h <= fnc && (max == 0 || orders.iter().all(|&o| o <= max)) && q == charge && valence <= val)
             .then_some(fnc)
     };
     if matches!(z, 6 | 7 | 8 | 15 | 16 | 33) {
-        let t = view.types[a].map(|t| t.nb as usize);
         // An alkyne carbon that RDKit puts in an aromatic ring (a cyclic
         // dehydroannulene written in Kekulé form) is `C.sp` in CDK, whose
         // parser leaves it non-aromatic; `CdkView` types aromatic carbons sp2.
-        if t.is_none() && z == 6 && q == 0 && mol.atoms[a].is_aromatic() && max_order == 3 {
+        if view_nb.is_none() && z == 6 && q == 0 && mol.atoms[a].is_aromatic() && max_order == 3 {
             return ok(2, 3, 0, 4);
         }
-        return t;
+        return view_nb;
     }
     match z {
         1 => match deg {

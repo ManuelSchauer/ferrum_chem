@@ -53,7 +53,6 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec::SmallVec;
 
 use super::cdk_daylight::{CdkMol, smarts_daylight_aromaticity};
-use super::cdk_perception::CdkView;
 use super::context::molecule_cache_key;
 use crate::mol::atom::ChiralTag;
 use crate::mol::molecule::Molecule;
@@ -1751,7 +1750,9 @@ impl CdkTarget {
     pub(crate) fn new(mol: &Molecule) -> Self {
         let mut m = CdkMol::new(mol);
         restore_cleaned_charges(mol, &mut m);
-        cdk_implicit_hydrogens(mol, &mut m.hcount);
+        // implicit hydrogens as `CDKHydrogenAdder` assigns them (`[Zn+2]` gets
+        // two, the radical S of `N#C[S](O)O` is `S.anyl` with one)
+        m.hcount = super::cdk_perception::cdk_hydrogen_counts(mol);
         // CDK keeps the hydrogen atoms written in the SMILES (`[H]OC`,
         // `[H][C@](C)(N)O`, `[H]n1cccc1`), RDKit folds them into their
         // neighbour; restore them from the molecule's record (appended in
@@ -2127,26 +2128,6 @@ fn mcb_ring_counts(adj: &[SmallVec<[(u32, u32); 4]>], bond_ring: &[bool]) -> Vec
         }
     }
     counts
-}
-
-/// Implicit hydrogens as `CDKHydrogenAdder` assigns them from the CDK atom
-/// types ([`pubchem_cdk::cdk_hydrogens`](super::pubchem_cdk::cdk_hydrogens):
-/// the RDKit count, metal types with a fixed neighbour count such as
-/// `Zn.2plus`, radicals filled where CDK's type has room for them). CDK's
-/// SMILES parser keeps no radicals; for radical N, O, P, S and As the typed
-/// valence comes from [`CdkView`]'s atom typing, which knows the less common
-/// types (`N#C[S](O)O` is `S.anyl` with one H; untyped `X` atoms keep their
-/// count).
-fn cdk_implicit_hydrogens(mol: &Molecule, hcount: &mut [u8]) {
-    let mut view = None;
-    for (a, atom) in mol.atoms.iter().enumerate() {
-        hcount[a] = if atom.num_radicals() > 0 && matches!(atom.atomic_number, 7 | 8 | 15 | 16 | 33) {
-            let view = view.get_or_insert_with(|| CdkView::new(mol));
-            view.types[a].map_or(atom.total_h(), |_| view.h[a])
-        } else {
-            super::pubchem_cdk::cdk_hydrogens(mol, a)
-        };
-    }
 }
 
 /// Undoes RDKit's `cleanUp` charge separation of neutral hypervalent N/P

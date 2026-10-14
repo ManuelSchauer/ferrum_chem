@@ -7,9 +7,10 @@
 //!
 //! - a Kekulé structure (CDK keeps Kekulé bond orders; aromatic bonds of the
 //!   RDKit model are re-kekulized),
-//! - CDK atom types (`CDKAtomTypeMatcher`, reduced to the main-group elements
-//!   C, N, O, S, P, Si, H and the halogens) and the implicit hydrogen counts
-//!   `CDKHydrogenAdder` derives from them,
+//! - CDK atom types (`CDKAtomTypeMatcher`; C, N, O, S, P and As here, the other
+//!   elements in `cdk_atom_types`) and the implicit hydrogen counts
+//!   `CDKHydrogenAdder` derives from them ([`cdk_hydrogen_counts`], shared with
+//!   the PubChem, SMARTS-key and logP views),
 //! - `Aromaticity.cdkLegacy()` (`ElectronDonation.cdk()` electron counts from
 //!   the atom types, `Cycles.cdkAromaticSet()`: all cycles of fused systems with
 //!   at most three rings, the minimum cycle basis otherwise).
@@ -36,7 +37,8 @@ pub(crate) enum Hyb {
 pub(crate) struct CdkType {
     pub name: &'static str,
     pub hyb: Hyb,
-    /// Formal neighbour count (number of `formalBondType` entries).
+    /// Formal neighbour count as `OWLAtomTypeHandler` reads it (number of
+    /// `formalBondType` entries, added to an explicit `formalNeighbourCount`).
     pub nb: u8,
     /// Maximum formal bond order (0 when the type lists no bonds).
     pub max_order: u8,
@@ -108,7 +110,8 @@ cdk_types! {
     S_ONYL_CHARGED = ("S.onyl.charged", Sp3, 4, 2, 2, 2, None);
     S_INYL = ("S.inyl", Sp2, 3, 2, 1, 0, None);
     S_INYL_CHARGED = ("S.inyl.charged", Sp2, 3, 1, 0, 1, None);
-    S_TRIOXIDE = ("S.trioxide", Sp2, 3, 2, 3, 0, None);
+    // `formalNeighbourCount` 3 plus three `formalBondType` entries: CDK reads 6
+    S_TRIOXIDE = ("S.trioxide", Sp2, 6, 2, 3, 0, None);
     S_OCTAHEDRAL = ("S.octahedral", Other, 6, 1, 0, 0, None);
     S_ANYL = ("S.anyl", Other, 4, 1, 0, 0, None);
     P_ATE = ("P.ate", Sp3, 4, 2, 1, 0, None);
@@ -887,9 +890,17 @@ fn simple_typed(mol: &Molecule, order: &[u8], charge: &[i8], a: usize) -> bool {
     }
 }
 
-impl CdkView {
-    /// Builds the CDK view: Kekulé orders, atom types and hydrogen counts.
-    pub(crate) fn new(mol: &Molecule) -> Self {
+/// Kekulé orders, charges, atom types and implicit hydrogen counts as CDK's
+/// SMILES parser, `CDKAtomTypeMatcher` and `CDKHydrogenAdder` leave them.
+struct Typed {
+    order: Vec<u8>,
+    charge: Vec<i8>,
+    types: Vec<Option<&'static CdkType>>,
+    h: Vec<u8>,
+}
+
+impl Typed {
+    fn new(mol: &Molecule) -> Self {
         let n = mol.num_atoms();
         let mut order = kekule_orders(mol);
         let mut charge: Vec<i8> = mol.atoms.iter().map(|a| a.formal_charge).collect();
@@ -911,30 +922,57 @@ impl CdkView {
         };
         let mut types = Vec::with_capacity(n);
         let mut h = Vec::with_capacity(n);
-        let mut max_order = Vec::with_capacity(n);
         for a in 0..n {
             let atom = &mol.atoms[a];
             let t = env.atom_type(a);
+            // `CDKHydrogenAdder`: formal neighbour count of the type minus the
+            // graph bonds (input H atoms RDKit folded in count as hydrogens); untyped
+            // (`X`) atoms keep their count. CDK's SMILES parser keeps no
+            // radicals, so the typed valence fills up (`[CH3]` is methane,
+            // `N#C[S](O)O` is `S.anyl` with one H, `[B]C` gets two H).
+            let nb = match t {
+                Some(t) => Some(t.nb as usize),
+                None if matches!(atom.atomic_number, 6 | 7 | 8 | 15 | 16 | 33) => None,
+                // the other elements (`[Zn+2]` is `Zn.2plus` with two H)
+                None => {
+                    let orders: smallvec::SmallVec<[u8; 8]> =
+                        mol.adjacency[a].iter().map(|&b| order[b as usize]).collect();
+                    super::cdk_atom_types::element_fnc(mol, a, charge[a], &orders, None)
+                }
+            };
             let deg = mol.adjacency[a].len();
-            h.push(match t {
-                Some(t) => (t.nb as usize).saturating_sub(deg) as u8,
-                None => atom.total_h(),
-            });
+            h.push(nb.map_or(atom.total_h(), |nb| nb.saturating_sub(deg) as u8));
             types.push(t);
-            max_order.push(
-                mol.adjacency[a]
-                    .iter()
-                    .map(|&b| order[b as usize])
-                    .max()
-                    .unwrap_or(0),
-            );
         }
+        Self { order, charge, types, h }
+    }
+}
+
+/// The implicit hydrogen counts CDK assigns (`CDKHydrogenAdder` after
+/// `CDKAtomTypeMatcher`; hydrogen atoms of the input that RDKit folded into
+/// their neighbour are included): [`CdkView::h`] without the rest of the
+/// view, shared by `CdkView`, the PubChem fingerprint, the CDK SMARTS keys and
+/// the logP view.
+pub(crate) fn cdk_hydrogen_counts(mol: &Molecule) -> Vec<u8> {
+    Typed::new(mol).h
+}
+
+impl CdkView {
+    /// Builds the CDK view: Kekulé orders, atom types and hydrogen counts.
+    pub(crate) fn new(mol: &Molecule) -> Self {
+        let n = mol.num_atoms();
+        let Typed { order, charge, types, h } = Typed::new(mol);
+        let max_order = (0..n)
+            .map(|a| mol.adjacency[a].iter().map(|&b| order[b as usize]).max().unwrap_or(0))
+            .collect();
         // BCUTDescriptor retypes the molecule with explicit hydrogen atoms:
         // e.g. the untyped `[SH](=O)(C)O` (implicit H) becomes `S.sp3d1`, while
         // `[PH](C)(C)C` stays untyped.
         let explicit = Env {
+            mol,
+            order: &order,
+            charge: &charge,
             explicit_h: Some(&h),
-            ..env
         };
         let lp_typed = (0..n)
             .map(|a| {

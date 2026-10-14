@@ -16,7 +16,8 @@
 //!   structure written in the input is kept, see `Bond::is_input_double`),
 //! - RDKit's clean-up of nitro-type groups undone, bracket halogen oxides kept
 //!   charged,
-//! - the hydrogen counts `CDKHydrogenAdder` assigns (radicals filled),
+//! - the hydrogen counts `CDKHydrogenAdder` assigns
+//!   (`cdk_perception::cdk_hydrogen_counts`; radicals filled),
 //! - the Daylight aromaticity flags of atoms and bonds.
 //!
 //! Key symbols: `struct CdkLogP`, `fn cdk_logp_values`, `struct LogpView`.
@@ -115,9 +116,7 @@ impl LogpView {
         restore_input_kekule(mol, &mut m);
         restore_bracket_halogens(mol, &mut m);
         revert_oxide_cleanup(mol, &mut m);
-        for a in 0..m.n() {
-            m.hcount[a] = cdk_hydrogens(mol, a);
-        }
+        m.hcount = super::cdk_perception::cdk_hydrogen_counts(mol);
         let (arom, arom_bond) = daylight_flags(mol, &m);
         Self { m, arom, arom_bond }
     }
@@ -245,69 +244,6 @@ fn restore_bracket_halogens(mol: &Molecule, m: &mut CdkMol) {
             };
         }
     }
-}
-
-/// Hydrogen count CDK assigns to an atom (`CDKHydrogenAdder` after
-/// `CDKAtomTypeMatcher`), as verified for the PubChem fingerprint
-/// (`pubchem_cdk::cdk_hydrogens`): the RDKit count, except for radicals that
-/// CDK fills with hydrogens and a few atom types with unusual formal
-/// neighbour counts.
-fn cdk_hydrogens(mol: &Molecule, a: usize) -> u8 {
-    let atom = &mol.atoms[a];
-    let h = atom.total_h();
-    let z = atom.atomic_number;
-    let q = atom.formal_charge;
-    let degree = mol.adjacency[a].len();
-    let mut valence = h as u32;
-    let mut doubles = 0;
-    for &b in &mol.adjacency[a] {
-        valence += match mol.bonds[b as usize].bond_type {
-            BondType::Double => {
-                doubles += 1;
-                2
-            }
-            BondType::Triple => 3,
-            _ => 1,
-        };
-    }
-    // atom types with fixed formal neighbour counts
-    let fnc: Option<u8> = match (z, q, degree) {
-        (12, 0, 0) => Some(4),                    // Mg.neutral
-        (14, -2, 0) => Some(6),                   // Si.2minus.6
-        (26, -3 | -2, 0) => Some(6),              // Fe.3minus / Fe.2minus
-        (30, 2, 0) => Some(2),                    // Zn.2plus
-        (33, -1, 0) => Some(6),                   // As.minus
-        (37, 0, 0) => Some(1),                    // Rb.neutral
-        (44, 0, _) | (44, -3 | -2, 0) => Some(6), // Ru.6, Ru.3minus.6, Ru.2minus.6
-        (80, -1, 0) => Some(2),                   // Hg.minus
-        (80, 1, 0) => Some(1),                    // Hg.plus
-        (16, 0, 3) if doubles == 3 => Some(6),    // S.trioxide
-        _ => None,
-    };
-    if let Some(fnc) = fnc {
-        return fnc.saturating_sub(degree as u8);
-    }
-    let rad = atom.num_radicals();
-    if rad == 0 {
-        return h;
-    }
-    let filled = valence + rad as u32;
-    let fill = match z {
-        5 | 6 | 7 | 8 | 9 | 17 | 32 | 33 | 35 | 50 | 53 => true,
-        // S.3 (divalent) and S.sp3d1 (four neighbours, one double bond)
-        16 => filled == 2 || (degree == 4 && doubles == 1),
-        // Se.3: divalent with neighbours (a lone [Se] is typed Se.2 without H)
-        34 => filled == 2 && degree > 0,
-        // P.ine (0 or 2 single-bonded neighbours) and P.ate (3 neighbours, one =X)
-        15 => match degree {
-            0 => filled == 3,
-            2 => doubles == 0 && filled == 3,
-            3 => doubles == 1 && filled == 5,
-            _ => false,
-        },
-        _ => false,
-    };
-    if fill { h + rad } else { h }
 }
 
 /// Undoes RDKit's `cleanUp` of hypervalent nitrogen and phosphorus oxides
