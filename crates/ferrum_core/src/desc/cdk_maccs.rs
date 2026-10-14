@@ -365,11 +365,17 @@ mod tests {
 
     #[test]
     fn prepared_like_cdk() {
-        // CDK 2.13 (reference preparation): the hydrogen atom of `[H]N1CCCC1`
-        // stays an atom, the bracket `[O-]` of a perchlorate stays charged,
-        // `Zn.2plus` gets two H, the radical S of `N#C[S](O)O` is `S.anyl` with one H
-        let cases: [(&str, &[usize]); 4] = [
+        // CDK 2.13 (reference preparation): the hydrogen atoms of the SMILES
+        // stay atoms (`[H]N1CCCC1`, also next to bracket atoms: `[H]n1cccc1`
+        // differs from `c1cc[nH]c1`), the bracket `[O-]` of a perchlorate stays
+        // charged, `Zn.2plus` gets two H, the radical S of `N#C[S](O)O` is
+        // `S.anyl` with one H
+        let cases: [(&str, &[usize]); 8] = [
             ("[H]N1CCCC1", &[74, 81, 82, 85, 89, 95, 99, 103, 110, 117, 120, 121, 136, 137, 146, 147, 150, 152, 157, 160, 164]),
+            ("[H][C@](C)(N)O", &[42, 83, 91, 109, 111, 116, 130, 138, 150, 155, 156, 157, 159, 160, 163]),
+            ("[H]n1cccc1", &[64, 74, 82, 95, 120, 121, 136, 147, 150, 160, 161, 164]),
+            ("[H]N1C=CC=C1", &[64, 74, 82, 95, 120, 121, 136, 147, 150, 160, 161, 164]),
+            ("c1cc[nH]c1", &[64, 82, 95, 120, 136, 150, 160, 161, 164]),
             ("[O-]Cl(=O)(=O)=O", &[30, 47, 48, 101, 102, 105, 111, 123, 129, 133, 135, 139, 145, 147, 158, 163]),
             ("[Zn+2].OC", &[11, 43, 48, 92, 130, 138, 156, 159, 163, 165]),
             ("N#C[S](O)O", &[39, 40, 42, 46, 50, 54, 57, 60, 66, 67, 68, 87, 94, 101, 123, 129, 130, 138, 147, 158, 160, 163]),

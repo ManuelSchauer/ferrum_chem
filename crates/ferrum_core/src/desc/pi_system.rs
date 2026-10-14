@@ -185,7 +185,10 @@ pub(crate) fn cdk_largest_pi_system(mol: &Molecule) -> u32 {
             }
         }
         // the seed is only re-reached through a neighbour with degree > 1
-        let seed_counted = m.adj[s].iter().any(|&(w, _)| qualifies[w as usize] && m.degree(w as usize) > 1);
+        // (counting the hydrogen atoms of the input, which CDK keeps)
+        let seed_counted = m.adj[s].iter().any(|&(w, _)| {
+            qualifies[w as usize] && m.degree(w as usize) + mol.num_removed_hydrogens(w as usize) > 1
+        });
         let counted = if seed_counted { size } else { size - 1 };
         best = best.max(counted);
     }

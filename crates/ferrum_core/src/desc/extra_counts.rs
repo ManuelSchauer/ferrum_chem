@@ -1314,18 +1314,10 @@ impl Descriptor for CdkFragmentComplexity {
 
     /// `|B^2 - A^2 + A| + H/100` with A = non-hydrogen atoms, B = bonds
     /// (hydrogens included) and H = atoms other than H and C.
-    fn calculate(&self, mol: &Molecule, _ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
+    fn calculate(&self, mol: &Molecule, ctx: &mut crate::desc::context::CalculationContext) -> DescriptorValue {
         let mut a = 0i64;
         let mut hetero = 0i64;
-        let mut hydrogens = 0i64;
         for atom in &mol.atoms {
-            // CDK has no radicals from plain SMILES: for neutral C, N, O, P,
-            // S, As its hydrogen adder fills the valence of the atom type, one
-            // H per unpaired electron (other elements keep the SMILES count).
-            hydrogens += atom.total_h() as i64;
-            if atom.formal_charge == 0 && matches!(atom.atomic_number, 6 | 7 | 8 | 15 | 16 | 33) {
-                hydrogens += atom.num_radicals() as i64;
-            }
             if atom.atomic_number != 1 {
                 a += 1;
                 if atom.atomic_number != 6 {
@@ -1333,6 +1325,15 @@ impl Descriptor for CdkFragmentComplexity {
                 }
             }
         }
+        // Implicit hydrogens as `CDKHydrogenAdder` assigns them in the
+        // reference preparation (formal neighbour count of the CDK atom type
+        // minus the degree, the parsed count for untyped `X` atoms): CDK's
+        // SMILES parser keeps no radicals, so `[CH3]` becomes methane and the
+        // `O.plus` of `C[O+]C` gets one H, while `[PH](C)(C)C` (no P type)
+        // keeps its single H.
+        let hydrogens: i64 = super::cdk_perception::CdkView::with_legacy_cached(mol, ctx, |view, _| {
+            super::cdk_simple::with_parser_mol(mol, view, |m| m.hcount.iter().map(|&h| h as i64).sum())
+        });
         // CDK's bond count includes the bonds to explicit hydrogen atoms, which
         // FerrumChem folds into the hydrogen count: B = bonds + all hydrogens.
         let b = mol.num_bonds() as i64 + hydrogens;
@@ -1364,5 +1365,8 @@ mod cdk_fragment_complexity_tests {
         assert_eq!(frag_c("[C]"), 16.0);
         assert!((frag_c("[N]1C=CC=C1") - 80.01).abs() < 1e-9);
         assert!((frag_c("[Se]") - 0.01).abs() < 1e-9);
+        // charged and untyped atoms (CDK 2.13 values)
+        assert!((frag_c("[NH-][C+](N)N[O+]CCC(N)C(=O)[O-]") - 397.07).abs() < 1e-9);
+        assert!((frag_c("C1=CC=C([PH](C2CCCCC2)C2CCCCC2)C=C1") - 2059.01).abs() < 1e-9);
     }
 }

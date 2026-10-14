@@ -1752,39 +1752,28 @@ impl CdkTarget {
         let mut m = CdkMol::new(mol);
         restore_cleaned_charges(mol, &mut m);
         cdk_implicit_hydrogens(mol, &mut m.hcount);
+        // CDK keeps the hydrogen atoms written in the SMILES (`[H]OC`,
+        // `[H][C@](C)(N)O`, `[H]n1cccc1`), RDKit folds them into their
+        // neighbour; restore them from the molecule's record (appended in
+        // input order, before the aromaticity perception, which reads degrees).
         let n0 = m.n();
-        let (mut arom, mut bond_arom) = smarts_daylight_aromaticity(&m);
-        // CDK keeps the hydrogen atoms written in the SMILES (`[H]OC`), RDKit
-        // folds them into their neighbour. For atoms written without brackets
-        // the folded count is exactly `num_explicit_h` (RDKit's adjustHs only
-        // adds explicit H to aromatic N/P-type atoms, which are skipped: `[nH]`,
-        // `N1C=CC=C1` and `[H]n1cccc1` look the same; a non-aromatic ring N/P
-        // keeps its hydrogen atom, `[H]N1CCCC1` has a three-connected N in
-        // CDK); for bracket atoms it cannot be told apart from the bracket H
-        // count.
-        for a in 0..n0 {
-            let atom = &mol.atoms[a];
-            let k = atom.num_explicit_h.min(m.hcount[a]);
-            if k == 0 || atom.no_implicit_h() || atom.atomic_number == 1 || (atom.is_aromatic() && atom.atomic_number != 6) {
-                continue;
-            }
-            m.hcount[a] -= k;
-            for _ in 0..k {
-                let h = m.z.len() as u32;
-                let b = m.ends.len() as u32;
-                m.z.push(1);
-                m.charge.push(0);
-                m.hcount.push(0);
-                m.ring_atom.push(false);
-                m.adj.push(SmallVec::from_slice(&[(a as u32, b)]));
-                m.adj[a].push((h, b));
-                m.ends.push((a as u32, h));
-                m.order.push(1);
-                m.ring_bond.push(false);
-                arom.push(false);
-                bond_arom.push(false);
-            }
+        let removed = mol.removed_hydrogens();
+        for h in removed {
+            let a = h.atom as usize;
+            m.hcount[a] = m.hcount[a].saturating_sub(1);
+            let hi = m.z.len() as u32;
+            let b = m.ends.len() as u32;
+            m.z.push(1);
+            m.charge.push(h.charge);
+            m.hcount.push(0);
+            m.ring_atom.push(false);
+            m.adj.push(SmallVec::from_slice(&[(a as u32, b)]));
+            m.adj[a].push((hi, b));
+            m.ends.push((a as u32, hi));
+            m.order.push(1);
+            m.ring_bond.push(false);
         }
+        let (arom, bond_arom) = smarts_daylight_aromaticity(&m);
         let n = m.n();
         let adj: Vec<SmallVec<[(u32, u32); 4]>> = m.adj.clone();
         let mut total_h = m.hcount.clone();
@@ -1804,13 +1793,20 @@ impl CdkTarget {
             if !tag.is_tetrahedral() {
                 continue;
             }
-            let nbrs: SmallVec<[u32; 4]> = mol.adjacency[a]
+            // RDKit moved the bonds of removed hydrogens to the end of the
+            // bond list (in input order) and adjusted the tag accordingly
+            let mut nbrs: SmallVec<[u32; 4]> = mol.adjacency[a]
                 .iter()
                 .map(|&b| {
                     let b = &mol.bonds[b as usize];
                     if b.source as usize == a { b.target as u32 } else { b.source as u32 }
                 })
                 .collect();
+            for (k, h) in removed.iter().enumerate() {
+                if h.atom as usize == a {
+                    nbrs.push((n0 + k) as u32);
+                }
+            }
             let ligands = match nbrs.len() {
                 4 => [nbrs[0], nbrs[1], nbrs[2], nbrs[3]],
                 3 => [nbrs[0], nbrs[1], nbrs[2], a as u32],
@@ -1841,7 +1837,16 @@ impl CdkTarget {
                     Some((w as u32, if bd.source as usize == x { up } else { !up }))
                 })
             };
-            let (Some((cu, du)), Some((cv, dv))) = (side(u, v), side(v, u)) else { continue };
+            // or the bond to a restored hydrogen (`[H]/C(C)=C/C`)
+            let carrier = |x: usize, other: usize| {
+                side(x, other).or_else(|| {
+                    removed.iter().enumerate().find_map(|(k, h)| match h.up {
+                        Some(up) if h.atom as usize == x => Some(((n0 + k) as u32, up)),
+                        _ => None,
+                    })
+                })
+            };
+            let (Some((cu, du)), Some((cv, dv))) = (carrier(u, v), carrier(v, u)) else { continue };
             let idx = geo.len() as u32;
             geo.push(GeoT { begin: u as u32, end: v as u32, carriers: [cu, cv], config: if du == dv { RIGHT } else { LEFT } });
             geo_of[u] = idx;
@@ -3059,5 +3064,48 @@ mod tests {
         assert_eq!(count("[$([NX3](=O)=O),$([NX3+](=O)[O-])][!#8]", "CN(=O)=O"), 1);
         assert_eq!(count("[N+](=O)[O-]", "CN(=O)=O"), 0);
         assert_eq!(count("[N+](=O)[O-]", "C[N+](=O)[O-]"), 1);
+    }
+
+    /// Hydrogen atoms of the SMILES stay atoms (and stereo neighbours), as in
+    /// CDK 2.13 (`SmartsPattern.matchAll(mol).countUnique()` on the reference
+    /// preparation).
+    #[test]
+    fn restored_hydrogen_atoms() {
+        let tetra = ["[C@](C)(N)O", "[C@@](C)(N)O", "[C@]([#1])(C)(N)O", "[C@@H](C)(N)O", "[#1][C@](C)(N)O",
+                     "[C@](*)(*)(*)*", "[C@@](*)(*)(*)*", "[C@](F)(Cl)Br"];
+        let cases: [(&str, [u32; 8]); 8] = [
+            ("[H][C@](C)(N)O", [1, 0, 1, 0, 1, 1, 1, 0]),
+            ("N[C@@]([H])(C)C(=O)O", [0, 0, 0, 0, 0, 1, 1, 0]),
+            ("[H][C@]([H])(O)C", [0, 0, 0, 0, 0, 1, 1, 0]),
+            ("[H][C@@H](N)O", [0, 0, 0, 0, 0, 0, 0, 0]),
+            ("F[C@@](Cl)([H])Br", [0, 0, 0, 0, 0, 1, 1, 0]),
+            ("[H][C@@](F)(Cl)Br", [0, 0, 0, 0, 0, 1, 1, 0]),
+            ("F[C@@](Cl)(Br)[H]", [0, 0, 0, 0, 0, 1, 1, 1]),
+            ("N[C@@H](C)O", [0, 1, 0, 1, 0, 0, 0, 0]),
+        ];
+        for (smiles, expected) in cases {
+            let got: Vec<u32> = tetra.iter().map(|q| count(q, smiles)).collect();
+            assert_eq!(got, expected, "{smiles}");
+        }
+        let geo = [r"C/C=C/C", r"C/C=C\C", r"[#1]/C=C/C", r"[#1]/C=C\C", r"*/C=C/*"];
+        let cases: [(&str, [u32; 5]); 6] = [
+            (r"[H]/C(C)=C/C", [0, 1, 1, 0, 1]),
+            (r"C\C([H])=C\C", [1, 0, 0, 1, 1]),
+            (r"[H]\C(C)=C(/C)[H]", [1, 0, 0, 2, 2]),
+            (r"[H]/C(Cl)=C(\[H])Br", [0, 0, 0, 0, 2]),
+            (r"C/C(C)=C/C", [1, 1, 0, 0, 1]),
+            (r"C/C=C/C", [1, 0, 0, 0, 1]),
+        ];
+        for (smiles, expected) in cases {
+            let got: Vec<u32> = geo.iter().map(|q| count(q, smiles)).collect();
+            assert_eq!(got, expected, "{smiles}");
+        }
+        // aromatic N with a hydrogen atom: degree 3 (`H` counts hydrogen neighbours)
+        for smiles in ["[H]n1cccc1", "[H]N1C=CC=C1"] {
+            assert_eq!(count("[nD3]", smiles), 1, "{smiles}");
+            assert_eq!(count("[nH]", smiles), 1, "{smiles}");
+            assert_eq!(count("[nD3H0]", smiles), 0, "{smiles}");
+        }
+        assert_eq!(count("[nD3]", "c1cc[nH]c1"), 0);
     }
 }

@@ -5,7 +5,7 @@
 //! descriptors see the same atom typing RDKit would produce:
 //!
 //! 1. `remove_hs`: fold explicit hydrogen atoms into their heavy neighbours
-//!    (`MolFromSmiles` default `removeHs`)
+//!    (`MolFromSmiles` default `removeHs`), recording them for the CDK views
 //! 2. `clean_up`: normalise nitro/N-oxide, P and halogen oxo forms
 //! 3. `clean_up_organometallics`: hypervalent non-metal → metal single bonds
 //!    become dative
@@ -21,7 +21,7 @@
 
 use crate::algo::sssr;
 use crate::error::{FerrumError, Result};
-use crate::mol::molecule::{Molecule, RingInfo};
+use crate::mol::molecule::{Molecule, RemovedHydrogen, RingInfo};
 use crate::mol::rdkit_data::ELEMENTS;
 use crate::types::{AtomIdx, BondIdx, BondType, Hybridization};
 use smallvec::SmallVec;
@@ -311,6 +311,9 @@ fn total_num_hs(mol: &Molecule, cache: &ValenceCache, a: usize) -> i32 {
 /// Kept: isotopic H, H without neighbours, H with more than one neighbour,
 /// H bonded only to H, hydrides `[H-]`... except that RDKit removes hydrides
 /// by default, and H bonded to dummy atoms.
+///
+/// The removed hydrogens are recorded on the molecule
+/// ([`Molecule::removed_hydrogens`]) for the CDK views, which keep them.
 pub fn remove_hs(mol: &mut Molecule) {
     let n = mol.num_atoms();
     let mut remove = vec![false; n];
@@ -343,13 +346,27 @@ pub fn remove_hs(mol: &mut Molecule) {
     if !any {
         return;
     }
+    // Record the removed hydrogens (in input order) for the CDK views, which
+    // keep them as atoms.
+    let mut record = mol.take_removed_hydrogens();
     for a in 0..n {
         if remove[a] {
-            let nbr = other_atom(mol, mol.adjacency[a][0] as usize, a);
+            let bi = mol.adjacency[a][0] as usize;
+            let nbr = other_atom(mol, bi, a);
             mol.atoms[nbr].num_explicit_h = mol.atoms[nbr].num_explicit_h.saturating_add(1);
+            let bond = &mol.bonds[bi];
+            let up = match crate::algo::stereo::bond_direction(bond) {
+                crate::algo::stereo::BondDir::None => None,
+                dir => Some((dir == crate::algo::stereo::BondDir::EndUpRight) == (bond.source as usize == nbr)),
+            };
+            record.push(RemovedHydrogen { atom: nbr as AtomIdx, charge: mol.atoms[a].formal_charge, up });
         }
     }
-    remove_marked_hydrogens(mol, &remove);
+    let new_idx = remove_marked_hydrogens(mol, &remove);
+    for h in record.iter_mut() {
+        h.atom = new_idx[h.atom as usize];
+    }
+    mol.set_removed_hydrogens(record);
 }
 
 /// RDKit `removeAllHs` followed by sanitization: every hydrogen atom is folded
@@ -409,7 +426,10 @@ pub(crate) fn cdk_remove_hydrogens(mol: &Molecule) -> Option<Molecule> {
     Some(out)
 }
 
-fn remove_marked_hydrogens(mol: &mut Molecule, remove: &[bool]) {
+/// Deletes the marked atoms (keeping the order of the others) and returns the
+/// new index of each old atom (`u16::MAX`: deleted). The removed-hydrogen
+/// record is reset.
+fn remove_marked_hydrogens(mol: &mut Molecule, remove: &[bool]) -> Vec<u16> {
     let n = mol.num_atoms();
     // Rebuild atoms/bonds/adjacency without the removed hydrogens, keeping order.
     let mut new_idx = vec![u16::MAX; n];
@@ -449,6 +469,7 @@ fn remove_marked_hydrogens(mol: &mut Molecule, remove: &[bool]) {
             c
         })
         .collect();
+    new_idx
 }
 
 // ---------------------------------------------------------------------------

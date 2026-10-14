@@ -154,7 +154,12 @@ impl Descriptor for PetitjeanIndex {
             // Mordred: max/min of an empty distance matrix is an error -> missing.
             return DescriptorValue::FloatVec(vec![f64::NAN, f64::NAN, 0.0]);
         }
-        let (r, d, p) = calculate(mol, ctx);
+        let (r, d, mut p) = calculate(mol, ctx);
+        // CDK computes on `removeHydrogens(container)`, which also removes the
+        // hydrogen atoms RDKit keeps for double-bond stereo (`[H]/N=C/C`)
+        if let Some(suppressed) = crate::algo::sanitize::cdk_remove_hydrogens(mol) {
+            p = calculate(&suppressed, ctx).2;
+        }
         DescriptorValue::FloatVec(vec![r as f64, d as f64, p])
     }
 }

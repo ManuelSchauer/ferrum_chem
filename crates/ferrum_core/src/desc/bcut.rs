@@ -284,6 +284,40 @@ mod tests {
         }
     }
 
+    /// CDK 2.13 retypes with explicit hydrogens: the untyped `[SH](=O)` becomes
+    /// `S.sp3d1`, `[Cl+3]` is `Cl.perchlorate.charged`, `[I+]` is `I.plus.sp3`,
+    /// the alkyne carbons of the dehydroannulene are `C.sp`; `[PH](C)(C)C`
+    /// stays untyped and `LonePairElectronChecker` fails (NaN).
+    #[test]
+    fn test_bcut_cdk_retyping() {
+        let cases: [(&str, [f64; 6]); 5] = [
+            (
+                "C1=CC=C2C(=C1)[I+]C1=CC=CC=C12",
+                [11.67781017337252, 126.90464715606052, -0.3542054271098595, 0.323929598100913, 7.622228139047258, 13.78925233674102],
+            ),
+            (
+                "C1#CC2=C(C#CC=C2)C=C1",
+                [11.628379356686397, 12.37898649199995, -0.41234744585073657, 0.3585545104557385, 6.630346592244038, 9.372139439965316],
+            ),
+            (
+                "CC(=O)O[C@H]1[C@@H](O[S@H](=O)C2=CC=C(C)C=C2)CCN1OC(=O)CC1=CC=CC=C1",
+                [11.693562735220056, 31.97595890668967, -0.38923223465672974, 0.4012065402736136, 4.12930941812046, 11.304577612430801],
+            ),
+            (
+                "C1CCN2CC3CC(CN4CCCC[C@@H]34)[C@H]2C1.[O-][Cl+3]([O-])([O-])O",
+                [11.78661433848233, 34.97140439987911, -0.3895100127841371, 0.35985502321940255, 4.068524152374238, 10.555400600855673],
+            ),
+            ("C1=CC=C([PH](C2CCCCC2)C2CCCCC2)C=C1", [f64::NAN; 6]),
+        ];
+        for (smi, expected) in cases {
+            let b = calc_bcut(smi);
+            for (i, (&g, &e)) in b[..6].iter().zip(&expected).enumerate() {
+                let ok = if e.is_nan() { g.is_nan() } else { (g - e).abs() <= 1e-9 + 1e-9 * e.abs() };
+                assert!(ok, "{smi}[{i}]: got {g}, expected {e}");
+            }
+        }
+    }
+
     #[test]
     fn test_bcut_single_atom() {
         let b = calc_bcut("C");

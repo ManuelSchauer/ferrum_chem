@@ -98,6 +98,10 @@ pub fn keep_largest_fragment(mol: &mut Molecule) {
     mol.atoms = kept_atoms;
     mol.bonds = kept_bonds;
     mol.adjacency = adj;
+    if !mol.removed_hydrogens().is_empty() {
+        let map: Vec<u16> = new_idx.iter().map(|&i| if i == usize::MAX { u16::MAX } else { i as u16 }).collect();
+        mol.remap_removed_hydrogens(&map);
+    }
 }
 
 #[cfg(test)]
@@ -147,5 +151,15 @@ mod tests {
         assert_eq!(num_fragments(&mol), 1);
         // Benzoic acid: 9 heavy atoms (7C + 2O)
         assert_eq!(mol.atoms.len(), 9);
+    }
+
+    #[test]
+    fn test_keep_largest_remaps_removed_hydrogens() {
+        let mut mol = parse_smiles("[H]O[H].[H]OC(=O)c1ccccc1").unwrap();
+        assert_eq!(mol.removed_hydrogens().len(), 3);
+        keep_largest_fragment(&mut mol);
+        let atoms: Vec<u16> = mol.removed_hydrogens().iter().map(|h| h.atom).collect();
+        assert_eq!(atoms, [0]);
+        assert_eq!(mol.atoms[0].atomic_number, 8);
     }
 }

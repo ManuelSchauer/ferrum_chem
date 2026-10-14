@@ -60,6 +60,31 @@ pub struct Molecule {
 
     /// Derived properties, computed on first use (see [`MoleculeCache`]).
     cache: MoleculeCache,
+
+    /// Hydrogen atoms of the input that sanitization folded into their
+    /// neighbour's explicit H count (see [`RemovedHydrogen`]); `None` (no
+    /// allocation) when there were none. Not a cache: it describes the input
+    /// and survives [`invalidate_cached_properties`](Self::invalidate_cached_properties).
+    removed_h: Option<Box<RemovedHydrogens>>,
+}
+
+/// The removed-hydrogen record of a molecule (one allocation, boxed so that
+/// molecules without removed hydrogens only pay for a null pointer).
+pub(crate) type RemovedHydrogens = SmallVec<[RemovedHydrogen; 4]>;
+
+/// A hydrogen atom of the input that `sanitize::remove_hs` (RDKit `removeHs`)
+/// folded into the explicit H count of its neighbour (`[H]C`, `[H][C@](C)(N)O`,
+/// `[H]n1cccc1`). RDKit forgets such hydrogens; CDK keeps them as atoms, so the
+/// CDK views restore them from this record.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RemovedHydrogen {
+    /// The atom the hydrogen was bonded to (index in the sanitized molecule).
+    pub atom: AtomIdx,
+    /// Formal charge of the hydrogen atom.
+    pub charge: i8,
+    /// Direction of its bond (`/`: `Some(true)`, `\`: `Some(false)`), seen
+    /// from `atom` as the bond's begin atom (double-bond stereo).
+    pub up: Option<bool>,
 }
 
 /// Ring information as perceived by RDKit's symmetrized SSSR.
@@ -107,6 +132,7 @@ impl Molecule {
             conformers: Vec::new(),
             ring_info: OnceLock::new(),
             cache: MoleculeCache::default(),
+            removed_h: None,
         }
     }
 
@@ -123,7 +149,39 @@ impl Molecule {
             conformers: Vec::new(),
             ring_info: OnceLock::new(),
             cache: MoleculeCache::default(),
+            removed_h: None,
         }
+    }
+
+    /// Hydrogen atoms of the input that sanitization folded into their
+    /// neighbours, in input order (empty for most molecules).
+    pub fn removed_hydrogens(&self) -> &[RemovedHydrogen] {
+        self.removed_h.as_deref().map_or(&[], |list| list.as_slice())
+    }
+
+    /// Number of hydrogen atoms of the input folded into `atom`.
+    pub fn num_removed_hydrogens(&self, atom: usize) -> usize {
+        self.removed_hydrogens().iter().filter(|h| h.atom as usize == atom).count()
+    }
+
+    pub(crate) fn set_removed_hydrogens(&mut self, list: RemovedHydrogens) {
+        self.removed_h = if list.is_empty() { None } else { Some(Box::new(list)) };
+    }
+
+    pub(crate) fn take_removed_hydrogens(&mut self) -> RemovedHydrogens {
+        self.removed_h.take().map_or_else(RemovedHydrogens::new, |b| *b)
+    }
+
+    /// Renumbers the atoms of the removed-hydrogen record after atoms were
+    /// deleted or reordered (`new_idx[old]`, `u16::MAX`: deleted, which drops
+    /// the hydrogens of that atom).
+    pub(crate) fn remap_removed_hydrogens(&mut self, new_idx: &[u16]) {
+        let mut list = self.take_removed_hydrogens();
+        list.retain_mut(|h| {
+            h.atom = new_idx.get(h.atom as usize).copied().unwrap_or(u16::MAX);
+            h.atom != u16::MAX
+        });
+        self.set_removed_hydrogens(list);
     }
 
     /// RDKit `getTotalNumHs(true)`: implicit + explicit H plus hydrogen-atom neighbours.
@@ -227,4 +285,42 @@ impl Molecule {
         self.cache.min_cycle_basis_bonds.get_or_init(f)
     }
 
+}
+
+#[cfg(test)]
+mod tests {
+    use super::RemovedHydrogen;
+    use crate::desc::context::molecule_cache_key;
+    use crate::io::smiles::parse_smiles;
+
+    #[test]
+    fn removed_hydrogens_are_recorded() {
+        let h = |smiles: &str| parse_smiles(smiles).unwrap().removed_hydrogens().to_vec();
+        assert!(h("CCO").is_empty());
+        assert!(h("c1cc[nH]c1").is_empty());
+        // isotopic H, H defining double-bond stereo, H2 stay atoms
+        assert!(h("[2H]C").is_empty());
+        assert!(h("[H]/N=C/C").is_empty());
+        assert!(h("[H][H]").is_empty());
+        let rh = |atom, charge, up| RemovedHydrogen { atom, charge, up };
+        assert_eq!(h("[H][C@](C)(N)O"), [rh(0, 0, None)]);
+        assert_eq!(h("[H]n1cccc1"), [rh(0, 0, None)]);
+        assert_eq!(h("C[H]"), [rh(0, 0, None)]);
+        assert_eq!(h("[H]O[H]"), [rh(0, 0, None), rh(0, 0, None)]);
+        // the direction is seen from the heavy atom
+        assert_eq!(h("[H]/C(C)=C/C"), [rh(0, 0, Some(false))]);
+        assert_eq!(h("C/C=C(C)/[H]"), [rh(2, 0, Some(true))]);
+        assert_eq!(h("[H-].[H]C"), [rh(1, 0, None)]);
+    }
+
+    #[test]
+    fn removed_hydrogens_change_the_cache_key() {
+        let key = |smiles: &str| molecule_cache_key(&parse_smiles(smiles).unwrap());
+        assert_ne!(key("[H]n1cccc1"), key("c1cc[nH]c1"));
+        assert_eq!(key("[H]n1cccc1"), key("[H]n1cccc1"));
+        let mol = parse_smiles("[H]n1cccc1").unwrap();
+        let mut copy = mol.clone();
+        copy.invalidate_cached_properties();
+        assert_eq!(copy.removed_hydrogens(), mol.removed_hydrogens());
+    }
 }

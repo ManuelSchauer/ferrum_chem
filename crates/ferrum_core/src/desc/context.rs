@@ -122,6 +122,16 @@ pub(crate) fn molecule_cache_key(mol: &Molecule) -> u64 {
         hash = mix(hash, bond.flags as u64);
     }
 
+    // `[H]n1cccc1` and `c1cc[nH]c1` differ only here (CDK keeps the H atom).
+    for h in mol.removed_hydrogens() {
+        let up = match h.up {
+            None => 0u64,
+            Some(true) => 1,
+            Some(false) => 2,
+        };
+        hash = mix(hash, h.atom as u64 | (h.charge as u8 as u64) << 16 | up << 24 | 1 << 32);
+    }
+
     hash
 }
 

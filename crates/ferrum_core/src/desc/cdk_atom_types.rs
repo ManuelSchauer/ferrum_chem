@@ -24,14 +24,17 @@ use crate::mol::molecule::Molecule;
 pub(crate) fn formal_neighbour_count(mol: &Molecule, m: &CdkMol, view: &CdkView, a: usize) -> Option<usize> {
     let z = m.z[a];
     let q = view.charge[a];
-    let deg = m.adj[a].len();
-    let h = mol.atoms[a].total_h() as usize;
+    // CDK counts the hydrogen atoms of the input (`[H][Si](C)(C)C`) as
+    // neighbours, not as implicit hydrogens
+    let removed = mol.num_removed_hydrogens(a);
+    let deg = m.adj[a].len() + removed;
+    let h = (mol.atoms[a].total_h() as usize).saturating_sub(removed);
     let orders = || m.adj[a].iter().map(|&(_, bi)| m.order[bi as usize]);
     let max_order = orders().max().unwrap_or(1).max(1);
     let n_double = orders().filter(|&o| o == 2).count();
     // isAcceptable: (formal neighbour count, max bond order (0: none), charge, valency)
     let ok = |fnc: usize, max: u8, charge: i8, val: usize| {
-        let valence: usize = orders().map(|o| o as usize).sum::<usize>() + h;
+        let valence: usize = orders().map(|o| o as usize).sum::<usize>() + removed + h;
         (deg + h <= fnc && (max == 0 || orders().all(|o| o <= max)) && q == charge && valence <= val)
             .then_some(fnc)
     };

@@ -24,11 +24,13 @@
 //!   groups that RDKit's cleanUp charge-separated (`N(=O)=O`, `N=N#N`,
 //!   `Cl(=O)(=O)(=O)O`, ...) are restored to CDK's neutral form when the
 //!   charged atoms are organic-subset atoms (no-implicit-H flag unset; SMILES
-//!   can only charge bracket atoms), and neutral radical centres (`[N]`,
-//!   `[CH2]`, ...) are filled with H as CDK's hydrogen adder does.
-//! - Known gap: CDK reads the S/P special cases from Kekulé bond orders;
-//!   aromatic bonds are counted as neither single nor double here (no such
-//!   case occurs in the parity set).
+//!   can only charge bracket atoms). Hydrogen counts are those of CDK's atom
+//!   typing and `CDKHydrogenAdder` on the hydrogen-suppressed graph
+//!   (`cdk_simple::cdk_parser_mol`): radical centres (`[N]`, `[CH2]`, `[O+]`
+//!   with two neighbours, ...) are filled up, untyped (`X`) atoms such as
+//!   `[PH](C)(C)C` keep their parsed count.
+//! - CDK reads the S/P special cases from the Kekulé bond orders of its
+//!   SMILES parser (`CdkMol`'s kekulization).
 //! - Fragments (`ChiIndexUtils.getFragments`): CDK matches each query SMILES
 //!   with the bond-based `UniversalIsomorphismTester` and keeps the unique sets
 //!   of target bonds per query (fragments matched by two different queries are
@@ -44,7 +46,12 @@
 //! Reference: Kier, L.B. & Hall, L.H. (1986) "Molecular Connectivity in
 //!            Structure-Activity Analysis", Research Studies Press.
 
+use super::cdk_perception::CdkView;
+use super::cdk_daylight::CdkMol;
+use super::cdk_simple::{cdk_parser_mol, with_parser_mol};
+use super::context::CalculationContext;
 use super::typed::{Descriptor, DescriptorValue};
+use crate::algo::sanitize::cdk_remove_hydrogens;
 use crate::mol::elements::outer_electrons;
 use crate::mol::molecule::Molecule;
 use crate::types::{AtomIdx, BondType};
@@ -423,7 +430,7 @@ impl CdkGraph {
 
     /// CDK `removeHydrogens` + atom typing + `CDKHydrogenAdder` +
     /// `ChiIndexUtils` deltas on top of the RDKit-perceived molecule.
-    fn from_molecule(mol: &Molecule) -> Self {
+    fn from_molecule(mol: &Molecule, ctx: &mut CalculationContext) -> Self {
         let n = mol.num_atoms();
         let other = |bi: usize, a: usize| {
             let b = &mol.bonds[bi];
@@ -457,7 +464,9 @@ impl CdkGraph {
         let mut adj: Vec<Vec<(u32, u32)>> = vec![Vec::new(); kept.len()];
         let mut bonds = Vec::with_capacity(mol.num_bonds());
         let mut orders = Vec::with_capacity(mol.num_bonds());
-        for b in &mol.bonds {
+        // Index of each graph bond in `mol.bonds`.
+        let mut src_bond = Vec::with_capacity(mol.num_bonds());
+        for (src, b) in mol.bonds.iter().enumerate() {
             let (u, v) = (new_idx[b.source as usize], new_idx[b.target as usize]);
             if u == u32::MAX || v == u32::MAX {
                 continue;
@@ -467,6 +476,7 @@ impl CdkGraph {
             adj[v as usize].push((u, bi));
             bonds.push((u, v));
             orders.push(b.bond_type);
+            src_bond.push(src);
         }
 
         // Formal charges and bond orders as CDK sees them. RDKit's cleanUp
@@ -504,23 +514,46 @@ impl CdkGraph {
             }
         }
 
+        // Hydrogens after `ChiPathDescriptor`'s atom typing and
+        // `CDKHydrogenAdder` on the hydrogen-suppressed graph: the formal
+        // neighbour count of the CDK atom type minus the degree, the parsed
+        // count for untyped (`X`) atoms. CDK's SMILES parser keeps no
+        // radicals, so e.g. `[O+]` with two neighbours (`O.plus`) gets one H,
+        // while `[PH](C)(C)C` (no P type) keeps its single H. The S/P special
+        // cases read the Kekulé bond orders CDK's SMILES parser assigns
+        // (aromaticity perception keeps them), e.g. the S-S single bond of a
+        // 1,2-dithiole.
+        let suppressed_mol = if kept.len() < n { cdk_remove_hydrogens(mol) } else { None };
+        let parsed = |m: &CdkMol| (m.hcount.clone(), m.order.clone());
+        let (hcount, kekule) = match &suppressed_mol {
+            Some(s) => parsed(&cdk_parser_mol(s, &CdkView::new(s))),
+            None => CdkView::with_legacy_cached(mol, ctx, |view, _| with_parser_mol(mol, view, parsed)),
+        };
+        for (bi, o) in orders.iter_mut().enumerate() {
+            if *o == BondType::Aromatic {
+                // the suppressed molecule keeps the bond order of `bonds`
+                let k = if suppressed_mol.is_some() { bi } else { src_bond[bi] };
+                *o = match kekule[k] {
+                    2 => BondType::Double,
+                    3 => BondType::Triple,
+                    _ => BondType::Single,
+                };
+            }
+        }
+
         let simple: Vec<f64> = adj.iter().map(|l| l.len() as f64).collect();
         let valence: Vec<f64> = kept
             .iter()
             .enumerate()
             .map(|(k, &a)| {
                 let at = &mol.atoms[a];
-                let suppressed_h = mol.adjacency[a]
-                    .iter()
-                    .filter(|&&bi| suppress[other(bi as usize, a)])
-                    .count() as i32;
-                let h = cdk_hydrogen_count(
-                    at.atomic_number,
-                    charge[k],
-                    adj[k].len(),
-                    at.total_h() as i32 + suppressed_h,
-                    at.num_radicals() as i32,
-                );
+                let h = if suppressed_mol.is_some() {
+                    hcount[k] as i32
+                } else {
+                    let suppressed_h =
+                        mol.adjacency[a].iter().filter(|&&bi| suppress[other(bi as usize, a)]).count();
+                    (hcount[a] as usize + suppressed_h) as i32
+                };
                 let nbr = |&(nb, bi): &(u32, u32)| (mol.atoms[kept[nb as usize]].atomic_number, orders[bi as usize]);
                 cdk_valence_delta(at.atomic_number, charge[k], h, adj[k].iter().map(nbr))
             })
@@ -528,20 +561,6 @@ impl CdkGraph {
 
         Self::from_adjacency(adj, bonds, simple, valence)
     }
-}
-
-/// Hydrogen count after CDK's atom typing + `CDKHydrogenAdder` (implicit H =
-/// the type's formal neighbour count minus connected bonds) where that
-/// differs from RDKit's count: RDKit keeps neutral bracket atoms with missing
-/// valence (`[N]`, `[O]`, `[C]`, `[CH2]`) as radicals, CDK types them as
-/// ordinary closed-shell atoms and fills them up with hydrogens. Isolated Se
-/// is the exception (typed `Se.2`, no hydrogens).
-fn cdk_hydrogen_count(z: u8, charge: i32, degree: usize, h: i32, radicals: i32) -> i32 {
-    let fills = matches!(z, 5..=8 | 14..=16 | 32..=34 | 50..=52) && !(z == 34 && degree == 0);
-    if radicals > 0 && charge == 0 && fills {
-        return h + radicals;
-    }
-    h
 }
 
 /// Valence delta of one atom (`ChiIndexUtils.evalValenceIndex`).
@@ -951,8 +970,8 @@ pub struct CdkChiIndices;
 
 impl CdkChiIndices {
     /// The 40 values in feature order, as f64.
-    fn values(mol: &Molecule) -> [f64; 40] {
-        let g = CdkGraph::from_molecule(mol);
+    fn values(mol: &Molecule, ctx: &mut CalculationContext) -> [f64; 40] {
+        let g = CdkGraph::from_molecule(mol, ctx);
         let qs = cdk_chi_queries();
         let mut sp = [0.0f64; 8];
         let mut vp = [0.0f64; 8];
@@ -1019,9 +1038,9 @@ impl Descriptor for CdkChiIndices {
     fn calculate(
         &self,
         mol: &Molecule,
-        _ctx: &mut crate::desc::context::CalculationContext,
+        ctx: &mut CalculationContext,
     ) -> DescriptorValue {
-        DescriptorValue::FloatVec(Self::values(mol).to_vec())
+        DescriptorValue::FloatVec(Self::values(mol, ctx).to_vec())
     }
 }
 
@@ -1215,6 +1234,40 @@ mod tests {
             0.0, 0.0, 0.0, 0.0,
         ];
         assert_close(&calc(&CdkChiIndices, "[N]1C=CC=C1"), &expected, "[N]1C=CC=C1");
+    }
+
+    #[test]
+    /// Hydrogens from CDK's atom typing: `[O+]` with two neighbours is
+    /// `O.plus` (one H added), the untyped `[PH]` keeps one H; the S-S bond
+    /// of the aromatic dithiole is single in CDK's Kekulé form (S delta
+    /// 0.89) (`VP-0..7`).
+    fn cdk_typed_hydrogens() {
+        let cases: [(&str, [f64; 8]); 3] = [
+            (
+                "ClC1=NSSC1=NC1=NCCS1",
+                [
+                    8.734488399304961, 6.133639414771963, 4.750588075557586, 3.722517975808092,
+                    2.906244796724166, 1.2598760343737583, 0.7181737271864009, 0.49796607299648865,
+                ],
+            ),
+            (
+                "[NH-][C+](N)N[O+]CCC(N)C(=O)[O-]",
+                [
+                    6.07811602252011, 3.4675871054721097, 2.1409501226702874, 1.21407060146855,
+                    0.6430895380237328, 0.3182899347401952, 0.15872504486493763, 0.06884438443000648,
+                ],
+            ),
+            (
+                "C1=CC=C([PH](C2CCCCC2)C2CCCCC2)C=C1",
+                [
+                    13.11251969619286, 10.025727571947291, 9.612261970670202, 9.111124804870988,
+                    8.509866112588634, 7.333409725089064, 5.08992184335003, 3.69881143269848,
+                ],
+            ),
+        ];
+        for (smi, expected) in cases {
+            assert_close(&calc(&CdkChiIndices, smi)[8..16], &expected, smi);
+        }
     }
 
     #[test]

@@ -644,7 +644,7 @@ fn simple_counts(mol: &Molecule, view: &CdkView, p: &Prepared) -> [f64; 14] {
     out[7] = tpsa;
     out[8] = p.tpsa_efficiency(tpsa);
     out[9] = p.weight();
-    out[10] = fmf(m);
+    out[10] = fmf(m, mol.removed_hydrogens().len());
     out[11] = fsp3(m, view);
     out[12] = spiro_atoms(m) as f64;
     out[13] = vabc(mol, m, view);
@@ -652,8 +652,10 @@ fn simple_counts(mol: &Molecule, view: &CdkView, p: &Prepared) -> [f64; 14] {
 }
 
 /// `FMFDescriptor`: Murcko framework atoms (`MurckoFragmenter(true, 3)`, i.e.
-/// the scaffold left after repeatedly removing terminal atoms) over all atoms.
-fn fmf(m: &CdkMol) -> f64 {
+/// the scaffold left after repeatedly removing terminal atoms) over all atoms,
+/// including the `removed_h` hydrogen atoms of the input that CDK keeps (they
+/// are terminal, so they never change the scaffold).
+fn fmf(m: &CdkMol, removed_h: usize) -> f64 {
     let n = m.n();
     let mut bcount: Vec<i32> = (0..n).map(|a| m.adj[a].len() as i32).collect();
     let mut queue: std::collections::VecDeque<usize> = (0..n).filter(|&a| bcount[a] == 1).collect();
@@ -668,7 +670,7 @@ fn fmf(m: &CdkMol) -> f64 {
         }
     }
     let scaffold = bcount.iter().filter(|&&c| c > 0).count();
-    if scaffold >= 3 { scaffold as f64 / n as f64 } else { 0.0 }
+    if scaffold >= 3 { scaffold as f64 / (n + removed_h) as f64 } else { 0.0 }
 }
 
 /// `FractionalCSP3Descriptor`: carbons whose CDK atom type is sp3.

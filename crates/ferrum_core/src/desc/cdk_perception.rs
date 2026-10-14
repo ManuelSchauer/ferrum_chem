@@ -141,7 +141,9 @@ pub(crate) struct CdkView {
     /// Matched CDK atom type (`None`: not a typed main-group atom).
     pub types: Vec<Option<&'static CdkType>>,
     /// The atom has a CDK atom type with a lone pair count (`LonePairElectronChecker`
-    /// works); false for `X` (unmatched) atoms and elements outside the reduced matcher.
+    /// works) once all hydrogens are explicit atoms, as `BCUTDescriptor` retypes
+    /// the molecule after `convertImplicitToExplicitHydrogens`; false for `X`
+    /// (unmatched) atoms and elements outside the reduced matcher.
     pub lp_typed: Vec<bool>,
     /// `Aromaticity.cdkLegacy()` flags (computed on demand).
     pub arom_atom: Vec<bool>,
@@ -303,11 +305,24 @@ struct Env<'a> {
     mol: &'a Molecule,
     order: &'a [u8],
     charge: &'a [i8],
+    /// `Some(h)`: `h[a]` hydrogens of atom `a` are explicit neighbour atoms
+    /// (`convertImplicitToExplicitHydrogens`), the rest of its `total_h` (if
+    /// any) stays implicit.
+    explicit_h: Option<&'a [u8]>,
 }
 
 impl Env<'_> {
+    /// Connected bond count (explicit hydrogen atoms included).
     fn deg(&self, a: usize) -> usize {
-        self.mol.adjacency[a].len()
+        self.mol.adjacency[a].len() + self.added_h(a)
+    }
+    /// Explicit hydrogen neighbours that are not graph atoms of `mol`.
+    fn added_h(&self, a: usize) -> usize {
+        self.explicit_h.map_or(0, |h| h[a] as usize)
+    }
+    /// Implicit hydrogen count.
+    fn implicit_h(&self, a: usize) -> usize {
+        (self.mol.atoms[a].total_h() as usize).saturating_sub(self.added_h(a))
     }
     /// `getMaximumBondOrder(connectedBonds)`: SINGLE when there are no bonds.
     fn max_order(&self, a: usize) -> u8 {
@@ -352,8 +367,7 @@ impl Env<'_> {
     }
     /// `isAcceptable` (REQUIRE_NOTHING mode, CDK types define no valency).
     fn ok(&self, a: usize, t: &'static CdkType) -> Option<&'static CdkType> {
-        let atom = &self.mol.atoms[a];
-        if self.deg(a) + atom.total_h() as usize > t.nb as usize {
+        if self.deg(a) + self.implicit_h(a) > t.nb as usize {
             return None;
         }
         if t.max_order > 0
@@ -376,7 +390,7 @@ impl Env<'_> {
         })
     }
     fn is_carboxylate(&self, a: usize) -> bool {
-        if self.deg(a) != 1 {
+        if self.deg(a) != 1 || self.mol.adjacency[a].len() != 1 {
             return false;
         }
         let c = other(self.mol, self.mol.adjacency[a][0] as usize, a);
@@ -421,6 +435,19 @@ impl Env<'_> {
         true
     }
 
+    /// CDK atom type of a C, N, O, P, S or As atom (`None`: `X` or another element).
+    fn atom_type(&self, a: usize) -> Option<&'static CdkType> {
+        match self.mol.atoms[a].atomic_number {
+            6 => self.carbon(a),
+            7 => self.nitrogen(a),
+            8 => self.oxygen(a),
+            15 => self.phosphorus(a),
+            16 => self.sulphur(a),
+            33 => self.arsenic(a),
+            _ => None,
+        }
+    }
+
     fn carbon(&self, a: usize) -> Option<&'static CdkType> {
         let atom = &self.mol.atoms[a];
         let deg = self.deg(a);
@@ -456,6 +483,12 @@ impl Env<'_> {
             _ => return None,
         }
         if atom.is_aromatic() {
+            // An alkyne carbon that RDKit puts in an aromatic ring (a cyclic
+            // dehydroannulene written in Kekulé form) is not aromatic for
+            // CDK's SMILES parser and types as `C.sp`.
+            if maxo == 3 {
+                return self.ok(a, &C_SP);
+            }
             return self.ok(a, &C_SP2);
         }
         if deg > 4 {
@@ -521,10 +554,11 @@ impl Env<'_> {
                 }
             }
             1 => {
-                let n_h = self.mol.adjacency[a]
-                    .iter()
-                    .filter(|&&b| self.mol.atoms[other(self.mol, b as usize, a)].atomic_number == 1)
-                    .count();
+                let n_h = self.added_h(a)
+                    + self.mol.adjacency[a]
+                        .iter()
+                        .filter(|&&b| self.mol.atoms[other(self.mol, b as usize, a)].atomic_number == 1)
+                        .count();
                 if deg - n_h == 2 && self.both_neighbors_sp2(a) && self.ring(a)
                     && let Some(t) = self.ok(a, &O_PLANAR3) {
                         return Some(t);
@@ -536,7 +570,6 @@ impl Env<'_> {
     }
 
     fn nitrogen(&self, a: usize) -> Option<&'static CdkType> {
-        let atom = &self.mol.atoms[a];
         let deg = self.deg(a);
         let maxo = self.max_order(a);
         match self.charge[a] {
@@ -588,11 +621,12 @@ impl Env<'_> {
                     }
                 match deg {
                     2 => {
-                        let arom = self.mol.adjacency[a]
-                            .iter()
-                            .all(|&b| self.mol.bonds[b as usize].is_aromatic());
+                        let arom = self.added_h(a) == 0
+                            && self.mol.adjacency[a]
+                                .iter()
+                                .all(|&b| self.mol.bonds[b as usize].is_aromatic());
                         if arom {
-                            match atom.total_h() {
+                            match self.implicit_h(a) {
                                 0 => {
                                     if self.is_single_hetero(a) {
                                         self.ok(a, &N_PLANAR3)
@@ -826,13 +860,28 @@ fn revert_cleanup(mol: &Molecule, order: &mut [u8], charge: &mut [i8]) {
 }
 
 /// Lone-pair typing status of atoms outside the reduced matcher (H, halogens, Si).
-fn simple_typed(mol: &Molecule, charge: &[i8], a: usize) -> bool {
+fn simple_typed(mol: &Molecule, order: &[u8], charge: &[i8], a: usize) -> bool {
     let atom = &mol.atoms[a];
     let deg = mol.adjacency[a].len() + atom.total_h() as usize;
     match (atom.atomic_number, charge[a]) {
+        // X.plus.sp2 / X.plus.sp3 (`isAcceptable`: neighbours + H within 1 / 2);
+        // a bare `[Br+]` has no maximum bond order and stays untyped
+        (9 | 17 | 35 | 53, 1) => match mol.adjacency[a].iter().map(|&b| order[b as usize]).max() {
+            Some(2) => deg <= 1,
+            Some(1) => deg <= 2,
+            None => deg <= 2 && (atom.atomic_number != 35 || deg > 0),
+            _ => false,
+        },
         (1, -1..=1) => deg <= 1,
         (9 | 17 | 35 | 53, 0) => deg <= 1 || (atom.atomic_number != 9 && deg <= 4),
         (9 | 17 | 35 | 53, -1) => deg == 0,
+        // Cl.perchlorate.charged (`[O-][Cl+3]([O-])([O-])O`)
+        (17, 3) => {
+            deg == 4
+                && mol.adjacency[a]
+                    .iter()
+                    .all(|&b| mol.bonds[b as usize].bond_type == BondType::Single)
+        }
         (14, 0) => deg <= 4,
         _ => false,
     }
@@ -845,35 +894,32 @@ impl CdkView {
         let mut order = kekule_orders(mol);
         let mut charge: Vec<i8> = mol.atoms.iter().map(|a| a.formal_charge).collect();
         revert_cleanup(mol, &mut order, &mut charge);
+        // hydrogen atoms of the input that RDKit folded into their neighbour
+        // (`[H][S+](C)C`) are atoms in CDK and count as neighbours for typing
+        let removed_h: Option<Vec<u8>> = (!mol.removed_hydrogens().is_empty()).then(|| {
+            let mut h = vec![0u8; n];
+            for r in mol.removed_hydrogens() {
+                h[r.atom as usize] += 1;
+            }
+            h
+        });
         let env = Env {
             mol,
             order: &order,
             charge: &charge,
+            explicit_h: removed_h.as_deref(),
         };
         let mut types = Vec::with_capacity(n);
-        let mut lp_typed = Vec::with_capacity(n);
         let mut h = Vec::with_capacity(n);
         let mut max_order = Vec::with_capacity(n);
         for a in 0..n {
             let atom = &mol.atoms[a];
-            let t = match atom.atomic_number {
-                6 => env.carbon(a),
-                7 => env.nitrogen(a),
-                8 => env.oxygen(a),
-                15 => env.phosphorus(a),
-                16 => env.sulphur(a),
-                33 => env.arsenic(a),
-                _ => None,
-            };
+            let t = env.atom_type(a);
             let deg = mol.adjacency[a].len();
             h.push(match t {
                 Some(t) => (t.nb as usize).saturating_sub(deg) as u8,
                 None => atom.total_h(),
             });
-            lp_typed.push(
-                t.is_some_and(|t| t.name != "As.3plus" && t.name != "As.minus")
-                    || simple_typed(mol, &charge, a),
-            );
             types.push(t);
             max_order.push(
                 mol.adjacency[a]
@@ -883,6 +929,19 @@ impl CdkView {
                     .unwrap_or(0),
             );
         }
+        // BCUTDescriptor retypes the molecule with explicit hydrogen atoms:
+        // e.g. the untyped `[SH](=O)(C)O` (implicit H) becomes `S.sp3d1`, while
+        // `[PH](C)(C)C` stays untyped.
+        let explicit = Env {
+            explicit_h: Some(&h),
+            ..env
+        };
+        let lp_typed = (0..n)
+            .map(|a| {
+                let t = if h[a] > 0 { explicit.atom_type(a) } else { types[a] };
+                t.is_some_and(|t| t.name != "As.3plus" && t.name != "As.minus") || simple_typed(mol, &order, &charge, a)
+            })
+            .collect();
         Self {
             order,
             charge,
